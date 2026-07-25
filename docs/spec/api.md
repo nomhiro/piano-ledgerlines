@@ -351,7 +351,7 @@ data: {"status":"completed"}
   "overallScore": 78,
   "metrics": {
     "pitch": 91, "rhythm": 74, "tempo": 68,
-    "dynamics": 80, "articulation": 77, "pedal": null
+    "dynamics": 80, "pedal": null
   },
   "metricsNAReason": {
     "pedal": "録音からペダル操作を十分な確度で検出できませんでした。"
@@ -359,8 +359,7 @@ data: {"status":"completed"}
 
   "measureScores": [
     { "measure": 1, "scoreMeasure": 1, "score": 88, "confidence": 0.93,
-      "metrics": { "pitch": 96, "rhythm": 84, "tempo": 79, "dynamics": 85,
-                   "articulation": 90, "pedal": null }, "noteCount": 12 }
+      "metrics": { "pitch": 96, "rhythm": 84, "tempo": 79, "dynamics": 85,"pedal": null }, "noteCount": 12 }
     // ... 小節数分
   ],
 
@@ -380,7 +379,7 @@ data: {"status":"completed"}
     "baseTakeId": "take_01J7...",
     "overallDelta": 6,
     "metricDeltas": { "pitch": 3, "rhythm": 9, "tempo": -2,
-                      "dynamics": 4, "articulation": 5, "pedal": null },
+                      "dynamics": 4, "pedal": null },
     "improvedMeasures": [7, 8, 33],
     "regressedMeasures": [51]
   },
@@ -489,7 +488,7 @@ Cache-Control: `private, max-age=3600`（テイクは不変なので長めにキ
   "a": { "takeId": "take_01J7...", "label": "通し 2回目", "recordedAt": "...", "overallScore": 72 },
   "b": { "takeId": "take_01J8...", "label": "通し 3回目", "recordedAt": "...", "overallScore": 78 },
   "overallDelta": 6,
-  "metricDeltas": { "pitch": 3, "rhythm": 9, "tempo": -2, "dynamics": 4, "articulation": 5, "pedal": null },
+  "metricDeltas": { "pitch": 3, "rhythm": 9, "tempo": -2, "dynamics": 4, "pedal": null },
   "measureDeltas": [
     { "measure": 19, "a": 48, "b": 47, "delta": -1, "confidence": 0.86 }
   ],

@@ -47,7 +47,7 @@
 | 停滞小節の診断 (D) | 深い推論 | 高性能モデル（頻度が低いので許容） |
 
 > モデル名を仕様に固定しない。`promptVersion` と `model` をテイクに記録し、
-> 差し替え可能にする。評価セット（[6章](#6-評価)）で品質を継続測定する。
+> 差し替え可能にする。評価セット（[7章](#7-評価)）で品質を継続測定する。
 
 ---
 
@@ -78,7 +78,7 @@ LLM に渡すのは**要約された構造化データ**であり、生の分析
     "overallScore": 81.4,
     "metrics": {
       "pitch": 81.2, "rhythm": 81.2, "tempo": 82.2,
-      "dynamics": 78.3, "articulation": 79.6
+      "dynamics": 78.3
     },
     "metricsNotEvaluated": { "pedal": "楽譜にペダル記号がないため評価対象外" },
     "dynamicRangeRatio": 0.62
@@ -95,7 +95,7 @@ LLM に渡すのは**要約された構造化データ**であり、生の分析
   "weakestMeasures": [                   // 上位5小節のみ
     { "measure": 19, "scoreMeasure": 19, "score": 48.2,
       "worstMetric": "rhythm",
-      "metrics": { "pitch": 62, "rhythm": 41, "tempo": 55, "dynamics": 52, "articulation": 58 } },
+      "metrics": { "pitch": 62, "rhythm": 41, "tempo": 55, "dynamics": 52 } },
     { "measure": 20, "score": 49.6, "worstMetric": "rhythm", "metrics": { ... } }
   ],
 
@@ -256,7 +256,7 @@ context フィールドに簡潔に書いてください。ただし、分析結
           "measures": { "type": "array", "items": { "type": "integer" } },
           "metric": {
             "type": "string",
-            "enum": ["pitch","rhythm","tempo","dynamics","pedal","articulation"]
+            "enum": ["pitch","rhythm","tempo","dynamics","pedal"]
           }
         }
       }

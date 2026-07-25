@@ -294,7 +294,7 @@ work/{takeId}/preprocessed.wav
   "overallScore": 81.4,
   "metrics": {
     "pitch": 81.2, "rhythm": 81.2, "tempo": 82.2,
-    "dynamics": 78.3, "pedal": null, "articulation": 79.6
+    "dynamics": 78.3, "pedal": null
   },
   "metricsNA": ["pedal"],             // 評価対象外だった指標とその理由
   "metricsNAReason": { "pedal": "NO_PEDAL_MARKS_IN_SCORE" },
@@ -306,7 +306,7 @@ work/{takeId}/preprocessed.wav
       "score": 87.3,
       "confidence": 0.91,
       "metrics": { "pitch": 92.0, "rhythm": 88.1, "tempo": 90.4,
-                   "dynamics": 81.2, "pedal": null, "articulation": 84.0 },
+                   "dynamics": 81.2, "pedal": null },
       "noteCount": 9
     }
     // ...
@@ -626,7 +626,7 @@ GDPR / 個人情報保護の観点から、ユーザーが自分のデータを�
 
 ```ts
 export type MetricKey =
-  | "pitch" | "rhythm" | "tempo" | "dynamics" | "pedal" | "articulation";
+  | "pitch" | "rhythm" | "tempo" | "dynamics" | "pedal";
 
 /** 評価対象外を表現できるスコア */
 export type Score = number | null;
