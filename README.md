@@ -91,7 +91,21 @@ Browser (Next.js / MediaRecorder)
 ## ロードマップ
 
 - [x] M1: コンセプト確定（競合調査・差別化定義）
-- [x] M2: PoVモック実装 ← **いまここ**
-- [ ] M3: 仕様・設計（機能仕様、データモデル、指標定義、AIプロンプト設計、Azureアーキテクチャ）
+- [x] M2: PoVモック実装
+- [x] M3: 仕様・設計（機能仕様、指標定義、分析パイプライン、データモデル、AIプロンプト、API、Azureアーキテクチャ）← **いまここ**
 - [ ] M4: 分析エンジンPoC（実音源での採譜＋アライメント精度検証）
 - [ ] M5: 本実装
+
+## 設計ドキュメント
+
+M3 の成果物は [`docs/`](./docs/README.md) にあります。
+
+| ドキュメント | 内容 |
+|---|---|
+| [機能仕様](./docs/spec/functional.md) | 設計原則、ユーザーストーリー、機能要件、受け入れ条件 |
+| [評価指標定義](./docs/spec/metrics.md) | 6指標の算出式、N/A 判定、停滞小節検出、較正計画 |
+| [API仕様](./docs/spec/api.md) | REST エンドポイント、エラー体系、認証、レート制限 |
+| [分析パイプライン設計](./docs/design/analysis-pipeline.md) | 採譜モデル選定、2段階アライメント、BeatMap |
+| [データモデル設計](./docs/design/data-model.md) | Cosmos DB のコンテナ・パーティション設計 |
+| [AIプロンプト設計](./docs/design/ai-prompts.md) | プロンプト、Structured Outputs、出力検証、評価 |
+| [Azureアーキテクチャ設計](./docs/design/architecture.md) | サービス選定、スケーリング、セキュリティ、コスト試算 |
