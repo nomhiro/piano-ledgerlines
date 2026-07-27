@@ -1,20 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { FileMusic, Upload, Check, Loader2, ScanLine, Info } from "lucide-react";
+import { FileMusic, Upload, Check, Loader2, ScanLine, Info, AlertTriangle } from "lucide-react";
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
+import { createSong, uploadScore } from "@/lib/api/client";
 
-type Phase = "idle" | "uploading" | "parsing" | "done";
+type Phase = "idle" | "uploading" | "parsing" | "done" | "error";
 
 const STEPS = [
-  "ファイルを読み込み中…",
+  "ファイルをアップロード中…",
   "MusicXML を解析中（パート / 声部 / 小節を抽出）",
   "小節・拍・音符のインデックスを作成中",
-  "強弱記号・ペダル記号・アーティキュレーションを抽出中",
 ];
 
 export default function NewSongPage() {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>("idle");
   const [step, setStep] = useState(0);
   const [fileName, setFileName] = useState("");
@@ -22,22 +24,53 @@ export default function NewSongPage() {
   const [composer, setComposer] = useState("");
   const [goalDate, setGoalDate] = useState("");
   const [targetTempo, setTargetTempo] = useState(120);
+  const [songId, setSongId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [scoreInfo, setScoreInfo] = useState<{
+    measureCount: number;
+    timeSignature: string;
+    keySignature: string;
+    detectedTempo: number;
+    warnings: { code: string; message: string }[];
+  } | null>(null);
 
-  function simulate(name: string) {
-    setFileName(name);
+  async function handleFile(file: File) {
+    setFileName(file.name);
     setPhase("uploading");
     setStep(0);
-    let i = 0;
-    const timer = setInterval(() => {
-      i += 1;
-      setStep(i);
-      if (i === 1) setPhase("parsing");
-      if (i >= STEPS.length) {
-        clearInterval(timer);
-        setPhase("done");
-        if (!title) setTitle(name.replace(/\.(musicxml|xml|mxl|mid|midi)$/i, ""));
-      }
-    }, 700);
+    setErrorMessage("");
+
+    const derivedTitle = title || file.name.replace(/\.(musicxml|xml|mxl|mid|midi)$/i, "");
+    setTitle(derivedTitle);
+
+    try {
+      // 1. 曲メタデータを作成 (api.md 5.1 `POST /songs` 相当)
+      const created = await createSong({
+        title: derivedTitle,
+        composer: composer || "不明",
+        targetTempo,
+      });
+      setSongId(created.songId);
+      setStep(1);
+      setPhase("parsing");
+
+      // 2. 楽譜ファイルをアップロードし、サーバー側でreference.jsonを生成
+      //    (api.md 5.1 `POST /songs/{songId}/score`、実際はPythonワーカーが
+      //    music21でMusicXMLを解析する。同期処理で通常数秒)
+      const result = await uploadScore(created.songId, file);
+      setStep(STEPS.length);
+      setScoreInfo({
+        measureCount: result.measureCount,
+        timeSignature: result.timeSignature,
+        keySignature: result.keySignature,
+        detectedTempo: result.detectedTempo,
+        warnings: result.warnings,
+      });
+      setPhase("done");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setPhase("error");
+    }
   }
 
   return (
@@ -70,16 +103,23 @@ export default function NewSongPage() {
                       accept=".musicxml,.xml,.mxl,.mid,.midi"
                       onChange={(e) => {
                         const f = e.target.files?.[0];
-                        simulate(f ? f.name : "sample.musicxml");
+                        if (f) void handleFile(f);
                       }}
                     />
                   </label>
                   <div className="mt-3 text-center">
                     <button
-                      onClick={() => simulate("chopin_waltz_op64_2.musicxml")}
+                      onClick={async () => {
+                        const res = await fetch("/scores/etude-in-a-minor.musicxml");
+                        const blob = await res.blob();
+                        const file = new File([blob], "etude-in-a-minor.musicxml", {
+                          type: "application/vnd.recordare.musicxml+xml",
+                        });
+                        void handleFile(file);
+                      }}
                       className="text-xs text-violet-300 underline underline-offset-2"
                     >
-                      サンプルファイルで試す（モック）
+                      サンプルファイルで試す（実データ / 実APIで解析）
                     </button>
                   </div>
                 </>
@@ -89,28 +129,45 @@ export default function NewSongPage() {
                     <FileMusic size={18} className="text-violet-400" />
                     <span className="text-sm">{fileName}</span>
                     {phase === "done" && <Badge color="#22c55e">解析完了</Badge>}
+                    {phase === "error" && <Badge color="#ef4444">失敗</Badge>}
                   </div>
-                  {STEPS.map((s, i) => (
-                    <div key={s} className="flex items-center gap-2.5 px-1 text-xs">
-                      {i < step ? (
-                        <Check size={15} className="text-green-400" />
-                      ) : i === step ? (
-                        <Loader2 size={15} className="animate-spin text-violet-400" />
-                      ) : (
-                        <span className="inline-block h-[15px] w-[15px] rounded-full border border-[#3b4560]" />
-                      )}
-                      <span className={i <= step ? "" : "text-[var(--muted)]"}>{s}</span>
-                    </div>
-                  ))}
-                  {phase === "done" && (
+                  {phase !== "error" &&
+                    STEPS.map((s, i) => (
+                      <div key={s} className="flex items-center gap-2.5 px-1 text-xs">
+                        {i < step ? (
+                          <Check size={15} className="text-green-400" />
+                        ) : i === step ? (
+                          <Loader2 size={15} className="animate-spin text-violet-400" />
+                        ) : (
+                          <span className="inline-block h-[15px] w-[15px] rounded-full border border-[#3b4560]" />
+                        )}
+                        <span className={i <= step ? "" : "text-[var(--muted)]"}>{s}</span>
+                      </div>
+                    ))}
+                  {phase === "done" && scoreInfo && (
                     <div className="rounded-lg border border-green-500/25 bg-green-500/10 p-4 text-xs">
                       <div className="font-semibold text-green-300">
-                        128小節 / 2声部 / 3拍子 を認識しました
+                        {scoreInfo.measureCount}小節 / {scoreInfo.timeSignature} / {scoreInfo.keySignature} を認識しました
                       </div>
                       <div className="mt-1 text-[var(--muted)]">
-                        強弱記号 24箇所、ペダル記号 61箇所、スラー 40箇所を抽出。
-                        これらが分析時の「理想の演奏」の基準になります。
+                        検出テンポ ♩= {scoreInfo.detectedTempo}。
+                        これが分析時の「理想の演奏」の基準になります。
                       </div>
+                      {scoreInfo.warnings.length > 0 && (
+                        <ul className="mt-2 space-y-1 text-amber-300">
+                          {scoreInfo.warnings.map((w, i) => (
+                            <li key={i} className="flex items-start gap-1.5">
+                              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                              <span>{w.message}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                  {phase === "error" && (
+                    <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-4 text-xs text-red-300">
+                      {errorMessage}
                     </div>
                   )}
                 </div>
@@ -177,17 +234,18 @@ export default function NewSongPage() {
               >
                 キャンセル
               </Link>
-              <Link
-                href="/songs"
-                aria-disabled={phase !== "done"}
+              <button
+                type="button"
+                disabled={phase !== "done" || !songId}
+                onClick={() => songId && router.push(`/record?song=${songId}`)}
                 className={`rounded-lg px-4 py-2 text-sm font-medium text-white ${
-                  phase === "done"
+                  phase === "done" && songId
                     ? "bg-violet-600 hover:bg-violet-500"
                     : "pointer-events-none bg-violet-600/40"
                 }`}
               >
-                この曲を登録する
-              </Link>
+                この曲を登録して録音へ進む
+              </button>
             </div>
           </Card>
         </div>

@@ -17,7 +17,6 @@ const SERIES_COLORS: Record<string, string> = {
   tempo: "#22c55e",
   dynamics: "#f472b6",
   pedal: "#f59e0b",
-  articulation: "#14b8a6",
 };
 
 export default function ProgressView({

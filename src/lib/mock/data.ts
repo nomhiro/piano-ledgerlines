@@ -276,7 +276,7 @@ const takeSpecs: TakeSpec[] = [
     seed: 5055,
     weakMeasures: [9, 10, 17, 18],
     stubbornMeasures: [17],
-    metricBias: { articulation: -7 },
+    metricBias: { rhythm: -7 },
     aiReview: genericReview("アラベスク", 0.41, [1, 24]),
   },
   {
@@ -293,7 +293,7 @@ const takeSpecs: TakeSpec[] = [
     seed: 6066,
     weakMeasures: [9, 10, 17, 18],
     stubbornMeasures: [17],
-    metricBias: { articulation: -4 },
+    metricBias: { rhythm: -4 },
     aiReview: genericReview("アラベスク", 0.58, [9, 24]),
   },
   {
@@ -310,7 +310,7 @@ const takeSpecs: TakeSpec[] = [
     seed: 7077,
     weakMeasures: [9, 10, 17, 18],
     stubbornMeasures: [17],
-    metricBias: { articulation: -1 },
+    metricBias: { rhythm: -1 },
     aiReview: genericReview("アラベスク", 0.71, [1, 24]),
   },
   // --- Bach: 2テイク ---
