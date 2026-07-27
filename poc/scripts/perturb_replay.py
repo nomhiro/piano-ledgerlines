@@ -126,6 +126,15 @@ def make_plan(kind: str, mtimes: dict[int, float], total: float, rng) -> list[di
             {"src": (t(b), total), "pause": 0.3},
         ]
 
+    if kind == "repeat10":
+        # 同じ2小節を10回繰り返す集中練習（テイク数が多い場合の跳躍ペナルティ積み上げを見る）
+        a, b = int(n * 0.45), min(int(n * 0.45) + 2, n - 1)
+        plan = [{"src": (0.0, t(a)), "pause": 0.0}]
+        for k in range(10):
+            plan.append({"src": (t(a), t(b)), "pause": PAUSE_RETRY if k else 0.0})
+        plan.append({"src": (t(b), total), "pause": PAUSE_RETRY})
+        return plan
+
     raise ValueError(kind)
 
 
@@ -178,7 +187,17 @@ def render(
     return pm, truth
 
 
-PLANS = ["none", "retry1", "retry3", "retry_long", "stop", "partial", "partial_retry", "skip"]
+PLANS = [
+    "none",
+    "retry1",
+    "retry3",
+    "retry_long",
+    "stop",
+    "partial",
+    "partial_retry",
+    "skip",
+    "repeat10",
+]
 
 
 def main() -> int:
