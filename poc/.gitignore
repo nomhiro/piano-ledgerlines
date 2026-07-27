@@ -1,0 +1,13 @@
+# PoC 作業用（コミットしない）
+.venv/
+data/
+out/
+models/
+*.wav
+*.mp3
+*.flac
+*.zip
+*.pth
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
