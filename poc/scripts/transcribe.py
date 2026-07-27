@@ -36,6 +36,7 @@ def main() -> int:
         "--conditions", nargs="+", default=["clean", "room", "phone", "phone_agc"]
     )
     ap.add_argument("--threads", type=int, default=0, help="0 なら torch の既定値")
+    ap.add_argument("--pieces", nargs="*", default=None)
     ap.add_argument("--checkpoint", type=Path, default=None)
     args = ap.parse_args()
 
@@ -65,6 +66,8 @@ def main() -> int:
 
     results = []
     for piece in pieces:
+        if args.pieces and piece["name"] not in args.pieces:
+            continue
         for cond in args.conditions:
             wav = args.dataset / f"{piece['name']}.{cond}.wav"
             if not wav.exists():
