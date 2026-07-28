@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# M5ローカル開発用データストア（曲/テイクJSON・音声・解析中間ファイル）
+# 本番ではCosmos DB/Blob Storageに置き換わるため、ローカル実行の作業データはコミットしない。
+/.data/
+
+# Pythonワーカーのローカル実行時生成物・venv（PoC同様に .gitignore 対象）
+worker/.venv/
+worker/**/__pycache__/
+worker/*.wav

@@ -1,10 +1,5 @@
-export type MetricKey =
-  | "pitch"
-  | "rhythm"
-  | "tempo"
-  | "dynamics"
-  | "pedal"
-  | "articulation";
+// 5指標構成（PoC検証によりarticulationは削除済み。docs/spec/metrics.md参照）
+export type MetricKey = "pitch" | "rhythm" | "tempo" | "dynamics" | "pedal";
 
 export const METRIC_KEYS: MetricKey[] = [
   "pitch",
@@ -12,7 +7,6 @@ export const METRIC_KEYS: MetricKey[] = [
   "tempo",
   "dynamics",
   "pedal",
-  "articulation",
 ];
 
 export const METRIC_LABELS: Record<MetricKey, string> = {
@@ -21,7 +15,6 @@ export const METRIC_LABELS: Record<MetricKey, string> = {
   tempo: "テンポ安定",
   dynamics: "ダイナミクス",
   pedal: "ペダル",
-  articulation: "アーティキュレーション",
 };
 
 export const METRIC_DESCRIPTIONS: Record<MetricKey, string> = {
@@ -30,7 +23,6 @@ export const METRIC_DESCRIPTIONS: Record<MetricKey, string> = {
   tempo: "設定テンポに対する揺れの少なさ（意図的なルバートは除外）",
   dynamics: "強弱記号に対する音量差の再現度",
   pedal: "ペダルの踏み替えタイミングと濁りの少なさ",
-  articulation: "レガート/スタッカートなど発音の質",
 };
 
 export type SongStatus = "reading" | "practicing" | "polishing" | "ready";
