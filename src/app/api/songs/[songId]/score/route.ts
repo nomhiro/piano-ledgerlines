@@ -1,84 +1,69 @@
-import { NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/server/auth";
+import { getConfig } from "@/lib/server/config";
+import { errorResponse, jsonResponse, NotFoundError, ValidationError } from "@/lib/server/http";
+import { assertResourceId } from "@/lib/server/validation";
 import { getSong, saveScoreFile } from "@/lib/server/repository";
 import { runReferenceWorker } from "@/lib/server/worker";
+import { processCloudScoreLocally } from "@/lib/server/cloud-score-processing";
 
 export const runtime = "nodejs";
 
 const ALLOWED_EXT = [".musicxml", ".xml", ".mxl", ".mid", ".midi"];
-const MAX_SIZE = 10 * 1024 * 1024; // 10 MB (api.md 5.1)
+const MAX_SIZE = 10 * 1024 * 1024;
 
-// POST /api/songs/{songId}/score — 楽譜アップロード + 登録完了通知 (api.md 5.1 #9)
-// ローカル簡略版: SASアップロードの代わりにこのエンドポイントへ直接multipartで送る。
-// サーバーはMusicXMLを解析し reference.json を生成する（同期処理、通常1-3秒）。
+function hasValidSignature(ext: string, bytes: Buffer): boolean {
+  if (ext === ".mxl") return bytes.subarray(0, 2).toString() === "PK";
+  if (ext === ".mid" || ext === ".midi") return bytes.subarray(0, 4).toString() === "MThd";
+  const prefix = bytes.subarray(0, 512).toString("utf8").trimStart().toLowerCase();
+  return prefix.startsWith("<") && (prefix.includes("score-partwise") || prefix.includes("score-timewise"));
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ songId: string }> }
 ) {
-  const { songId } = await params;
-  const song = await getSong(songId);
-  if (!song) {
-    return NextResponse.json(
-      { error: { code: "NOT_FOUND", message: "song not found" } },
-      { status: 404 }
-    );
+  try {
+    const { songId } = await params;
+    assertResourceId(songId, "songId");
+    const user = await getAuthenticatedUser(request);
+    if (!(await getSong(songId, user.id))) throw new NotFoundError("song not found");
+
+    const formData = await request.formData();
+    const file = formData.get("scoreFile");
+    if (!(file instanceof File)) throw new ValidationError("scoreFile is required");
+    const ext = `.${file.name.split(".").pop()?.toLowerCase() ?? ""}`;
+    if (!ALLOWED_EXT.includes(ext)) throw new ValidationError(`unsupported extension: ${ext}`);
+    if (file.size === 0 || file.size > MAX_SIZE) throw new ValidationError("scoreFileSize must be > 0 and <= 10MB");
+    const bytes = Buffer.from(await file.arrayBuffer());
+    if (!hasValidSignature(ext, bytes)) throw new ValidationError("score file signature is invalid");
+
+    await saveScoreFile(songId, file.name, bytes, user.id);
+    if (getConfig().storageBackend === "azure") {
+      if (process.env.LEDGERLINES_AZURE_CLOUD === "true") {
+        const savedSong = await getSong(songId, user.id);
+        if (!savedSong) throw new NotFoundError("song not found");
+        const updated = await processCloudScoreLocally(savedSong);
+        return jsonResponse({
+          songId: updated.id, status: updated.status, measureCount: updated.measureCount,
+          scoreMeasureCount: updated.scoreMeasureCount, keySignature: updated.keySignature,
+          timeSignature: updated.timeSignature, detectedTempo: updated.detectedTempo,
+          hasRepeats: updated.hasRepeats, warnings: updated.warnings,
+        }, request);
+      }
+      return jsonResponse({ songId, status: "awaiting_score", uploadComplete: true }, request, { status: 202 });
+    }
+    const result = await runReferenceWorker(songId);
+    const updated = await getSong(songId, user.id);
+    if (result.code !== 0 || updated?.status !== "ready") {
+      throw new ValidationError(updated?.lastScoreError ?? "score parsing failed");
+    }
+    return jsonResponse({
+      songId: updated.id, status: updated.status, measureCount: updated.measureCount,
+      scoreMeasureCount: updated.scoreMeasureCount, keySignature: updated.keySignature,
+      timeSignature: updated.timeSignature, detectedTempo: updated.detectedTempo,
+      hasRepeats: updated.hasRepeats, warnings: updated.warnings,
+    }, request);
+  } catch (error) {
+    return errorResponse(request, error);
   }
-
-  const formData = await request.formData();
-  const file = formData.get("scoreFile");
-  if (!(file instanceof File)) {
-    return NextResponse.json(
-      { error: { code: "VALIDATION_FAILED", message: "scoreFile is required" } },
-      { status: 400 }
-    );
-  }
-
-  const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
-  if (!ALLOWED_EXT.includes(ext)) {
-    return NextResponse.json(
-      {
-        error: {
-          code: "VALIDATION_FAILED",
-          message: `unsupported extension: ${ext}`,
-        },
-      },
-      { status: 400 }
-    );
-  }
-  if (file.size > MAX_SIZE) {
-    return NextResponse.json(
-      { error: { code: "VALIDATION_FAILED", message: "scoreFileSize must be <= 10MB" } },
-      { status: 400 }
-    );
-  }
-
-  const bytes = Buffer.from(await file.arrayBuffer());
-  await saveScoreFile(songId, file.name, bytes);
-
-  const result = await runReferenceWorker(songId);
-  const updated = await getSong(songId);
-
-  if (result.code !== 0 || updated?.status !== "ready") {
-    return NextResponse.json(
-      {
-        error: {
-          code: "VALIDATION_FAILED",
-          message: updated?.lastScoreError ?? "score parsing failed",
-          details: { stderr: result.stderr.slice(-2000) },
-        },
-      },
-      { status: 400 }
-    );
-  }
-
-  return NextResponse.json({
-    songId: updated.id,
-    status: updated.status,
-    measureCount: updated.measureCount,
-    scoreMeasureCount: updated.scoreMeasureCount,
-    keySignature: updated.keySignature,
-    timeSignature: updated.timeSignature,
-    detectedTempo: updated.detectedTempo,
-    hasRepeats: updated.hasRepeats,
-    warnings: updated.warnings,
-  });
 }

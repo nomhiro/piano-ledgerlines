@@ -57,6 +57,36 @@ npm run lint    # ESLint
 npx tsc --noEmit
 ```
 
+ローカルで Azure データ層を使う場合の推奨は、Bicep/azd で分離した dev/stg
+リソースを作成し、Next.js だけをローカル起動する Cloud-backed プロファイルです。
+`az login` の Azure CLI 資格情報と RBAC を使い、実データが保存されるため環境を
+分離してください。手順と Preflight は [Cloud-backed ローカル Azure 開発](./docs/operations/local-azure-cloud.md)、
+オフラインの Azurite/Cosmos エミュレーター fallback は
+[エミュレーター ローカル開発](./docs/operations/local-azure.md)を参照してください。
+
+## Azure リソース（Bicep + azd）
+
+Azure のデータ・監視・シークレット基盤は `infra/main.bicep` とモジュールで実装済みです。
+`azure.yaml` から `azd provision` を実行すると、環境ごとの Storage、Cosmos DB
+Serverless、Log Analytics / Application Insights、Key Vault、Managed Identity / RBAC
+をリソースグループ単位で管理できます。シークレットはコミットせず、アプリは
+Managed Identity と Key Vault RBAC を使用します。
+
+```powershell
+azd auth login
+azd env new ledgerlines-dev
+azd env set AZURE_SUBSCRIPTION_ID <subscription-id>
+azd env set AZURE_LOCATION japaneast
+azd env set AZURE_RESOURCE_GROUP ledgerlines-dev-rg
+azd provision
+```
+
+変更前の確認は `az deployment group what-if` を使います。stg / prod のパラメータ例、
+環境切り替え、Foundry の任意有効化、削除手順は
+[Azure リソース管理](./docs/operations/azure-iac.md) を参照してください。
+Next.js と Python ワーカーのイメージは未作成のため、Container Apps のホスティングと
+アプリデプロイは別作業です。`azure.yaml` に追加位置をコメントで明示しています。
+
 ## 技術スタック（モック）
 
 - Next.js 16 (App Router) / React 19 / TypeScript

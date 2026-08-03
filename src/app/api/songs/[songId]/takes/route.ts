@@ -1,16 +1,28 @@
-import { NextResponse } from "next/server";
+import { getAuthenticatedUser } from "@/lib/server/auth";
+import { errorResponse, jsonResponse, readJson, NotFoundError } from "@/lib/server/http";
+import { assertResourceId, createTakeSchema, parseSchema } from "@/lib/server/validation";
 import { createTake, getSong, listTakesBySong } from "@/lib/server/repository";
+import { getConfig } from "@/lib/server/config";
+import { getBlobStore } from "@/lib/server/blob-storage";
+import { assertTakeQuota } from "@/lib/server/quota";
 
 export const runtime = "nodejs";
 
 // GET /api/songs/{songId}/takes — テイク一覧 (api.md #13)
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ songId: string }> }
 ) {
-  const { songId } = await params;
-  const takes = await listTakesBySong(songId);
-  return NextResponse.json({ takes });
+  try {
+    const { songId } = await params;
+    assertResourceId(songId, "songId");
+    const user = await getAuthenticatedUser(request);
+    const song = await getSong(songId, user.id);
+    if (!song) throw new NotFoundError("song not found");
+    return jsonResponse({ takes: await listTakesBySong(songId, user.id) }, request);
+  } catch (error) {
+    return errorResponse(request, error);
+  }
 }
 
 // POST /api/songs/{songId}/takes — テイク作成 (api.md 5.2 #14)
@@ -20,53 +32,36 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ songId: string }> }
 ) {
-  const { songId } = await params;
-  const song = await getSong(songId);
-  if (!song) {
-    return NextResponse.json(
-      { error: { code: "NOT_FOUND", message: "song not found" } },
-      { status: 404 }
-    );
+  try {
+    const { songId } = await params;
+    assertResourceId(songId, "songId");
+    const user = await getAuthenticatedUser(request);
+    const song = await getSong(songId, user.id);
+    if (!song) throw new NotFoundError("song not found");
+    const input = parseSchema(createTakeSchema, await readJson(request));
+    await assertTakeQuota(user.id, user.plan);
+    if (song.measureCount !== null && input.requestedMeasureRange[1] > song.measureCount) {
+      return errorResponse(request, new Error("requestedMeasureRange exceeds song measure count"));
+    }
+    const take = await createTake(songId, {
+      ...input,
+      requestedMeasureRange: [input.requestedMeasureRange[0], input.requestedMeasureRange[1]],
+      recordedAt: input.recordedAt ?? new Date().toISOString(),
+      requestedTempo: input.requestedTempo ?? null,
+      contentType: input.contentType ?? null,
+    }, user.id);
+    const response: { takeId: string; status: string; take: typeof take; upload?: unknown } = {
+      takeId: take.id, status: take.status, take,
+    };
+    if (getConfig().storageBackend === "azure") {
+      response.upload = await getBlobStore().createWriteSas(
+        getConfig().audioContainer,
+        `users/${user.id}/songs/${songId}/takes/${take.id}/original.webm`,
+        { contentType: input.contentType ?? "audio/webm", maxBytes: 100 * 1024 * 1024 }
+      );
+    }
+    return jsonResponse(response, request, { status: 201 });
+  } catch (error) {
+    return errorResponse(request, error);
   }
-
-  const body = await request.json();
-  const durationSec = Number(body.durationSec);
-  if (!Number.isFinite(durationSec) || durationSec < 5 || durationSec > 900) {
-    return NextResponse.json(
-      { error: { code: "VALIDATION_FAILED", message: "durationSec must be 5-900" } },
-      { status: 400 }
-    );
-  }
-
-  const range = body.requestedMeasureRange;
-  const measureCount = song.measureCount ?? Number.MAX_SAFE_INTEGER;
-  if (
-    !Array.isArray(range) ||
-    range.length !== 2 ||
-    range[0] > range[1] ||
-    range[0] < 1 ||
-    range[1] > measureCount
-  ) {
-    return NextResponse.json(
-      {
-        error: {
-          code: "VALIDATION_FAILED",
-          message: "requestedMeasureRange must be within the song's measure count",
-        },
-      },
-      { status: 400 }
-    );
-  }
-
-  const take = await createTake(songId, {
-    label: typeof body.label === "string" ? body.label : "無題のテイク",
-    recordedAt: typeof body.recordedAt === "string" ? body.recordedAt : new Date().toISOString(),
-    durationSec,
-    requestedMeasureRange: [range[0], range[1]],
-    requestedTempo: typeof body.requestedTempo === "number" ? body.requestedTempo : null,
-    inputKind: body.inputKind === "midi" ? "midi" : "audio",
-    contentType: typeof body.contentType === "string" ? body.contentType : null,
-  });
-
-  return NextResponse.json({ takeId: take.id, status: take.status, take }, { status: 201 });
 }

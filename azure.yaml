@@ -1,0 +1,24 @@
+name: ledgerlines
+
+metadata:
+  template: ledgerlines-bicep
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+# Resource provisioning is implemented, but application and worker images are
+# intentionally not configured yet. Add these services after publishing images:
+#
+# services:
+#   web:
+#     project: .
+#     language: js
+#     host: containerapp
+#     image: <registry>/<ledgerlines-web>:<tag>
+#   worker:
+#     project: worker
+#     language: python
+#     host: containerapp
+#     image: <registry>/<ledgerlines-worker>:<tag>

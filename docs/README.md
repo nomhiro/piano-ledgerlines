@@ -22,6 +22,10 @@ M3（仕様・設計）フェーズの成果物と、M4（分析エンジンPoC�
 | 7 | [Azureアーキテクチャ設計](./design/architecture.md) | サービス選定、スケーリング、セキュリティ、コスト試算、CI/CD | 中 |
 | 8 | [**M4 分析エンジンPoC 検証レポート**](./poc/m4-report.md) | 実音源での採譜・アライメント・指標の検証結果と、それによる設計変更 | 大 |
 | 9 | [**M4.5 弾き直し対応・ONNX 化・差分の安定性**](./poc/m45-report.md) | M4 で残した3つの未検証課題の解消。跳躍付き DTW、ONNX 化、測定ノイズの実測 | 中 |
+| 10 | [Azure リソース管理](./operations/azure-iac.md) | Bicep / azd の Provision、What-if、環境分離 | 中 |
+| 11 | [IaC運用手順書](./operations/iac-runbook.md) | 初期構築、変更、昇格、監視、障害対応、削除 | 大 |
+| 12 | [Cloud-backed ローカル Azure 開発](./operations/local-azure-cloud.md) | 実 Azure dev/stg リソース、Azure CLI/RBAC、Preflight | 大 |
+| 13 | [エミュレーター ローカル開発](./operations/local-azure.md) | Azurite/Cosmos エミュレーター、決定的フォールバック、スモークテスト | 大 |
 
 ---
 

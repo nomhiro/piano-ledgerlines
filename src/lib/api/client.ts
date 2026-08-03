@@ -75,11 +75,11 @@ export async function uploadScore(
 ): Promise<{
   songId: string;
   status: string;
-  measureCount: number;
-  keySignature: string;
-  timeSignature: string;
-  detectedTempo: number;
-  warnings: { code: string; message: string; measures?: number[] }[];
+  measureCount?: number;
+  keySignature?: string;
+  timeSignature?: string;
+  detectedTempo?: number;
+  warnings?: { code: string; message: string; measures?: number[] }[];
 }> {
   const form = new FormData();
   form.append("scoreFile", file, file.name);
@@ -91,6 +91,28 @@ export async function getSong(
   songId: string
 ): Promise<{ song: ApiSong; takes: ApiTakeSummary[] }> {
   const res = await fetch(`/api/songs/${songId}`);
+  return asJson(res);
+}
+
+export async function updateSong(
+  songId: string,
+  input: {
+    title?: string;
+    composer?: string;
+    targetTempo?: number | null;
+    targetDate?: string | null;
+  },
+): Promise<{ song: ApiSong }> {
+  const res = await fetch(`/api/songs/${songId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return asJson(res);
+}
+
+export async function deleteSong(songId: string): Promise<{ songId: string; deleted: true }> {
+  const res = await fetch(`/api/songs/${songId}`, { method: "DELETE" });
   return asJson(res);
 }
 

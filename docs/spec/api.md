@@ -24,7 +24,7 @@
 
 | ヘッダ | 方向 | 内容 |
 |---|---|---|
-| `Authorization: Bearer <jwt>` | Req | Entra External ID のアクセストークン |
+| `Authorization: Bearer <token>` | Req | Entra External ID のアクセストークン（本番） |
 | `Idempotency-Key: <uuid>` | Req | 作成系の一部で任意 |
 | `X-Request-Id: <uuid>` | Req/Res | トレース相関。省略時はサーバーが採番 |
 | `X-Api-Version: 1` | Res | 破壊的変更時にインクリメント |
@@ -97,7 +97,19 @@
 Entra External ID の OIDC。ブラウザは Authorization Code + PKCE で ID/アクセストークンを取得し、
 API へは `Authorization: Bearer` で送る。
 
-### 3.2 共有トークン
+ローカル開発では `LEDGERLINES_AUTH_MODE=development` を明示した場合のみ、
+環境変数 `LEDGERLINES_DEV_USER_ID`（既定値 `usr_local_dev`）へフォールバックする。
+本番では `LEDGERLINES_AUTH_MODE=entra`、issuer・audience・JWKS URL の設定が必須であり、
+署名、issuer、audience、期限を検証する。API はリソース所有者のIDを必ずクエリ条件に含める。
+
+### 3.2 無料プランの利用上限
+
+無料プランは、UTC基準の暦月ごとにテイク作成を5件まで許可する。6件目の
+`POST /songs/{songId}/takes` は `402 QUOTA_EXCEEDED` を返し、既存のテイクや
+解析結果は読み取り可能なまま維持する。有料プランはJWTの `plan` /
+`extension_plan` claim または `paid` / `premium` ロールで判定し、この上限を適用しない。
+
+### 3.3 共有トークン
 
 共有ビュー `/s/{token}` は未認証でアクセスできる。API 側は以下のように扱う。
 
@@ -142,7 +154,7 @@ POST /api/shares/{token}/comments
 | 20 | GET | `/takes/{takeId}/roll` | ピアノロール |
 | 21 | GET | `/takes/{takeId}/audio` | 音声の読み取りSAS |
 | 22 | POST | `/takes/{takeId}/retry` | 解析の再実行 |
-| 23 | POST | `/takes/{takeId}/review` | 講評の再生成 |
+| 23 | POST | `/takes/{takeId}/coach` | 構造化AI講評の生成（失敗時はフォールバック） |
 | 24 | GET | `/takes/{takeId}/compare` | 他テイクとの比較 |
 | 25 | POST | `/takes/{takeId}/chat` | AIコーチとの対話（ストリーミング） |
 | 26 | GET | `/takes/{takeId}/comments` | コメント一覧 |
@@ -200,6 +212,14 @@ API サーバーを経由させないことで、大きなファイルでもサ�
 | `scoreFileName` | 拡張子 `.musicxml` / `.xml` / `.mxl` / `.mid` / `.midi` |
 | `scoreFileSize` | 10 MB 以下 |
 | `targetTempo` | 20-300、省略可 |
+
+#### `PATCH /songs/{songId}`
+
+曲の `title`、`composer`、`targetTempo`、`targetDate` を部分更新する。少なくとも1項目を指定する。
+
+#### `DELETE /songs/{songId}`
+
+所有者だけが削除できる。曲ドキュメント、配下のテイク、譜面・録音・派生データのBlobを削除し、操作は元に戻せない。
 
 #### `POST /songs/{songId}/score`
 
