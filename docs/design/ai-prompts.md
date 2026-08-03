@@ -302,6 +302,15 @@ context フィールドに簡潔に書いてください。ただし、分析結
 `strengths` / `improvements` に `measures` を持たせるのは、
 **UI で該当小節にジャンプできるようにする**ためと、**検証を機械的に行う**ため。
 
+### 3.5 実装スライス
+
+`src/lib/server/ai-coach.ts` に、上記の入力境界・JSON出力検証・小節範囲検証を実装している。
+`AZURE_FOUNDRY_ENDPOINT` と `AZURE_FOUNDRY_DEPLOYMENT` が設定されている場合は
+`DefaultAzureCredential`（Managed Identityを含む）でChat Completionsを呼び出し、
+`pipelineVersion`、`promptVersion`、`modelVersion`、`generatedAt`を保存する。
+未設定、タイムアウト、拒否応答、またはスキーマ不一致の場合は決定的なフォールバックを返す。
+講評は任意の `POST /api/takes/{takeId}/coach` で生成され、採点結果の完了とは独立している。
+
 ### 3.4 生成パラメータ
 
 | パラメータ | 値 | 理由 |

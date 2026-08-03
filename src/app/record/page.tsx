@@ -1,8 +1,31 @@
 import { Suspense } from "react";
-import { songs, getSong, getLatestTake } from "@/lib/mock/data";
-import { getSong as getRealSong } from "@/lib/server/repository";
+import { songs, getLatestTake } from "@/lib/mock/data";
+import { getSong as getRealSong, listSongs as listRealSongs } from "@/lib/server/repository";
 import RecordView from "@/components/RecordView";
 import type { Song } from "@/lib/mock/types";
+import type { SongDoc } from "@/lib/server/types";
+
+function toRecordSong(song: SongDoc): Song {
+  return {
+    id: song.id,
+    title: song.title,
+    composer: song.composer,
+    period: "",
+    keySignature: song.keySignature ?? "不明",
+    timeSignature: song.timeSignature ?? "不明",
+    difficulty: 0,
+    totalMeasures: song.measureCount ?? 0,
+    scoreUrl: null,
+    accent: "#8b5cf6",
+    status: "practicing",
+    goalDate: null,
+    goalDescription: null,
+    addedAt: song.createdAt,
+    targetTempo: song.targetTempo ?? song.detectedTempo ?? 120,
+    currentTempo: song.detectedTempo ?? song.targetTempo ?? 120,
+    sharedWithTeacher: false,
+  };
+}
 
 export default async function RecordPage({
   searchParams,
@@ -10,44 +33,34 @@ export default async function RecordPage({
   searchParams: Promise<{ song?: string }>;
 }) {
   const { song: songId } = await searchParams;
+  const realSongs = (await listRealSongs())
+    .filter((song) => song.status === "ready")
+    .map(toRecordSong);
+  const selectableSongs = [...realSongs, ...songs];
 
   // song_ で始まるIDは実バックエンド(src/lib/server)で作成された実データ。
   // それ以外は src/lib/mock のダミーカタログとして扱う。
   if (songId?.startsWith("song_")) {
     const realSong = await getRealSong(songId);
-    if (realSong) {
-      const asMockShape: Song = {
-        id: realSong.id,
-        title: realSong.title,
-        composer: realSong.composer,
-        period: "",
-        keySignature: realSong.keySignature ?? "不明",
-        timeSignature: realSong.timeSignature ?? "不明",
-        difficulty: 0,
-        totalMeasures: realSong.measureCount ?? 0,
-        scoreUrl: null,
-        accent: "#8b5cf6",
-        status: "practicing",
-        goalDate: null,
-        goalDescription: null,
-        addedAt: realSong.createdAt,
-        targetTempo: realSong.targetTempo ?? realSong.detectedTempo ?? 120,
-        currentTempo: realSong.detectedTempo ?? realSong.targetTempo ?? 120,
-        sharedWithTeacher: false,
-      };
+    if (realSong?.status === "ready") {
       return (
         <Suspense>
-          <RecordView songs={songs} song={asMockShape} latestTake={undefined} real />
+          <RecordView songs={selectableSongs} song={toRecordSong(realSong)} latestTake={undefined} real />
         </Suspense>
       );
     }
   }
 
-  const song = getSong(songId ?? "") ?? songs[0];
+  const song = selectableSongs.find((candidate) => candidate.id === songId) ?? selectableSongs[0];
 
   return (
     <Suspense>
-      <RecordView songs={songs} song={song} latestTake={getLatestTake(song.id)} />
+      <RecordView
+        songs={selectableSongs}
+        song={song}
+        latestTake={song.id.startsWith("song_") ? undefined : getLatestTake(song.id)}
+        real={song.id.startsWith("song_")}
+      />
     </Suspense>
   );
 }

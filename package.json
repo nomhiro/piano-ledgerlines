@@ -6,15 +6,32 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:production": "tsx --test scripts/production-check.ts",
+    "azure:up": "docker compose -f docker-compose.azure-local.yml up -d",
+    "azure:down": "docker compose -f docker-compose.azure-local.yml down",
+    "azure:health": "tsx scripts/azure-local.ts health",
+    "azure:init": "tsx scripts/azure-local.ts init",
+    "azure:check": "tsx scripts/azure-local.ts check",
+    "azure:start": "tsx scripts/azure-local.ts start",
+    "azure:cloud:check": "tsx scripts/azure-cloud.ts check",
+    "azure:cloud:init": "tsx scripts/azure-cloud.ts init",
+    "azure:cloud:start": "tsx scripts/azure-cloud.ts start",
+    "test:azure-local": "tsx scripts/azure-local-smoke.ts"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.10.0",
+    "@azure/identity": "^4.13.1",
+    "@azure/storage-blob": "^12.33.0",
+    "@azure/storage-queue": "^12.31.0",
+    "jose": "^6.2.4",
     "lucide-react": "^1.26.0",
     "next": "16.2.11",
     "opensheetmusicdisplay": "^2.1.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "recharts": "^3.10.0"
+    "recharts": "^3.10.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -24,6 +41,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.11",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5"
   }
 }

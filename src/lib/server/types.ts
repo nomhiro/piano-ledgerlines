@@ -42,6 +42,7 @@ export type TakeStatus =
   | "transcribing"
   | "aligning"
   | "scoring"
+  | "reviewing"
   | "completed"
   | "failed";
 

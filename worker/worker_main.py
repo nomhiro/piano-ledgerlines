@@ -24,14 +24,6 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ledgerlines_worker import align as align_mod
-from ledgerlines_worker import metrics as metrics_mod
-from ledgerlines_worker import preprocess as preprocess_mod
-from ledgerlines_worker import reference as reference_mod
-from ledgerlines_worker import transcribe as transcribe_mod
-from ledgerlines_worker.issues import generate_issues
-
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -63,8 +55,13 @@ def update_take(data_dir: Path, take_id: str, **fields) -> dict:
 
 
 def run_reference(data_dir: Path, song_id: str) -> int:
+    from ledgerlines_worker import reference as reference_mod
+
     song = read_json(song_path(data_dir, song_id))
-    xml_path = data_dir / "scores" / song_id / "score.musicxml"
+    score_files = list((data_dir / "scores" / song_id).glob("score.*"))
+    if not score_files:
+        raise FileNotFoundError(f"score file missing for {song_id}")
+    xml_path = score_files[0]
     try:
         ref = reference_mod.build_reference(xml_path, tempo_bpm=song.get("targetTempo") or 96.0)
     except Exception as exc:  # noqa: BLE001
@@ -134,6 +131,12 @@ def mask_unavailable_pedal(result: dict) -> dict:
 
 
 def run_analyze(data_dir: Path, take_id: str) -> int:
+    from ledgerlines_worker import align as align_mod
+    from ledgerlines_worker import metrics as metrics_mod
+    from ledgerlines_worker import preprocess as preprocess_mod
+    from ledgerlines_worker import transcribe as transcribe_mod
+    from ledgerlines_worker.issues import generate_issues
+
     take = read_json(take_path(data_dir, take_id))
     song_id = take["songId"]
 

@@ -1,4 +1,4 @@
-# 本番化タスクリスト（ホスティング/デプロイ除外）
+# 本番化タスクリスト（IaC 実装済み、ホスティング/イメージデプロイ除外）
 
 ## 目的と範囲
 
@@ -11,6 +11,20 @@ API・非同期処理へ置き換える。
 - Next.jsアプリ、解析ワーカー、Azureリソースのデプロイ/ホスティング
 - 本番ドメイン、CDN、DNS、WAF、CI/CDの稼働設定
 - 実環境での性能測定。ただし、実行可能な計測・監視コードは実装する
+
+## IaC の実装状況
+
+- [x] `infra/main.bicep` とモジュールで Storage、Cosmos DB Serverless、
+      Log Analytics / Application Insights、Key Vault、Managed Identity / RBAC を
+      リソースグループスコープで管理する。
+- [x] `azure.yaml` と dev / stg / prod のパラメータ例を追加する。シークレットは
+      パラメータへ保存せず、Managed Identity と Key Vault RBAC を使う。
+- [x] Foundry / Azure OpenAI 互換アカウントとモデルデプロイを任意設定として追加する。
+- [ ] Next.js / Python ワーカーのコンテナイメージをビルドし、Container Apps の
+      ホスティングサービスを構成する（別作業）。
+
+リソースの Provision、What-if、環境切り替えは
+[`docs/operations/azure-iac.md`](./operations/azure-iac.md) を参照する。
 
 ## 現在の実装と置換先
 
@@ -29,8 +43,9 @@ API・非同期処理へ置き換える。
 - [ ] **認証テナントと利用者モデルを確定する。** 個人利用者のみならEntra External ID、
       組織内利用のみならEntra IDを採用する。教師/学習者のロール、教師との共有・
       割当の認可ルールを`docs/spec/api.md`と`docs/design/data-model.md`へ反映する。
-- [ ] **Azureリソース名・リージョン・環境分離を決める。** dev/staging/prodごとに
-      Cosmos、Storage、Key Vault、Application Insights、Foundryプロジェクトを分離する。
+- [x] **Azureリソース名・リージョン・環境分離を決める。** dev/staging/prodごとに
+      リソースグループと Cosmos、Storage、Key Vault、Application Insights を分離する。
+      Foundry はリージョンのモデル提供状況を確認後に環境単位で有効化する。
 - [ ] **コンテナとキューの責務を決める。** API側は曲・テイク状態を作成するだけとし、
       解析、参照譜生成、AI講評はワーカーJobに限定する。
 - [ ] **データ保持・削除ポリシーを決める。** 録音、派生MIDI、分析結果、ユーザーアカウント、
@@ -155,16 +170,20 @@ APIテストで確認できる。
 
 ## P6: AIコーチ（Microsoft Foundry）
 
-- [ ] `docs/design/ai-prompts.md`をベースに、構造化入力（指標、issues、曲コンテキスト、
+- [x] `docs/design/ai-prompts.md`をベースに、構造化入力（指標、issues、曲コンテキスト、
       練習履歴）とJSON出力スキーマを定義する。
-- [ ] Foundry SDKクライアントをManaged Identityで初期化する。
-      モデル名、デプロイ名、APIバージョンを設定化する。
-- [ ] モデル出力をスキーマ検証し、不正な出力は保存しない。再試行または
+- [x] Foundry互換のChat CompletionsクライアントをManaged Identityで初期化する。
+      モデル名、デプロイ名、APIバージョンを設定化する（実リソースへの接続は未実施）。
+- [x] モデル出力をスキーマ検証し、不正な出力は保存しない。再試行または
       `aiReview`なしで結果を完了できるようにする。
-- [ ] プロンプトインジェクション対策として、ユーザー入力とシステム指示を分離し、
+- [x] プロンプトインジェクション対策として、ユーザー入力とシステム指示を分離し、
       譜面/メモ/会話由来の文字列を信頼しない。
-- [ ] 分析結果とAI講評の関係を`pipelineVersion`、prompt version、model version、
+- [x] 分析結果とAI講評の関係を`pipelineVersion`、prompt version、model version、
       generatedAtと共に保存する。
+
+実装済みのAI講評は`POST /api/takes/{takeId}/coach`から任意に呼び出せる。
+Foundry未設定、認証失敗、タイムアウト、出力検証失敗では決定的なフォールバックを返し、
+採点済みスコアの取得をブロックしない。Azure Content Safetyとの接続は未完了。
 - [ ] 危険・不適切な生成を制御するため、Content Safety/ガードレールと
       ユーザーに見せるフォールバック文を設ける。
 
@@ -175,9 +194,9 @@ APIテストで確認できる。
 
 - [ ] OpenTelemetry + Application InsightsをAPIとワーカーへ組み込む。
       correlation ID、take ID、job ID、ステージ時間、失敗分類、RU、キュー遅延を記録する。
-- [ ] 録音データ、譜面本文、アクセストークン、SAS、個人情報をテレメトリへ送らない
+- [x] 録音データ、譜面本文、アクセストークン、SAS、個人情報をテレメトリへ送らない
       redactionルールを実装する。
-- [ ] メトリクスとアラート候補を定義する（解析失敗率、poison queue、キュー遅延、
+- [x] メトリクス記録フックとアラート候補を定義する（解析失敗率、poison queue、キュー遅延、
       95パーセンタイル処理時間、Cosmos RUスロットリング、Blob失敗、Foundry失敗）。
 - [ ] 依存性スキャン、シークレットスキャン、SDKの脆弱性更新をCIで実行できるようにする
       （CIのホスティング設定は別作業）。
@@ -185,6 +204,9 @@ APIテストで確認できる。
       ログ非含有、別ユーザーアクセス拒否を対象にする。
 - [ ] 解析品質回帰テストを用意する。実ピアノ録音の固定評価セットで
       音程/リズム/テンポ/ダイナミクス/ペダルの期待範囲を確認する。
+
+- [x] 軽量実行テストで、テレメトリの機密値レダクション、AI出力スキーマ、
+      フォールバック、状態遷移を検証する（`npm run test:production`）。
 
 **完了条件:** 障害の原因と影響を個人情報を漏らさず追跡でき、主要な
 データ境界・解析品質・失敗回復が自動テストで保護される。

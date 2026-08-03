@@ -316,7 +316,8 @@ Container Apps Consumption の上限は 4 vCPU / 8 GiB。
 
 MVP で VNet を入れない理由：構成の複雑さとコスト（Private Endpoint × 4 で月約 5,000円）に対し、
 マネージドID + ファイアウォールで実用上十分なリスク低減が得られるため。
-ただし**エンタープライズ展開時には必須**なので、移行しやすいよう IaC を書いておく。
+ただし**エンタープライズ展開時には必須**なので、実装済みの IaC モジュールへ
+Private Endpoint と VNet 統合を追加できるようにしておく。
 
 ### 5.4 データ保護
 
@@ -440,7 +441,7 @@ traceId = takeId
 
 | 施策 | 削減見込み | 前提 |
 |---|---|---|
-| **無料枠を月5テイクに制限**（既定の課金設計） | テイク数が 20,000 → 12,000 程度に | 有料転換率次第 |
+| **無料枠を月5テイクに制限**（実装済み） | テイク数が 20,000 → 12,000 程度に | 有料転換率次第 |
 | **平均録音長を 3分 → 1.5分と見直す** | -50% | 練習は部分練習が主。録音UIに小節範囲指定がある（[機能仕様](../spec/functional.md)）ため、通し録音は一部にとどまる想定 |
 | ~~ONNX Runtime 化~~ | ~~-30〜50%~~ | **M4.5 で実施済み。約2倍速・精度劣化なし。上の試算に反映済み** |
 | 無音区間のスキップ | -5〜10% | 録音の前後の空白を切り落とす |
@@ -516,26 +517,37 @@ M4 実測ベース（施策未適用）の場合。
 
 各環境は**別リソースグループ**、可能なら**別サブスクリプション**に分ける。
 
-### 8.1 IaC
+### 8.1 IaC（実装済み）
 
 | 項目 | 選択 |
 |---|---|
 | ツール | **Bicep**（Azure ネイティブ、学習コストが低い） |
 | デプロイ | Azure Developer CLI (`azd`) |
-| 構成 | `infra/main.bicep` + 環境ごとの `main.parameters.{env}.json` |
+| 構成 | `infra/main.bicep` + `infra/modules/` + 環境ごとの `main.parameters.{env}.json` |
 
 ```
 infra/
 ├── main.bicep
 ├── modules/
-│   ├── container-apps.bicep
 │   ├── cosmos.bicep
 │   ├── storage.bicep
 │   ├── foundry.bicep
 │   ├── monitoring.bicep
-│   └── identity.bicep      # ロール割り当てを集約
+│   ├── key-vault.bicep
+│   ├── identity.bicep
+│   └── rbac.bicep
+├── main.parameters.dev.json
+├── main.parameters.stg.json
 └── main.parameters.prod.json
 ```
+
+リソースグループスコープの Bicep と `azure.yaml` は実装済みです。各環境の
+Storage / Cosmos Serverless / 監視 / Key Vault / Managed Identity / RBAC を
+`azd provision` と `az deployment group what-if` で継続管理できます。Foundry の
+モデルデプロイはリージョンの提供状況を確認してから任意に有効化します。
+Next.js アプリと解析ワーカーのコンテナイメージは未作成のため、Container Apps の
+ホスティングとイメージデプロイはこの IaC のスコープ外です。手順は
+`docs/operations/azure-iac.md` を参照してください。
 
 ### 8.2 CI/CD
 

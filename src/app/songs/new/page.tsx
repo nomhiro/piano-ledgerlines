@@ -7,7 +7,7 @@ import { FileMusic, Upload, Check, Loader2, ScanLine, Info, AlertTriangle } from
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
 import { createSong, uploadScore } from "@/lib/api/client";
 
-type Phase = "idle" | "uploading" | "parsing" | "done" | "error";
+type Phase = "idle" | "uploading" | "parsing" | "awaiting_score" | "done" | "error";
 
 const STEPS = [
   "ファイルをアップロード中…",
@@ -59,14 +59,19 @@ export default function NewSongPage() {
       //    music21でMusicXMLを解析する。同期処理で通常数秒)
       const result = await uploadScore(created.songId, file);
       setStep(STEPS.length);
-      setScoreInfo({
-        measureCount: result.measureCount,
-        timeSignature: result.timeSignature,
-        keySignature: result.keySignature,
-        detectedTempo: result.detectedTempo,
-        warnings: result.warnings,
-      });
-      setPhase("done");
+      if (result.status === "ready") {
+        setScoreInfo({
+          measureCount: result.measureCount ?? 0,
+          timeSignature: result.timeSignature ?? "未検出",
+          keySignature: result.keySignature ?? "未検出",
+          detectedTempo: result.detectedTempo ?? 0,
+          warnings: result.warnings ?? [],
+        });
+        setPhase("done");
+      } else {
+        setScoreInfo(null);
+        setPhase("awaiting_score");
+      }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
       setPhase("error");
@@ -163,6 +168,11 @@ export default function NewSongPage() {
                           ))}
                         </ul>
                       )}
+                    </div>
+                  )}
+                  {phase === "awaiting_score" && (
+                    <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4 text-xs text-amber-200">
+                      楽譜を受け付けました。解析ワーカーの完了後に、小節数・拍子・調などの情報を確認できます。
                     </div>
                   )}
                   {phase === "error" && (

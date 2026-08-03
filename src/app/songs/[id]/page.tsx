@@ -4,6 +4,7 @@ import SongDetailView from "@/components/SongDetailView";
 import { getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
 import Link from "next/link";
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
+import SongManagementControls from "@/components/SongManagementControls";
 
 export function generateStaticParams() {
   return songs.map((s) => ({ id: s.id }));
@@ -65,6 +66,7 @@ export default async function SongDetailPage({
             </div>
           </Card>
         </div>
+        <SongManagementControls song={song} />
       </div>
     );
   }

@@ -1,47 +1,38 @@
-import { NextRequest, NextResponse } from "next/server";
 import { createSong, listSongs } from "@/lib/server/repository";
+import { getAuthenticatedUser } from "@/lib/server/auth";
+import { errorResponse, jsonResponse, readJson } from "@/lib/server/http";
+import { createSongSchema, parseSchema } from "@/lib/server/validation";
+import { getConfig } from "@/lib/server/config";
+import { getBlobStore } from "@/lib/server/blob-storage";
 
 export const runtime = "nodejs";
 
-// GET /api/songs — 曲一覧 (api.md #4)
-export async function GET() {
-  const songs = await listSongs();
-  return NextResponse.json({ songs });
+export async function GET(request: Request) {
+  try {
+    const user = await getAuthenticatedUser(request);
+    return jsonResponse({ songs: await listSongs(user.id) }, request);
+  } catch (error) {
+    return errorResponse(request, error);
+  }
 }
 
-// POST /api/songs — 曲作成 (api.md 5.1)
-// ローカル縦串フェーズの簡略化: SAS発行の代わりに、この後 `POST /api/songs/{id}/score`
-// へ直接multipartでファイルをアップロードしてもらう2ステップ構成にしている。
-export async function POST(request: NextRequest) {
-  const body = await request.json();
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  const composer = typeof body.composer === "string" ? body.composer.trim() : "";
-
-  if (!title || title.length > 200) {
-    return NextResponse.json(
-      { error: { code: "VALIDATION_FAILED", message: "title must be 1-200 chars" } },
-      { status: 400 }
-    );
+export async function POST(request: Request) {
+  try {
+    const user = await getAuthenticatedUser(request);
+    const input = parseSchema(createSongSchema, await readJson(request));
+    const song = await createSong(input, user.id);
+    const response: { songId: string; status: string; song: typeof song; upload?: unknown } = {
+      songId: song.id, status: song.status, song,
+    };
+    if (getConfig().storageBackend === "azure") {
+      response.upload = await getBlobStore().createWriteSas(
+        getConfig().scoresContainer,
+        `users/${user.id}/songs/${song.id}/scores/score.musicxml`,
+        { contentType: "application/xml", maxBytes: 10 * 1024 * 1024 }
+      );
+    }
+    return jsonResponse(response, request, { status: 201 });
+  } catch (error) {
+    return errorResponse(request, error);
   }
-
-  const targetTempo =
-    typeof body.targetTempo === "number" ? body.targetTempo : null;
-  if (targetTempo !== null && (targetTempo < 20 || targetTempo > 300)) {
-    return NextResponse.json(
-      { error: { code: "VALIDATION_FAILED", message: "targetTempo must be 20-300" } },
-      { status: 400 }
-    );
-  }
-
-  const song = await createSong({
-    title,
-    composer,
-    targetTempo,
-    targetDate: typeof body.targetDate === "string" ? body.targetDate : null,
-  });
-
-  return NextResponse.json(
-    { songId: song.id, status: song.status, song },
-    { status: 201 }
-  );
 }
