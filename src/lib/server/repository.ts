@@ -76,6 +76,11 @@ export class LocalRepository implements Repository {
       hasRepeats: false,
       warnings: [],
       scoreFileName: null,
+      sourceScoreFileName: null,
+      scoreSource: null,
+      omrEngine: null,
+      previewScoreFileName: null,
+      previewMidiFileName: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };

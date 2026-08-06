@@ -178,6 +178,16 @@ POST /api/shares/{token}/comments
 楽譜のアップロードはテイクと同じ **SAS 直接アップロード方式**を取る。
 API サーバーを経由させないことで、大きなファイルでもサーバーのメモリを消費しない。
 
+PDF（`application/pdf`、最大10MB）は印刷譜だけを受け付ける。ファイル先頭の
+`%PDF-`署名を検証し、Audiverisジョブへ投入する。ジョブは生成したMusicXMLを保存して
+曲を`reviewing_score`に更新する。ただし、この出力は原本との比較用ドラフトであり、
+参照譜生成・演奏分析には使用しない。利用者は正しいMusicXML、MXL、またはMIDIを
+差し替えてから分析を開始する。
+
+承認済みの曲では、`GET /songs/{songId}/score/file` が描画用のMusicXMLを、
+`GET /songs/{songId}/score/file?format=midi` がブラウザ再生用MIDIを返す。いずれも
+曲の所有者だけが取得できる。
+
 #### `POST /songs`
 
 ```jsonc

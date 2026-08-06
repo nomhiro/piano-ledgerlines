@@ -24,6 +24,7 @@
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.33.0",
     "@azure/storage-queue": "^12.31.0",
+    "@tonejs/midi": "^2.0.28",
     "jose": "^6.2.4",
     "lucide-react": "^1.26.0",
     "next": "16.2.11",
@@ -31,6 +32,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.10.0",
+    "tone": "^15.1.22",
     "zod": "^4.4.3"
   },
   "devDependencies": {

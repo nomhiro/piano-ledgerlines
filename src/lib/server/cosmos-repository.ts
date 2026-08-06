@@ -45,7 +45,8 @@ export class CosmosRepository implements Repository {
       targetTempo: input.targetTempo ?? null, targetDate: input.targetDate ?? null,
       status: "awaiting_score", measureCount: null, scoreMeasureCount: null,
       keySignature: null, timeSignature: null, detectedTempo: null, hasRepeats: false,
-      warnings: [], scoreFileName: null, createdAt: now, updatedAt: now,
+      warnings: [], scoreFileName: null, sourceScoreFileName: null, scoreSource: null,
+      omrEngine: null, previewScoreFileName: null, previewMidiFileName: null, createdAt: now, updatedAt: now,
     };
     await this.songs.items.create(song);
     return song;

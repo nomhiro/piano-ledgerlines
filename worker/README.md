@@ -43,6 +43,19 @@ Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeW
 `WORKER_PYTHON` 環境変数、未設定時は `C:\llpoc\venv\Scripts\python.exe` の存在確認、
 それも無ければ `python` にフォールバック）。
 
+## PDF楽譜のOMR
+
+曲登録時にPDFを受け取ると、Next.js側はこのワーカーを
+`--mode omr --data-dir <dir> --song-id <songId>` で実行します。ワーカーは
+`scores/<songId>/score.pdf` をAudiverisで変換し、生成したMusicXMLを
+`scores/<songId>/score.musicxml` に保存します。変換後の曲は
+`reviewing_score` になり、ユーザーが承認するまで参照譜の生成・演奏分析は行いません。
+
+`AUDIVERIS_COMMAND`（既定: `audiveris`）にAudiveris 5.10.2の実行コマンドを、
+`AUDIVERIS_TIMEOUT_SECONDS`（既定: `300`）にタイムアウト秒数を設定できます。
+印刷譜のみを対象とし、手書き譜・撮影画像は受け付けません。Audiverisは
+AGPL-3.0のため、本番配備前にライセンス上の義務を確認してください。
+
 ## 実装済みAPIエンドポイント（M5縦串, 2026-07時点）
 
 api.md の36エンドポイントのうち、曲登録→録音→解析→結果表示の縦串に
