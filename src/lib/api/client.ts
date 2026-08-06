@@ -7,7 +7,7 @@ export interface ApiSong {
   title: string;
   composer: string;
   targetTempo: number | null;
-  status: "awaiting_score" | "ready";
+  status: "awaiting_score" | "converting_score" | "reviewing_score" | "omr_failed" | "ready";
   measureCount: number | null;
   timeSignature: string | null;
   keySignature: string | null;
@@ -80,6 +80,7 @@ export async function uploadScore(
   timeSignature?: string;
   detectedTempo?: number;
   warnings?: { code: string; message: string; measures?: number[] }[];
+  omrError?: string;
 }> {
   const form = new FormData();
   form.append("scoreFile", file, file.name);

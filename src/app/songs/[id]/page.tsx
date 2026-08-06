@@ -5,6 +5,24 @@ import { getSong as getRealSong, listTakesBySong } from "@/lib/server/repository
 import Link from "next/link";
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
 import SongManagementControls from "@/components/SongManagementControls";
+import ScorePreview from "@/components/ScorePreview";
+import VerifiedScoreReplacement from "@/components/VerifiedScoreReplacement";
+
+function scoreStatusLabel(status: string, scoreSource: string | null): string {
+  if (scoreSource === "pdf") return "OMRドラフト";
+  switch (status) {
+    case "ready":
+      return "解析済み";
+    case "converting_score":
+      return "PDF変換中";
+    case "reviewing_score":
+      return "変換結果の確認待ち";
+    case "omr_failed":
+      return "PDF変換失敗";
+    default:
+      return "楽譜待ち";
+  }
+}
 
 export function generateStaticParams() {
   return songs.map((s) => ({ id: s.id }));
@@ -26,7 +44,7 @@ export default async function SongDetailPage({
           title={song.title}
           description={`${song.composer} ・ ${song.keySignature ?? "調不明"} ・ ${song.timeSignature ?? "拍子不明"}`}
           right={
-            song.status === "ready" ? (
+            song.status === "ready" && song.scoreSource !== "pdf" ? (
               <Link
                 href={`/record?song=${song.id}`}
                 className="rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-500"
@@ -40,7 +58,11 @@ export default async function SongDetailPage({
           <Card>
             <CardTitle title="楽譜情報" />
             <div className="space-y-2 p-5 text-sm text-[var(--muted)]">
-              <div>ステータス: <Badge color="#8b5cf6">{song.status === "ready" ? "解析済み" : "楽譜待ち"}</Badge></div>
+              <div>ステータス: <Badge color="#8b5cf6">{scoreStatusLabel(song.status, song.scoreSource)}</Badge></div>
+              {song.sourceScoreFileName && <div>登録ファイル: {song.sourceScoreFileName}</div>}
+              {song.status === "omr_failed" && song.omrError && (
+                <div className="text-red-300">変換エラー: {song.omrError}</div>
+              )}
               <div>小節数: {song.measureCount ?? "未解析"}</div>
               <div>検出テンポ: {song.detectedTempo ? `♩=${song.detectedTempo}` : "未検出"}</div>
               {song.warnings.length > 0 && (
@@ -66,6 +88,15 @@ export default async function SongDetailPage({
             </div>
           </Card>
         </div>
+        {song.previewScoreFileName && (
+          <ScorePreview
+            scoreUrl={`/api/songs/${song.id}/score/file`}
+            midiUrl={song.previewMidiFileName ? `/api/songs/${song.id}/score/file?format=midi` : null}
+            isDraft={song.scoreSource === "pdf"}
+            targetTempo={song.targetTempo}
+          />
+        )}
+        {song.scoreSource === "pdf" && <VerifiedScoreReplacement songId={song.id} />}
         <SongManagementControls song={song} />
       </div>
     );

@@ -58,6 +58,10 @@ function runWorker(args: string[]): Promise<RunResult> {
   });
 }
 
+export async function runOmrWorker(songId: string, dataDir = DATA_DIR): Promise<RunResult> {
+  return runWorker(["--mode", "omr", "--data-dir", dataDir, "--song-id", songId]);
+}
+
 /**
  * S1: MusicXML → reference.json 生成。api.md 5.1 の `POST /songs/{songId}/score`
  * は同期処理(通常1-3秒)と規定されているため、呼び出し元でawaitしてよい。

@@ -6,7 +6,7 @@
 // MetricKey をそのまま再利用する。articulation はPoC検証により削除済み。
 import type { MetricKey } from "@/lib/mock/types";
 
-export type SongDocStatus = "awaiting_score" | "ready";
+export type SongDocStatus = "awaiting_score" | "converting_score" | "reviewing_score" | "omr_failed" | "ready";
 
 export interface ScoreWarning {
   code: string;
@@ -31,6 +31,12 @@ export interface SongDoc {
   warnings: ScoreWarning[];
   lastScoreError?: string;
   scoreFileName: string | null;
+  sourceScoreFileName: string | null;
+  scoreSource: "musicxml" | "midi" | "pdf" | null;
+  omrEngine: "audiveris" | null;
+  omrError?: string;
+  previewScoreFileName: string | null;
+  previewMidiFileName: string | null;
   createdAt: string;
   updatedAt: string;
 }

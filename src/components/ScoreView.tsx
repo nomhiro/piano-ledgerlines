@@ -54,7 +54,14 @@ export default function ScoreView({
           drawComposer: false,
           drawingParameters: "compacttight",
         });
-        await osmd.load(scoreUrl);
+        const scoreResponse = await fetch(scoreUrl);
+        if (!scoreResponse.ok) throw new Error(`score request failed (${scoreResponse.status})`);
+        const scoreContentType = scoreResponse.headers.get("Content-Type") ?? "";
+        await osmd.load(
+          scoreContentType.includes("xml")
+            ? await scoreResponse.text()
+            : new Blob([new Uint8Array(await scoreResponse.arrayBuffer())], { type: scoreContentType }),
+        );
         if (cancelled) return;
         osmd.zoom = 0.72;
         osmd.render();

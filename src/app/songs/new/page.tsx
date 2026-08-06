@@ -7,7 +7,7 @@ import { FileMusic, Upload, Check, Loader2, ScanLine, Info, AlertTriangle } from
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
 import { createSong, uploadScore } from "@/lib/api/client";
 
-type Phase = "idle" | "uploading" | "parsing" | "awaiting_score" | "done" | "error";
+type Phase = "idle" | "uploading" | "converting" | "reviewing" | "parsing" | "awaiting_score" | "done" | "error";
 
 const STEPS = [
   "ファイルをアップロード中…",
@@ -40,7 +40,7 @@ export default function NewSongPage() {
     setStep(0);
     setErrorMessage("");
 
-    const derivedTitle = title || file.name.replace(/\.(musicxml|xml|mxl|mid|midi)$/i, "");
+    const derivedTitle = title || file.name.replace(/\.(musicxml|xml|mxl|mid|midi|pdf)$/i, "");
     setTitle(derivedTitle);
 
     try {
@@ -58,6 +58,19 @@ export default function NewSongPage() {
       //    (api.md 5.1 `POST /songs/{songId}/score`、実際はPythonワーカーが
       //    music21でMusicXMLを解析する。同期処理で通常数秒)
       const result = await uploadScore(created.songId, file);
+      if (result.status === "converting_score") {
+        setPhase("converting");
+        return;
+      }
+      if (result.status === "reviewing_score") {
+        setPhase("reviewing");
+        return;
+      }
+      if (result.status === "omr_failed") {
+        setErrorMessage(result.omrError ?? "PDF楽譜をMusicXMLへ変換できませんでした。");
+        setPhase("error");
+        return;
+      }
       setStep(STEPS.length);
       if (result.status === "ready") {
         setScoreInfo({
@@ -72,6 +85,7 @@ export default function NewSongPage() {
         setScoreInfo(null);
         setPhase("awaiting_score");
       }
+
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
       setPhase("error");
@@ -82,7 +96,7 @@ export default function NewSongPage() {
     <div>
       <PageHeader
         title="曲を追加"
-        description="お手持ちの楽譜データを登録します。演奏の照合にはデジタル楽譜（MusicXML / MIDI）が必要です。"
+        description="MusicXML・MIDI、またはPDFの印刷譜を登録します。PDFの自動変換結果はプレビュー専用で、演奏分析には正確なデジタル楽譜が必要です。"
       />
 
       <div className="grid gap-5 lg:grid-cols-3">
@@ -96,7 +110,7 @@ export default function NewSongPage() {
                     <Upload size={30} className="text-violet-400" />
                     <div>
                       <div className="text-sm font-medium">
-                        MusicXML / MXL / MIDI ファイルをドロップ
+                        MusicXML / MXL / MIDI / PDF ファイルをドロップ
                       </div>
                       <div className="mt-1 text-xs text-[var(--muted)]">
                         またはクリックしてファイルを選択
@@ -105,7 +119,7 @@ export default function NewSongPage() {
                     <input
                       type="file"
                       className="hidden"
-                      accept=".musicxml,.xml,.mxl,.mid,.midi"
+                      accept=".musicxml,.xml,.mxl,.mid,.midi,.pdf,application/pdf"
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) void handleFile(f);
@@ -136,7 +150,24 @@ export default function NewSongPage() {
                     {phase === "done" && <Badge color="#22c55e">解析完了</Badge>}
                     {phase === "error" && <Badge color="#ef4444">失敗</Badge>}
                   </div>
-                  {phase !== "error" &&
+                  {phase === "converting" && (
+                    <div className="rounded-lg border border-violet-500/25 bg-violet-500/10 p-4 text-xs text-violet-200">
+                      PDF楽譜をAudiverisでMusicXMLに変換しています。完了後、この画面を再読み込みして変換結果を確認してください。
+                    </div>
+                  )}
+                  {phase === "reviewing" && (
+                    <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4 text-xs text-amber-100">
+                      <p>PDFからMusicXMLへの変換が完了しました。これは原本との比較用プレビューであり、演奏分析には使用できません。</p>
+                      <button
+                        type="button"
+                        onClick={() => songId && router.push(`/songs/${songId}`)}
+                        className="mt-3 rounded-lg bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-500"
+                      >
+                        曲の詳細で確認する
+                      </button>
+                    </div>
+                  )}
+                  {phase !== "error" && phase !== "reviewing" && phase !== "converting" &&
                     STEPS.map((s, i) => (
                       <div key={s} className="flex items-center gap-2.5 px-1 text-xs">
                         {i < step ? (
@@ -269,11 +300,11 @@ export default function NewSongPage() {
                 <div>
                   <div className="flex items-center gap-2 text-sm">
                     OMR（光学楽譜認識）
-                    <Badge color="#f59e0b">開発中</Badge>
+                    <Badge color="#8b5cf6">Audiveris</Badge>
                   </div>
                   <p className="mt-1.5 text-xs leading-relaxed text-[var(--muted)]">
-                    紙の楽譜をスマホで撮影、またはPDFをアップロードするとMusicXMLに自動変換します。
-                    MVPではMusicXMLの直接アップロードのみ対応し、OMRは次フェーズで追加予定です。
+                    印刷されたPDF楽譜をアップロードすると、AudiverisでMusicXMLに変換します。
+                    認識結果は誤りを含む場合があるため、確認・承認後に演奏分析へ使用します。手書き譜・写真は対応していません。
                   </p>
                 </div>
               </div>

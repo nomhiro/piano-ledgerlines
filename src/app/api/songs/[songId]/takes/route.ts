@@ -1,5 +1,5 @@
 import { getAuthenticatedUser } from "@/lib/server/auth";
-import { errorResponse, jsonResponse, readJson, NotFoundError } from "@/lib/server/http";
+import { errorResponse, jsonResponse, readJson, NotFoundError, ValidationError } from "@/lib/server/http";
 import { assertResourceId, createTakeSchema, parseSchema } from "@/lib/server/validation";
 import { createTake, getSong, listTakesBySong } from "@/lib/server/repository";
 import { getConfig } from "@/lib/server/config";
@@ -38,6 +38,12 @@ export async function POST(
     const user = await getAuthenticatedUser(request);
     const song = await getSong(songId, user.id);
     if (!song) throw new NotFoundError("song not found");
+    if (song.scoreSource === "pdf") {
+      throw new ValidationError("PDFからの自動変換は分析に使用できません。正しいMusicXML、MXL、またはMIDIへ差し替えてください。");
+    }
+    if (song.status !== "ready") {
+      throw new ValidationError("score must be ready before creating a take");
+    }
     const input = parseSchema(createTakeSchema, await readJson(request));
     await assertTakeQuota(user.id, user.plan);
     if (song.measureCount !== null && input.requestedMeasureRange[1] > song.measureCount) {

@@ -2,16 +2,17 @@ import { getAuthenticatedUser } from "@/lib/server/auth";
 import { getConfig } from "@/lib/server/config";
 import { errorResponse, jsonResponse, NotFoundError, ValidationError } from "@/lib/server/http";
 import { assertResourceId } from "@/lib/server/validation";
-import { getSong, saveScoreFile } from "@/lib/server/repository";
-import { runReferenceWorker } from "@/lib/server/worker";
+import { getSong, saveScoreFile, updateSong } from "@/lib/server/repository";
+import { runOmrWorker, runReferenceWorker } from "@/lib/server/worker";
 import { processCloudScoreLocally } from "@/lib/server/cloud-score-processing";
 
 export const runtime = "nodejs";
 
-const ALLOWED_EXT = [".musicxml", ".xml", ".mxl", ".mid", ".midi"];
+const ALLOWED_EXT = [".musicxml", ".xml", ".mxl", ".mid", ".midi", ".pdf"];
 const MAX_SIZE = 10 * 1024 * 1024;
 
 function hasValidSignature(ext: string, bytes: Buffer): boolean {
+  if (ext === ".pdf") return bytes.subarray(0, 5).toString() === "%PDF-";
   if (ext === ".mxl") return bytes.subarray(0, 2).toString() === "PK";
   if (ext === ".mid" || ext === ".midi") return bytes.subarray(0, 4).toString() === "MThd";
   const prefix = bytes.subarray(0, 512).toString("utf8").trimStart().toLowerCase();
@@ -38,6 +39,34 @@ export async function POST(
     if (!hasValidSignature(ext, bytes)) throw new ValidationError("score file signature is invalid");
 
     await saveScoreFile(songId, file.name, bytes, user.id);
+    if (ext === ".pdf") {
+      await updateSong(songId, {
+        status: "converting_score",
+        scoreFileName: file.name,
+        sourceScoreFileName: file.name,
+        scoreSource: "pdf",
+        omrEngine: "audiveris",
+        omrError: undefined,
+      }, user.id);
+      if (getConfig().storageBackend === "azure") {
+        return jsonResponse({ songId, status: "converting_score", uploadComplete: true }, request, { status: 202 });
+      }
+      const result = await runOmrWorker(songId);
+      const updated = await getSong(songId, user.id);
+      if (!updated) throw new NotFoundError("song not found");
+      return jsonResponse({
+        songId: updated.id,
+        status: updated.status,
+        omrError: result.code === 0 ? undefined : updated.omrError ?? "PDF conversion failed",
+      }, request, { status: result.code === 0 ? 202 : 200 });
+    }
+
+    await updateSong(songId, {
+      scoreSource: ext === ".mid" || ext === ".midi" ? "midi" : "musicxml",
+      sourceScoreFileName: file.name,
+      omrEngine: null,
+      omrError: undefined,
+    }, user.id);
     if (getConfig().storageBackend === "azure") {
       if (process.env.LEDGERLINES_AZURE_CLOUD === "true") {
         const savedSong = await getSong(songId, user.id);

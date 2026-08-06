@@ -43,6 +43,18 @@ export async function processCloudScoreLocally(song: SongDoc): Promise<SongDoc> 
       await fs.readFile(path.join(workDir, "derived", song.id, "reference.json")),
       "application/json",
     );
+    for (const [fileName, contentType] of [
+      [parsedSong.previewScoreFileName, "application/vnd.recordare.musicxml+xml"],
+      [parsedSong.previewMidiFileName, "audio/midi"],
+    ] as const) {
+      if (!fileName) continue;
+      await getBlobStore().upload(
+        config.scoresContainer,
+        `users/${song.userId}/songs/${song.id}/scores/${fileName}`,
+        await fs.readFile(path.join(scoreDir, fileName)),
+        contentType,
+      );
+    }
     return updateSong(song.id, {
       status: "ready",
       measureCount: parsedSong.measureCount,
@@ -52,6 +64,8 @@ export async function processCloudScoreLocally(song: SongDoc): Promise<SongDoc> 
       detectedTempo: parsedSong.detectedTempo,
       hasRepeats: parsedSong.hasRepeats,
       warnings: parsedSong.warnings,
+      previewScoreFileName: parsedSong.previewScoreFileName,
+      previewMidiFileName: parsedSong.previewMidiFileName,
     }, song.userId);
   } finally {
     await fs.rm(workDir, { recursive: true, force: true });
