@@ -49,6 +49,8 @@ Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeW
 (`analysis-jobs`) を消費する本番イメージです。`cloud_worker.py` は Queue のジョブを
 受け取り、Blob の音声・参照譜を一時領域へ同期して既存の解析パイプラインを実行し、
 進捗・結果を Cosmos DB、採譜結果を Blob Storage へ保存します。
+採譜モデルはビルド時にZenodoから取得してチェックサムを検証し、
+`PIANO_TRANSCRIPTION_CHECKPOINT` で指定したイメージ内のパスから読み込みます。
 
 ```powershell
 az acr build --registry <registry> `

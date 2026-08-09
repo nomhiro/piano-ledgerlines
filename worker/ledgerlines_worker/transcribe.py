@@ -26,11 +26,10 @@ def transcribe(preprocessed_wav: Path, out_midi: Path, checkpoint_path: Path | N
     if sr != SR:
         raise ValueError(f"expected {SR}Hz input, got {sr}")
 
-    ckpt = checkpoint_path or DEFAULT_CHECKPOINT
-    kwargs = {"device": "cpu"}
-    if ckpt and Path(ckpt).exists():
-        kwargs["checkpoint_path"] = str(ckpt)
+    ckpt = checkpoint_path or Path(os.environ.get("PIANO_TRANSCRIPTION_CHECKPOINT", DEFAULT_CHECKPOINT))
+    if not ckpt.is_file():
+        raise FileNotFoundError(f"piano transcription checkpoint not found: {ckpt}")
 
-    model = PianoTranscription(**kwargs)
+    model = PianoTranscription(device="cpu", checkpoint_path=str(ckpt))
     out_midi.parent.mkdir(parents=True, exist_ok=True)
     model.transcribe(audio, str(out_midi))
