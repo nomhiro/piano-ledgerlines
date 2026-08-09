@@ -6,9 +6,10 @@ Application Insights、Key Vault、ユーザー割り当て Managed Identity と
 Azure OpenAI 互換の Foundry アカウントとモデルデプロイは、リージョンのクォータと
 モデル提供状況を確認した後に `enableFoundry=true` で有効化します。
 
-アプリケーションと Python ワーカーの Container Apps はまだ作成しません。イメージを
-ビルドしてレジストリへ公開した後、`azure.yaml` のコメント済み `web` / `worker`
-サービスを実際のイメージに置き換えるのが別作業です。
+Next.js の Web Container App と Python 解析ワーカーは、既存の Container Apps managed
+environment / ACR を利用して配備します。Python ワーカーのイメージを ACR に公開した
+後、`enableWorkerHosting=true` と `workerImage` を指定して `azd provision` を実行します。
+Worker は Storage Queue を常時監視し、Managed Identity で Blob / Cosmos / Queue に接続します。
 
 ## 前提
 
@@ -89,3 +90,30 @@ azd down
 
 同じ環境で `azd provision` を再実行すれば差分だけが適用されます。prod の Key Vault
 は purge protection を有効にするため、削除・再作成の前に保持ポリシーを確認します。
+
+## 5. 解析ワーカーの配備
+
+まずイメージを ACR にビルドします。
+
+```powershell
+az acr build --registry <registry-name> `
+  --image ledgerlines/analysis-worker:<git-sha> `
+  --file worker/Dockerfile .
+```
+
+次に、対象環境のパラメータへ次を設定して Provision します。
+
+```json
+{
+  "enableWorkerHosting": { "value": true },
+  "containerEnvironmentName": { "value": "<managed-environment-name>" },
+  "containerRegistryName": { "value": "<registry-name>" },
+  "workerImage": { "value": "<registry>.azurecr.io/ledgerlines/analysis-worker:<git-sha>" }
+}
+```
+
+`az containerapp show` で Worker が `Running` になり、ログに `Analysis worker started`
+が出ることを確認します。Queue の滞留が減り、テイクが
+`queued → transcribing → aligning → scoring → completed` と遷移してから Web の
+`LEDGERLINES_ANALYSIS_ENABLED` を有効化します。Worker が停止している状態で Web だけを
+有効化しないでください。

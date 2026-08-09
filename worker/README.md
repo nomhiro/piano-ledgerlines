@@ -8,7 +8,7 @@ Web アプリから呼び出せる形に再構成したものです。
   `poc/scripts/align.py` / `compute_metrics.py` / `musicxml_reference.py` から
   **そのまま移植**しています（ゼロから書き直していません）。
 
-## セットアップ
+## セットアップ（ローカル）
 
 PoC検証済みの venv をそのまま使えます（このマシンに存在する場合）。
 
@@ -28,7 +28,7 @@ C:\llpoc\venv\Scripts\pip install torch librosa mir_eval pretty_midi soundfile p
 > 本番実装ではモデルをコンテナイメージに同梱し、ローカルパス依存を解消する
 > （architecture.md 4.1 案A）。ここではローカル検証用にこのパスを既定値にしている。
 
-## 実行（Web アプリから呼ばれる想定）
+## 実行（ローカル Web アプリから呼ばれる想定）
 
 ```powershell
 C:\llpoc\venv\Scripts\python.exe worker_main.py --data-dir ..\.data --song-id <songId> --take-id <takeId>
@@ -42,6 +42,24 @@ Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeW
 から `child_process.spawn` でこのCLIを起動する（Pythonインタプリタは
 `WORKER_PYTHON` 環境変数、未設定時は `C:\llpoc\venv\Scripts\python.exe` の存在確認、
 それも無ければ `python` にフォールバック）。
+
+## Azure 本番ワーカー
+
+`Dockerfile` と `requirements.txt` は、Azure Container Apps で Storage Queue
+(`analysis-jobs`) を消費する本番イメージです。`cloud_worker.py` は Queue のジョブを
+受け取り、Blob の音声・参照譜を一時領域へ同期して既存の解析パイプラインを実行し、
+進捗・結果を Cosmos DB、採譜結果を Blob Storage へ保存します。
+
+```powershell
+az acr build --registry <registry> `
+  --image ledgerlines/analysis-worker:<git-sha> `
+  --file worker/Dockerfile .
+```
+
+`infra/main.bicep` の `enableWorkerHosting=true` と `workerImage` に公開済み
+イメージを指定して `azd provision` を実行すると、Worker Managed Identity を割り当てた
+Container App が Queue を監視します。Worker の起動と Queue 疎通を確認した後に Web の
+解析有効化フラグを有効化してください。
 
 ## PDF楽譜のOMR
 

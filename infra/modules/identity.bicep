@@ -23,7 +23,9 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
 
 output webName string = webIdentity.name
 output webPrincipalId string = webIdentity.properties.principalId
+output webClientId string = webIdentity.properties.clientId
 output webResourceId string = webIdentity.id
 output workerName string = workerIdentity.name
 output workerPrincipalId string = workerIdentity.properties.principalId
+output workerClientId string = workerIdentity.properties.clientId
 output workerResourceId string = workerIdentity.id
