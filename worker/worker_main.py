@@ -246,6 +246,7 @@ def run_omr(data_dir: Path, song_id: str) -> int:
 
 def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
     from ledgerlines_worker import align as align_mod
+    from ledgerlines_worker import calibration as calibration_mod
     from ledgerlines_worker import confidence as confidence_mod
     from ledgerlines_worker import metrics as metrics_mod
     from ledgerlines_worker import preprocess as preprocess_mod
@@ -287,8 +288,9 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
 
         est_notes_full, est_pedal = metrics_mod.load_est(midi_path)
         result = metrics_mod.compute(reference, est_notes_full, alignment, est_pedal, ref_pedal=[])
+        calibration = calibration_mod.load_calibration()
         result = confidence_mod.apply_fail_closed_policy(
-            result, reference, alignment, len(est_notes_full)
+            result, reference, alignment, len(est_notes_full), calibration
         )
         issues = generate_issues(result["measureScores"])
 

@@ -63,6 +63,10 @@ export interface ApiTakeDetail {
     measures: number[];
     summary: string;
     metric: string;
+    confidence?: number | null;
+    observation?: string;
+    evidence?: Record<string, unknown>;
+    practiceAction?: string;
   }[];
   aiReview: unknown;
   memo: string;

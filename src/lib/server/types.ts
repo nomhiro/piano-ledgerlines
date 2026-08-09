@@ -92,6 +92,10 @@ export interface IssueDoc {
   measures: number[];
   summary: string;
   metric: MetricKey;
+  confidence: number | null;
+  observation: string;
+  evidence: Record<string, unknown>;
+  practiceAction: string;
 }
 
 export interface TakeDoc {

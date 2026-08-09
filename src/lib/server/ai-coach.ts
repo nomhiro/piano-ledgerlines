@@ -40,8 +40,8 @@ export type CoachReview = z.infer<typeof coachReviewSchema>;
 
 export interface CoachInput {
   song: Pick<SongDoc, "title" | "composer" | "keySignature" | "timeSignature" | "targetTempo">;
-  take: Pick<TakeDoc, "label" | "recordedAt" | "requestedMeasureRange" | "playedMeasureRange" | "overallScore" | "metrics" | "metricsNAReason">;
-  issues: readonly Pick<IssueDoc, "id" | "kind" | "severity" | "measures" | "summary" | "metric">[];
+  take: Pick<TakeDoc, "label" | "recordedAt" | "requestedMeasureRange" | "playedMeasureRange" | "overallScore" | "metrics" | "metricEvaluations" | "metricsNAReason">;
+  issues: readonly Pick<IssueDoc, "id" | "kind" | "severity" | "measures" | "summary" | "metric" | "confidence" | "observation" | "evidence" | "practiceAction">[];
   history: readonly { overallScore: number | null; metrics: Record<MetricKey, number | null> | null }[];
 }
 
@@ -84,7 +84,7 @@ const fallbackReview = (input: CoachInput): CoachReview => {
     ],
     improvements: [
       { text: "一度に扱う範囲を小さくし、片手ずつ確認してから両手で合わせてください。", measures, metric },
-      { text: "録音を短く分け、同じ条件で変化を記録してください。", measures, metric: "tempo" },
+      { text: "録音を短く分け、同じ条件で変化を記録してください。", measures, metric },
     ],
     practiceMenu: [
       {
@@ -137,12 +137,20 @@ function validateMeasures(review: CoachReview, input: CoachInput): void {
     ...review.practiceMenu.flatMap((item) => item.measures),
   ];
   if (measures.some((measure) => !valid(measure))) throw new Error("model referenced a measure outside the take range");
+  if (
+    review.improvements.some(
+      (item) => input.take.metricEvaluations?.[item.metric]?.status !== "scored"
+    )
+  ) {
+    throw new Error("model referenced an unscored metric");
+  }
 }
 
 class FallbackCoach implements Coach {
   async generate(input: CoachInput): Promise<CoachResult> {
     const config = getConfig();
     const review = coachReviewSchema.parse(fallbackReview(safeInput(input)));
+    validateMeasures(review, input);
     return {
       review,
       metadata: {

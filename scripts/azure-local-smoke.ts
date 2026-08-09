@@ -12,6 +12,7 @@ const input: CoachInput = {
     playedMeasureRange: [1, 8],
     overallScore: 79,
     metrics: { pitch: 82, rhythm: 78, tempo: 80, dynamics: 75, pedal: null },
+    metricEvaluations: {},
     metricsNAReason: {},
   },
   issues: [],

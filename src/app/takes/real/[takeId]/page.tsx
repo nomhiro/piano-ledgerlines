@@ -145,6 +145,12 @@ export default function RealTakeResultPage() {
                   <div className="mt-1 text-[var(--muted)]">
                     小節 {issue.measures.join(", ")} ・ {METRIC_LABELS[issue.metric as MetricKey] ?? issue.metric}
                   </div>
+                  {issue.observation && (
+                    <div className="mt-2 text-[var(--muted)]">根拠: {issue.observation}</div>
+                  )}
+                  {issue.practiceAction && (
+                    <div className="mt-1 text-violet-200">練習: {issue.practiceAction}</div>
+                  )}
                 </div>
               </div>
             ))}

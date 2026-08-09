@@ -16,6 +16,8 @@ REASONS = {
     "UNCALIBRATED_MODEL": "教師評価データによる較正が完了していないため判定を保留しました。",
     "REFERENCE_ONLY_UNCALIBRATED": "録音条件に比較的頑健な参考値です。教師評価による較正前のため採点には使用しません。",
     "INSUFFICIENT_ALIGNMENT_EVIDENCE": "対応付けの根拠が不足しているため判定を保留しました。",
+    "LOW_ALIGNMENT_CONFIDENCE": "較正済みの安全基準を満たす対応付け根拠がないため判定を保留しました。",
+    "CALIBRATED_SCORE": "教師評価データで承認された較正基準を満たしています。",
     "NO_SCORE_DYNAMICS": "参照譜から強弱記号を抽出できていないため測定できません。",
     "NO_SCORE_PEDAL": "参照譜からペダル記号を抽出できていないため測定できません。",
 }
@@ -91,19 +93,64 @@ def apply_fail_closed_policy(
     reference: dict,
     alignment: dict,
     transcribed_note_count: int,
+    calibration: dict | None = None,
 ) -> dict:
     """Withhold uncalibrated scores while retaining auditable reference data."""
     overall_evidence, by_measure = alignment_evidence(reference, alignment)
     diagnostics = {
         **overall_evidence,
         "transcribedNotes": transcribed_note_count,
-        "calibrationStatus": "missing",
+        "calibrationStatus": "approved" if calibration else "missing",
+        "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
+        "calibrationArtifactHash": calibration.get("artifactHash") if calibration else None,
     }
     raw_scores = {
         "overallScore": result.get("overallScore"),
         "metrics": dict(result.get("metrics", {})),
     }
+    capabilities = reference.get("capabilities", {})
     alignment_confidence = overall_evidence["alignmentConfidence"]
+    tempo_threshold = (
+        (calibration.get("thresholds", {}).get("tempo") or {}).get("minimumConfidence")
+        if calibration
+        else None
+    )
+    tempo_is_scored = (
+        raw_scores["metrics"].get("tempo") is not None
+        and alignment_confidence is not None
+        and tempo_threshold is not None
+        and alignment_confidence >= tempo_threshold
+    )
+    if raw_scores["metrics"].get("tempo") is None:
+        tempo_evaluation = _evaluation(
+            "unavailable",
+            "INSUFFICIENT_ALIGNMENT_EVIDENCE",
+            alignment_confidence,
+            diagnostics,
+        )
+    elif calibration is None:
+        tempo_evaluation = _evaluation(
+            "reference",
+            "REFERENCE_ONLY_UNCALIBRATED",
+            alignment_confidence,
+            diagnostics,
+        )
+    elif tempo_is_scored:
+        tempo_evaluation = _evaluation(
+            "scored",
+            "CALIBRATED_SCORE",
+            alignment_confidence,
+            diagnostics,
+        )
+    else:
+        tempo_evaluation = _evaluation(
+            "withheld",
+            "LOW_ALIGNMENT_CONFIDENCE"
+            if tempo_threshold is not None
+            else "UNCALIBRATED_MODEL",
+            alignment_confidence,
+            diagnostics,
+        )
 
     metric_evaluations = {
         "pitch": _evaluation(
@@ -112,26 +159,18 @@ def apply_fail_closed_policy(
         "rhythm": _evaluation(
             "withheld", "UNCALIBRATED_MODEL", None, diagnostics
         ),
-        "tempo": (
-            _evaluation(
-                "reference",
-                "REFERENCE_ONLY_UNCALIBRATED",
-                alignment_confidence,
-                diagnostics,
-            )
-            if raw_scores["metrics"].get("tempo") is not None
-            else _evaluation(
-                "unavailable",
-                "INSUFFICIENT_ALIGNMENT_EVIDENCE",
-                alignment_confidence,
-                diagnostics,
-            )
-        ),
+        "tempo": tempo_evaluation,
         "dynamics": _evaluation(
-            "unavailable", "NO_SCORE_DYNAMICS", None, diagnostics
+            "withheld" if capabilities.get("dynamics") else "unavailable",
+            "UNCALIBRATED_MODEL" if capabilities.get("dynamics") else "NO_SCORE_DYNAMICS",
+            None,
+            diagnostics,
         ),
         "pedal": _evaluation(
-            "unavailable", "NO_SCORE_PEDAL", None, diagnostics
+            "withheld" if capabilities.get("pedal") else "unavailable",
+            "UNCALIBRATED_MODEL" if capabilities.get("pedal") else "NO_SCORE_PEDAL",
+            None,
+            diagnostics,
         ),
     }
 
@@ -148,6 +187,12 @@ def apply_fail_closed_policy(
             },
         )
         tempo = measure_score["metrics"].get("tempo")
+        measure_tempo_scored = (
+            tempo is not None
+            and tempo_threshold is not None
+            and evidence["alignmentConfidence"] >= tempo_threshold
+        )
+        measure_tempo_reference = tempo is not None and calibration is None
         measure_score["scoreMeasure"] = measure
         measure_score["noteCount"] = measure_score.pop("refNotes", evidence["referenceNotes"])
         measure_score["confidence"] = evidence["alignmentConfidence"]
@@ -155,25 +200,53 @@ def apply_fail_closed_policy(
         measure_score["metrics"] = {
             "pitch": None,
             "rhythm": None,
-            "tempo": tempo,
+            "tempo": tempo if measure_tempo_scored or measure_tempo_reference else None,
             "dynamics": None,
             "pedal": None,
         }
         measure_score["metricEvaluations"] = {
             key: (
                 _evaluation(
-                    "reference",
-                    "REFERENCE_ONLY_UNCALIBRATED",
+                    (
+                        "scored"
+                        if measure_tempo_scored
+                        else "reference"
+                        if measure_tempo_reference
+                        else "withheld"
+                    ),
+                    (
+                        "CALIBRATED_SCORE"
+                        if measure_tempo_scored
+                        else "REFERENCE_ONLY_UNCALIBRATED"
+                        if measure_tempo_reference
+                        else "LOW_ALIGNMENT_CONFIDENCE"
+                        if tempo_threshold is not None
+                        else "UNCALIBRATED_MODEL"
+                    ),
                     evidence["alignmentConfidence"],
                     evidence,
                 )
                 if key == "tempo" and tempo is not None
                 else _evaluation(
-                    "unavailable" if key in {"tempo", "dynamics", "pedal"} else "withheld",
                     (
-                        "NO_SCORE_DYNAMICS"
+                        "unavailable"
+                        if key == "tempo"
+                        or (key == "dynamics" and not capabilities.get("dynamics"))
+                        or (key == "pedal" and not capabilities.get("pedal"))
+                        else "withheld"
+                    ),
+                    (
+                        (
+                            "UNCALIBRATED_MODEL"
+                            if capabilities.get("dynamics")
+                            else "NO_SCORE_DYNAMICS"
+                        )
                         if key == "dynamics"
-                        else "NO_SCORE_PEDAL"
+                        else (
+                            "UNCALIBRATED_MODEL"
+                            if capabilities.get("pedal")
+                            else "NO_SCORE_PEDAL"
+                        )
                         if key == "pedal"
                         else "INSUFFICIENT_ALIGNMENT_EVIDENCE"
                         if key == "tempo"
@@ -188,7 +261,12 @@ def apply_fail_closed_policy(
 
     result["overallScore"] = None
     result["metrics"] = {
-        key: raw_scores["metrics"].get(key) if key == "tempo" else None for key in METRICS
+        key: (
+            raw_scores["metrics"].get(key)
+            if key == "tempo" and tempo_evaluation["status"] in {"scored", "reference"}
+            else None
+        )
+        for key in METRICS
     }
     result["metricConfidence"] = {
         key: alignment_confidence if key == "tempo" else None for key in METRICS
@@ -203,7 +281,7 @@ def apply_fail_closed_policy(
         "confidence": None,
         "reasonCode": "UNCALIBRATED_MODEL",
         "reason": REASONS["UNCALIBRATED_MODEL"],
-        "calibrationVersion": None,
+        "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
     }
     result["diagnostics"] = diagnostics
     return result

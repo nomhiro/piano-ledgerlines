@@ -116,6 +116,106 @@ class ConfidencePolicyTests(unittest.TestCase):
             guarded["metricEvaluations"]["pitch"]["reasonCode"], "UNCALIBRATED_MODEL"
         )
 
+    def test_approved_data_derived_threshold_can_release_tempo_only(self):
+        reference = {
+            "notes": [
+                {"index": 0, "measure": 1},
+                {"index": 1, "measure": 1},
+                {"index": 2, "measure": 1},
+            ]
+        }
+        alignment = {
+            "pairs": [[0, 0], [1, 1], [2, 2]],
+            "missed": [],
+            "extra": [],
+            "retakes": [],
+            "unplayed": [],
+        }
+        result = {
+            "overallScore": 90,
+            "metrics": {
+                "pitch": 90,
+                "rhythm": 90,
+                "tempo": 90,
+                "dynamics": None,
+                "pedal": None,
+            },
+            "measureScores": [
+                {
+                    "measure": 1,
+                    "refNotes": 3,
+                    "score": 90,
+                    "metrics": {
+                        "pitch": 90,
+                        "rhythm": 90,
+                        "tempo": 90,
+                        "dynamics": None,
+                        "pedal": None,
+                    },
+                }
+            ],
+        }
+        calibration = {
+            "calibrationVersion": "teacher-v1",
+            "thresholds": {"tempo": {"minimumConfidence": 0.8}},
+        }
+
+        guarded = apply_fail_closed_policy(result, reference, alignment, 3, calibration)
+
+        self.assertEqual(guarded["metricEvaluations"]["tempo"]["status"], "scored")
+        self.assertEqual(
+            guarded["measureScores"][0]["metricEvaluations"]["tempo"]["status"], "scored"
+        )
+        self.assertIsNone(guarded["metrics"]["pitch"])
+        self.assertIsNone(guarded["overallScore"])
+
+    def test_failed_calibrated_tempo_threshold_hides_numeric_score(self):
+        reference = {
+            "notes": [
+                {"index": 0, "measure": 1},
+                {"index": 1, "measure": 1},
+                {"index": 2, "measure": 1},
+            ]
+        }
+        alignment = {
+            "pairs": [[0, 0]],
+            "missed": [1, 2],
+            "extra": [],
+            "retakes": [],
+            "unplayed": [],
+        }
+        result = {
+            "overallScore": 70,
+            "metrics": {"pitch": 50, "rhythm": 50, "tempo": 95, "dynamics": None, "pedal": None},
+            "measureScores": [
+                {
+                    "measure": 1,
+                    "refNotes": 3,
+                    "score": 70,
+                    "metrics": {
+                        "pitch": 50,
+                        "rhythm": 50,
+                        "tempo": 95,
+                        "dynamics": None,
+                        "pedal": None,
+                    },
+                }
+            ],
+        }
+        calibration = {
+            "calibrationVersion": "teacher-v1",
+            "thresholds": {"tempo": {"minimumConfidence": 0.8}},
+        }
+
+        guarded = apply_fail_closed_policy(result, reference, alignment, 1, calibration)
+
+        self.assertEqual(guarded["metricEvaluations"]["tempo"]["status"], "withheld")
+        self.assertEqual(
+            guarded["metricEvaluations"]["tempo"]["reasonCode"], "LOW_ALIGNMENT_CONFIDENCE"
+        )
+        self.assertIsNone(guarded["metrics"]["tempo"])
+        self.assertIsNone(guarded["measureScores"][0]["metrics"]["tempo"])
+
 
 if __name__ == "__main__":
     unittest.main()

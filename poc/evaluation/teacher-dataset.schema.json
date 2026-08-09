@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ledger Lines teacher calibration dataset",
+  "type": "object",
+  "required": ["schemaVersion", "datasetVersion", "records"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "datasetVersion": { "type": "string", "minLength": 1 },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "takeId", "performerId", "pieceId", "split", "annotationStatus",
+          "diagnostics", "technicalGroundTruth", "teacherAnnotations"
+        ],
+        "properties": {
+          "takeId": { "type": "string" },
+          "performerId": { "type": "string" },
+          "pieceId": { "type": "string" },
+          "split": { "enum": ["train", "calibration", "test"] },
+          "annotationStatus": {
+            "enum": ["pending_external_annotation", "annotated", "excluded"]
+          },
+          "diagnostics": {
+            "type": "object",
+            "required": ["referenceNotes", "transcribedNotes", "matchedNotes", "extraNotes"],
+            "properties": {
+              "referenceNotes": { "type": "integer", "minimum": 0 },
+              "transcribedNotes": { "type": "integer", "minimum": 0 },
+              "matchedNotes": { "type": "integer", "minimum": 0 },
+              "extraNotes": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "technicalGroundTruth": {
+            "type": ["object", "null"],
+            "properties": {
+              "noteF1": { "type": "number", "minimum": 0, "maximum": 1 },
+              "alignmentF1": { "type": "number", "minimum": 0, "maximum": 1 },
+              "safeToScore": {
+                "type": "object",
+                "additionalProperties": { "type": "boolean" }
+              }
+            }
+          },
+          "metricConfidence": {
+            "type": "object",
+            "additionalProperties": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "systemOverallRank": { "type": ["number", "null"] },
+          "systemWorstMeasures": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 },
+            "minItems": 5,
+            "maxItems": 5
+          },
+          "expectedEvaluationStatus": {
+            "enum": ["scored", "withheld"]
+          },
+          "systemEvaluationStatus": {
+            "enum": ["scored", "withheld"]
+          },
+          "teacherAnnotations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["teacherId", "overallRank", "worstMeasures", "metricRanks"],
+              "properties": {
+                "teacherId": { "type": "string" },
+                "overallRank": { "type": "number" },
+                "worstMeasures": {
+                  "type": "array",
+                  "items": { "type": "integer", "minimum": 1 },
+                  "minItems": 5,
+                  "maxItems": 5
+                },
+                "metricRanks": {
+                  "type": "object",
+                  "additionalProperties": { "type": "number" }
+                },
+                "intentionalExpressionMeasures": {
+                  "type": "array",
+                  "items": { "type": "integer", "minimum": 1 }
+                },
+                "commentRef": { "type": ["string", "null"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -122,15 +122,17 @@ def compute(
 
     target, actual, dyn_measures = [], [], []
     for m, notes in sorted(ref_by_measure.items()):
-        vels = [
-            est_notes[pair_by_ref[n["index"]]]["velocity"]
-            for n in notes
-            if n["index"] in pair_by_ref
+        eligible = [
+            n for n in notes
+            if n["index"] in pair_by_ref and n.get("dynamicLevel") is not None
         ]
-        if not vels:
+        if not eligible:
             continue
-        target.append(float(np.mean([n["dynamicLevel"] / 2 for n in notes])))
-        actual.append(float(np.mean(vels)) / 127.0)
+        target.append(float(np.mean([n["dynamicLevel"] / 2 for n in eligible])))
+        actual.append(
+            float(np.mean([est_notes[pair_by_ref[n["index"]]]["velocity"] for n in eligible]))
+            / 127.0
+        )
         dyn_measures.append(m)
     if len(actual) >= 2 and np.std(actual) > 1e-6:
         a, b = np.polyfit(actual, target, 1)
@@ -191,11 +193,20 @@ def compute(
             {"measure": m, "refNotes": n_ref, "tempoBpm": tempo_m, "metrics": scores}
         )
 
-    tempos = [ms["tempoBpm"] for ms in measure_scores if not np.isnan(ms["tempoBpm"])]
+    excluded_tempo = {
+        int(measure["measure"])
+        for measure in reference.get("measures", [])
+        if measure.get("tempoExcluded")
+    }
+    tempos = [
+        ms["tempoBpm"]
+        for ms in measure_scores
+        if not np.isnan(ms["tempoBpm"]) and ms["measure"] not in excluded_tempo
+    ]
     t_base = float(np.median(tempos)) if tempos else float("nan")
     for ms in measure_scores:
         t = ms["tempoBpm"]
-        if np.isnan(t) or np.isnan(t_base) or t <= 0:
+        if ms["measure"] in excluded_tempo or np.isnan(t) or np.isnan(t_base) or t <= 0:
             ms["metrics"]["tempo"] = None
         else:
             ms["metrics"]["tempo"] = decay(
