@@ -19,6 +19,9 @@ export async function POST(
     const take = await getTake(takeId, user.id);
     if (!take) throw new NotFoundError("take not found");
     if (take.status !== "completed") throw new ValidationError("take scores are not ready");
+    if (take.evaluation?.status === "withheld") {
+      throw new ValidationError("analysis was withheld because its evaluation is not calibrated");
+    }
     const song = await getSong(take.songId, user.id);
     if (!song) throw new NotFoundError("song not found");
 

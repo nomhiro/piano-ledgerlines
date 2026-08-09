@@ -81,7 +81,11 @@ export default async function SongDetailPage({
                     <span className="text-[var(--muted)]">{take.status}</span>
                   </div>
                   <div className="mt-1 text-xs text-[var(--muted)]">
-                    {take.overallScore !== null ? `総合 ${take.overallScore}` : "スコア未算出"}
+                    {take.overallScore !== null
+                      ? `総合 ${take.overallScore}`
+                      : take.evaluation?.status === "withheld"
+                        ? `判定保留${take.evaluation.reason ? `: ${take.evaluation.reason}` : ""}`
+                        : "スコア未算出"}
                   </div>
                 </Link>
               ))}

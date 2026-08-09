@@ -20,6 +20,16 @@ export interface ApiTakeSummary {
   status: string;
 }
 
+export type ApiEvaluationStatus = "scored" | "reference" | "withheld" | "unavailable";
+
+export interface ApiMetricEvaluation {
+  status: ApiEvaluationStatus;
+  confidence: number | null;
+  reasonCode: string | null;
+  reason: string | null;
+  evidence: Record<string, unknown>;
+}
+
 export interface ApiTakeDetail {
   id: string;
   songId: string;
@@ -29,11 +39,22 @@ export interface ApiTakeDetail {
   failure: { code: string; message: string } | null;
   overallScore: number | null;
   metrics: Record<string, number | null> | null;
+  metricConfidence: Record<string, number | null>;
+  metricEvaluations: Record<string, ApiMetricEvaluation>;
   metricsNAReason: Record<string, string>;
+  evaluation: {
+    status: "scored" | "withheld";
+    confidence: number | null;
+    reasonCode: string | null;
+    reason: string | null;
+    calibrationVersion: string | null;
+  } | null;
   measureScores: {
     measure: number;
     score: number | null;
+    confidence: number | null;
     metrics: Record<string, number | null>;
+    metricEvaluations: Record<string, ApiMetricEvaluation>;
   }[];
   issues: {
     id: string;

@@ -57,12 +57,31 @@ export interface TakeFailure {
   message: string;
 }
 
+export type EvaluationStatus = "scored" | "reference" | "withheld" | "unavailable";
+
+export interface MetricEvaluationDoc {
+  status: EvaluationStatus;
+  confidence: number | null;
+  reasonCode: string | null;
+  reason: string | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface TakeEvaluationDoc {
+  status: "scored" | "withheld";
+  confidence: number | null;
+  reasonCode: string | null;
+  reason: string | null;
+  calibrationVersion: string | null;
+}
+
 export interface MeasureScoreDoc {
   measure: number;
   scoreMeasure: number;
   score: number | null;
-  confidence: number;
+  confidence: number | null;
   metrics: Record<MetricKey, number | null>;
+  metricEvaluations: Record<MetricKey, MetricEvaluationDoc>;
   noteCount: number;
 }
 
@@ -93,7 +112,10 @@ export interface TakeDoc {
 
   overallScore: number | null;
   metrics: Record<MetricKey, number | null> | null;
+  metricConfidence: Record<MetricKey, number | null>;
+  metricEvaluations: Partial<Record<MetricKey, MetricEvaluationDoc>>;
   metricsNAReason: Partial<Record<MetricKey, string>>;
+  evaluation: TakeEvaluationDoc | null;
   measureScores: MeasureScoreDoc[];
   issues: IssueDoc[];
 

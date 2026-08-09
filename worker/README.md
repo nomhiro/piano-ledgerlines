@@ -99,8 +99,11 @@ practice-plan/me/dashboard 等、後続フェーズ）。
 - AI講評（S6, Microsoft Foundry）は未実装。`aiReview: null` を返す。
 - 非ピアノ音混入対策（録音UIガイダンス）はUI側の別タスク。
 - `reference.py` はMusicXMLからペダル記号を抽出していないため、`pedal`指標は常に
-  `null`（`metricsNAReason.pedal`に理由を記載）として加重平均から除外している
-  （`worker_main.py`の`mask_unavailable_pedal`）。ペダル記号抽出が実装されるまでの暫定対応。
+  `null`（`metricsNAReason.pedal`に理由を記載）として扱う。
+- 教師評価・採譜正解による較正成果物は未作成で、採譜モデルの音符単位 confidence も
+  MIDIへ保存されていない。このため現在はフェイルクローズとし、総合点と
+  `pitch` / `rhythm` / `dynamics` / `pedal` を判定保留にする。`tempo` は
+  M4で録音条件への頑健性を確認済みの参考値としてのみ表示し、指摘やAI講評には使わない。
 - `status: reviewing`（architecture.md のシーケンス図にある、AI講評待ちの中間状態）は
   未導入。S6が無いため `scoring` → 直接 `completed` に遷移する。
 

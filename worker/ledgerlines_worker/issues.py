@@ -68,8 +68,14 @@ def generate_issues(measure_scores: list[dict[str, Any]]) -> list[dict[str, Any]
         prev_measure = None
         for ms in measure_scores:
             score = ms["metrics"].get(metric)
+            evaluation = ms.get("metricEvaluations", {}).get(metric)
             m = ms["measure"]
-            if score is not None and _severity(score) is not None:
+            if (
+                score is not None
+                and evaluation is not None
+                and evaluation.get("status") == "scored"
+                and _severity(score) is not None
+            ):
                 if prev_measure is not None and m != prev_measure + 1:
                     flush()
                     run, run_scores = [], []

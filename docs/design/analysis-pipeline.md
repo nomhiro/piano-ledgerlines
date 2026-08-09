@@ -463,6 +463,11 @@ matchRate(m)    = matched数 / 参照音符数
 anchorQuality(m) = min(1, matched数 / 3)   … アンカー3点以上で満点
 ```
 
+現行の採譜経路は音符単位のモデル confidence を MIDI へ保存していないため、
+上式の値は `alignmentConfidence`（対応品質）として記録し、採点の正答確率とは区別する。
+教師評価・採譜正解で較正されたポリシーがない状態では、この値に暫定閾値を当てず、
+総合点と採譜依存指標を保留する。`tempo` は M4 の頑健性実測に基づく参考値としてのみ残す。
+
 ### 6.5 失敗判定
 
 | 条件 | 結果 |
@@ -532,6 +537,11 @@ def score_take(ref: ReferenceScore, perf: Performance, align: AlignmentResult) -
         measures.append(MeasureScore(m, weighted_mean(metrics), metrics, conf))
     return aggregate(measures, ref)
 ```
+
+本番実装は較正成果物が欠ける場合、上の `0.5` を通過条件に使わずフェイルクローズにする。
+この場合、小節とテイクには `withheld`、指標には `withheld` / `unavailable` /
+`reference` を付け、理由コードと観測 evidence を保存する。低信頼な指標を除外して
+残りの重みで総合点を再計算することはしない。
 
 ### 7.2 テスト戦略
 
