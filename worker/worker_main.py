@@ -156,7 +156,7 @@ def run_reference(data_dir: Path, song_id: str) -> int:
             "keySignature": ref.get("keySignature"),
             "timeSignature": ref.get("timeSignature"),
             "detectedTempo": ref.get("estimatedTempo"),
-            "hasRepeats": False,
+            "hasRepeats": ref.get("hasRepeats", False),
             "warnings": warnings,
             "previewScoreFileName": preview_score_name,
             "previewMidiFileName": preview_midi_name,

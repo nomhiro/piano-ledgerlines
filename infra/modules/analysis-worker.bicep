@@ -26,6 +26,7 @@ param analysisQueueName string
 param cosmosEndpoint string
 param cosmosDatabaseName string
 param audioContainerName string
+param scoresContainerName string
 param derivedContainerName string
 param takesContainerName string
 param tags object = {}
@@ -74,6 +75,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_COSMOS_DATABASE', value: cosmosDatabaseName }
             { name: 'AZURE_COSMOS_TAKES_CONTAINER', value: takesContainerName }
             { name: 'AZURE_STORAGE_AUDIO_CONTAINER', value: audioContainerName }
+            { name: 'AZURE_STORAGE_SCORES_CONTAINER', value: scoresContainerName }
             { name: 'AZURE_STORAGE_DERIVED_CONTAINER', value: derivedContainerName }
             { name: 'WORKER_VISIBILITY_TIMEOUT_SECONDS', value: '1800' }
           ]

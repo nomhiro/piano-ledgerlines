@@ -227,6 +227,7 @@ module analysisWorker './modules/analysis-worker.bicep' = if (enableWorkerHostin
     cosmosEndpoint: cosmos.outputs.endpoint
     cosmosDatabaseName: cosmos.outputs.databaseName
     audioContainerName: 'audio'
+    scoresContainerName: 'scores'
     derivedContainerName: 'derived'
     takesContainerName: 'takes'
     tags: {

@@ -1,8 +1,7 @@
 """S1: MusicXML → 参照譜(reference.json)。
 
 poc/scripts/musicxml_reference.py の build_reference() をそのまま移植。
-タイ結合は実装済み。繰り返し記号（リピート／ダ・カーポ）の展開は
-m5-prep-report.md 4.4 で指摘された既知の未実装課題（本ワーカーでは非対応）。
+タイ結合とMusicXMLの繰り返し記号（リピート／ダ・カーポ）の展開に対応する。
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ def merge_ties(part) -> list[dict]:
                     "startBeat": float(n.offset),
                     "durationBeats": float(n.duration.quarterLength),
                     "measure": n.measureNumber,
+                    "beatInMeasure": float(n.beat - 1),
                 }
                 if tie in ("start", "continue"):
                     pending[key] = rec
@@ -41,9 +41,22 @@ def merge_ties(part) -> list[dict]:
 
 def build_reference(musicxml_path: Path, tempo_bpm: float = 96.0) -> dict[str, Any]:
     """MusicXML ファイルから reference.json 相当の辞書を作る。"""
-    from music21 import converter
+    from music21 import converter, repeat
 
     score = converter.parse(str(musicxml_path))
+    has_repeats = bool(score.recurse().getElementsByClass("Repeat"))
+    warnings: list[dict[str, str]] = []
+    if has_repeats:
+        try:
+            score = score.expandRepeats()
+        except repeat.ExpanderException as exc:
+            warnings.append(
+                {
+                    "code": "REPEAT_EXPANSION_UNAVAILABLE",
+                    "message": f"繰り返し記号を展開できませんでした: {exc}",
+                }
+            )
+
     ts_list = score.parts[0].recurse().getElementsByClass("TimeSignature")
     beats_per_measure = float(ts_list[0].numerator) if ts_list else 4.0
     time_signature = f"{ts_list[0].numerator}/{ts_list[0].denominator}" if ts_list else "4/4"
@@ -53,15 +66,8 @@ def build_reference(musicxml_path: Path, tempo_bpm: float = 96.0) -> dict[str, A
         notes.extend(merge_ties(part))
     notes.sort(key=lambda n: (n["startBeat"], n["pitch"]))
 
-    measure_start_beat: dict[int, float] = {}
-    for n in notes:
-        m = n["measure"]
-        measure_start_beat.setdefault(m, n["startBeat"])
-        measure_start_beat[m] = min(measure_start_beat[m], n["startBeat"])
-
     out_notes = []
     for i, n in enumerate(notes):
-        beat_in_measure = n["startBeat"] - measure_start_beat[n["measure"]]
         out_notes.append(
             {
                 "index": i,
@@ -69,7 +75,7 @@ def build_reference(musicxml_path: Path, tempo_bpm: float = 96.0) -> dict[str, A
                 "startBeat": round(n["startBeat"], 4),
                 "durationBeats": round(n["durationBeats"], 4),
                 "measure": n["measure"],
-                "beatInMeasure": round(beat_in_measure, 4),
+                "beatInMeasure": round(n["beatInMeasure"], 4),
                 # 強弱記号からの抽出は未実装（m5-prep-report.md 4.4）。暫定固定値。
                 "dynamicLevel": 2,
             }
@@ -89,7 +95,8 @@ def build_reference(musicxml_path: Path, tempo_bpm: float = 96.0) -> dict[str, A
         "timeSignature": time_signature,
         "keySignature": key_signature,
         "measureCount": max((n["measure"] for n in notes), default=0),
+        "hasRepeats": has_repeats,
         "notes": out_notes,
         "source": "musicxml",
-        "warnings": [],
+        "warnings": warnings,
     }

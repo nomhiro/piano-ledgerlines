@@ -16,6 +16,7 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
+from ledgerlines_worker.reference import build_reference
 from worker_main import run_analyze
 
 logging.basicConfig(
@@ -132,9 +133,26 @@ def process_job(store: CloudStore, job: dict[str, Any]) -> None:
 
         audio_prefix = f"users/{user_id}/songs/{song_id}/takes/{take_id}/original"
         store.download_first(store.audio, audio_prefix, data_dir / "audio" / take_id)
-        store.download_json(
+        reference_path = store.download_json(
             f"users/{user_id}/songs/{song_id}/reference.json",
             data_dir / "derived" / song_id / "reference.json",
+        )
+        stored_reference = json.loads(reference_path.read_text(encoding="utf-8"))
+        score_path = store.download_first(
+            store.scores,
+            f"users/{user_id}/songs/{song_id}/scores/score.",
+            data_dir / "scores" / song_id,
+        )
+        reference = build_reference(
+            score_path,
+            tempo_bpm=float(stored_reference.get("estimatedTempo", 96.0)),
+        )
+        reference_path.write_text(json.dumps(reference, ensure_ascii=False), encoding="utf-8")
+        store.upload(
+            store.derived,
+            f"users/{user_id}/songs/{song_id}/reference.json",
+            reference_path,
+            "application/json",
         )
 
         update: Callable[[dict[str, Any]], None] = lambda document: sync_local_doc(store, job, document)
