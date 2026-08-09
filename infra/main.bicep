@@ -36,6 +36,21 @@ param enablePurgeProtection bool = true
 @maxValue(730)
 param logAnalyticsRetentionInDays int = environmentName == 'prod' ? 90 : 30
 
+@description('Deploy the queue-consuming analysis worker Container App.')
+param enableWorkerHosting bool = false
+
+@description('Existing Container Apps managed environment name.')
+param containerEnvironmentName string = ''
+
+@description('Existing Azure Container Registry name.')
+param containerRegistryName string = ''
+
+@description('Worker image reference in Azure Container Registry.')
+param workerImage string = ''
+
+@description('Worker Container App name.')
+param workerContainerAppName string = '${resourceNamePrefix}-analysis-worker'
+
 var normalizedPrefix = toLower(replace(replace(resourceNamePrefix, '-', ''), '_', ''))
 var nameSuffix = uniqueString(subscription().id, resourceGroup().id)
 var storageAccountName = take('${normalizedPrefix}${nameSuffix}', 24)
@@ -195,6 +210,33 @@ module rbac './modules/rbac.bicep' = {
   }
 }
 
+module analysisWorker './modules/analysis-worker.bicep' = if (enableWorkerHosting) {
+  name: '${environmentName}-analysis-worker'
+  params: {
+    workerContainerAppName: workerContainerAppName
+    managedEnvironmentName: containerEnvironmentName
+    registryName: containerRegistryName
+    workerImage: workerImage
+    workerIdentityResourceId: identity.outputs.workerResourceId
+    workerIdentityClientId: identity.outputs.workerClientId
+    location: location
+    storageAccountUrl: storageBaseUrl
+    storageQueueUrl: endsWith(storage.outputs.queueEndpoint, '/') ? substring(storage.outputs.queueEndpoint, 0, max(0, length(storage.outputs.queueEndpoint) - 1)) : storage.outputs.queueEndpoint
+    storageAccountName: storage.outputs.name
+    analysisQueueName: 'analysis-jobs'
+    cosmosEndpoint: cosmos.outputs.endpoint
+    cosmosDatabaseName: cosmos.outputs.databaseName
+    audioContainerName: 'audio'
+    derivedContainerName: 'derived'
+    takesContainerName: 'takes'
+    tags: {
+      environment: environmentName
+      component: 'analysis-worker'
+      managedBy: 'bicep'
+    }
+  }
+}
+
 output environmentName string = environmentName
 output resourceGroupName string = resourceGroup().name
 output location string = location
@@ -216,8 +258,9 @@ output webManagedIdentityName string = identity.outputs.webName
 output webManagedIdentityPrincipalId string = identity.outputs.webPrincipalId
 output workerManagedIdentityName string = identity.outputs.workerName
 output workerManagedIdentityPrincipalId string = identity.outputs.workerPrincipalId
+output workerManagedIdentityClientId string = identity.outputs.workerClientId
 output foundryEnabled bool = enableFoundry
 output foundryEndpoint string = foundry.outputs.endpoint
 output foundryDeploymentName string = foundry.outputs.deploymentName
 output appImageConfiguration string = 'Hosting is intentionally not provisioned: publish an app image, then add a web service to azure.yaml.'
-output workerImageConfiguration string = 'Hosting is intentionally not provisioned: publish a worker image, then add a worker service to azure.yaml.'
+output workerImageConfiguration string = enableWorkerHosting ? workerImage : 'Worker hosting disabled. Set enableWorkerHosting=true and provide workerImage.'

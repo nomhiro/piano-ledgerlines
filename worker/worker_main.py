@@ -266,7 +266,7 @@ def mask_unavailable_pedal(result: dict) -> dict:
     return result
 
 
-def run_analyze(data_dir: Path, take_id: str) -> int:
+def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
     from ledgerlines_worker import align as align_mod
     from ledgerlines_worker import metrics as metrics_mod
     from ledgerlines_worker import preprocess as preprocess_mod
@@ -276,8 +276,14 @@ def run_analyze(data_dir: Path, take_id: str) -> int:
     take = read_json(take_path(data_dir, take_id))
     song_id = take["songId"]
 
+    def update(fields: dict) -> dict:
+        doc = update_take(data_dir, take_id, **fields)
+        if on_update:
+            on_update(doc)
+        return doc
+
     try:
-        update_take(data_dir, take_id, status="transcribing", progress=0.1)
+        update({"status": "transcribing", "progress": 0.1})
 
         audio_dir = data_dir / "audio" / take_id
         audio_files = list(audio_dir.glob("original.*"))
@@ -291,58 +297,46 @@ def run_analyze(data_dir: Path, take_id: str) -> int:
         midi_path = data_dir / "derived-takes" / take_id / "transcription.mid"
         transcribe_mod.transcribe(pre["path"], midi_path)
 
-        update_take(data_dir, take_id, status="aligning", progress=0.55)
+        update({"status": "aligning", "progress": 0.55})
 
         reference = read_json(data_dir / "derived" / song_id / "reference.json")
         est_notes = align_mod.load_est(midi_path)
         alignment = align_mod.align(reference, est_notes, mode="jump")
         write_json(data_dir / "derived-takes" / take_id / "alignment.json", alignment)
 
-        update_take(data_dir, take_id, status="scoring", progress=0.8)
+        update({"status": "scoring", "progress": 0.8})
 
         est_notes_full, est_pedal = metrics_mod.load_est(midi_path)
         result = metrics_mod.compute(reference, est_notes_full, alignment, est_pedal, ref_pedal=[])
         result = mask_unavailable_pedal(result)
         issues = generate_issues(result["measureScores"])
 
-        update_take(
-            data_dir,
-            take_id,
-            status="completed",
-            progress=1.0,
-            overallScore=result["overallScore"],
-            metrics=result["metrics"],
-            metricsNAReason={"pedal": "参照譜からペダル記号を抽出できていないため測定できません。"},
-            measureScores=result["measureScores"],
-            issues=issues,
-            failure=None,
-            aiReview=None,  # S6 (Microsoft Foundry) は未実装。後続フェーズで差し込む。
-            analysis={
+        update({
+            "status": "completed",
+            "progress": 1.0,
+            "overallScore": result["overallScore"],
+            "metrics": result["metrics"],
+            "metricsNAReason": {"pedal": "参照譜からペダル記号を抽出できていないため測定できません。"},
+            "measureScores": result["measureScores"],
+            "issues": issues,
+            "failure": None,
+            "aiReview": None,  # S6 (Microsoft Foundry) は未実装。後続フェーズで差し込む。
+            "analysis": {
                 "pipelineVersion": "0.1.0-m5",
                 "preprocess": {**pre, "path": str(pre["path"])},
                 "baseTempo": result["baseTempo"],
                 "takes": alignment.get("takes"),
             },
-        )
+        })
         print(json.dumps({"ok": True, "takeId": take_id, "overallScore": result["overallScore"]}))
         return 0
     except preprocess_mod.PreprocessError as exc:
-        update_take(
-            data_dir,
-            take_id,
-            status="failed",
-            failure={"code": exc.code, "message": exc.message},
-        )
+        update({"status": "failed", "failure": {"code": exc.code, "message": exc.message}})
         print(json.dumps({"ok": False, "code": exc.code, "error": exc.message}))
         return 1
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
-        update_take(
-            data_dir,
-            take_id,
-            status="failed",
-            failure={"code": "INTERNAL", "message": str(exc)},
-        )
+        update({"status": "failed", "failure": {"code": "INTERNAL", "message": str(exc)}})
         print(json.dumps({"ok": False, "code": "INTERNAL", "error": str(exc)}))
         return 1
 
