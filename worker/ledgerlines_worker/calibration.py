@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-ARTIFACT_SCHEMA_VERSION = "1.0"
+ARTIFACT_SCHEMA_VERSION = "1.1"
 
 
 class CalibrationError(ValueError):
@@ -36,6 +36,17 @@ def load_calibration(path: Path | None = None) -> dict[str, Any] | None:
         raise CalibrationError("calibration release gates did not pass")
     if not artifact.get("datasetHash") or not artifact.get("calibrationVersion"):
         raise CalibrationError("calibration artifact is missing provenance")
+    released_metrics = artifact.get("releasedMetrics")
+    valid_metrics = {"pitch", "rhythm", "tempo", "dynamics", "pedal"}
+    if (
+        not isinstance(released_metrics, list)
+        or not released_metrics
+        or any(not isinstance(metric, str) or metric not in valid_metrics for metric in released_metrics)
+        or len(set(released_metrics)) != len(released_metrics)
+    ):
+        raise CalibrationError("calibration artifact has invalid released metrics")
+    if "tempo" not in released_metrics:
+        raise CalibrationError("calibration artifact does not release tempo")
     tempo_threshold = (
         (artifact.get("thresholds", {}).get("tempo") or {}).get("minimumConfidence")
     )

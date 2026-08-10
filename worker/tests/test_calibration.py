@@ -110,6 +110,30 @@ class CalibrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "leakage"):
             calibrate(dataset)
 
+    def test_performer_and_piece_leakage_are_rejected_independently(self):
+        base = self._record("take-1", "performer-1", "piece-1", "calibration", 1, 0.9)
+        same_performer = self._record(
+            "take-2", "performer-1", "piece-2", "test", 2, 0.9
+        )
+        with self.assertRaisesRegex(ValueError, "performer leakage"):
+            calibrate(
+                {
+                    "schemaVersion": "1.0",
+                    "datasetVersion": "test",
+                    "records": [base, same_performer],
+                }
+            )
+
+        same_piece = self._record("take-3", "performer-2", "piece-1", "test", 2, 0.9)
+        with self.assertRaisesRegex(ValueError, "piece leakage"):
+            calibrate(
+                {
+                    "schemaVersion": "1.0",
+                    "datasetVersion": "test",
+                    "records": [base, same_piece],
+                }
+            )
+
     def test_loader_rejects_unapproved_artifact(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "calibration.json"
@@ -127,6 +151,84 @@ class CalibrationTests(unittest.TestCase):
             )
             with self.assertRaises(CalibrationError):
                 load_calibration(path)
+
+    def test_loader_rejects_artifact_that_does_not_release_tempo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "calibration.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "1.1",
+                        "calibrationVersion": "test",
+                        "datasetHash": "abc",
+                        "approved": True,
+                        "releasedMetrics": ["pitch"],
+                        "thresholds": {"pitch": {"minimumConfidence": 0.8}},
+                        "releaseGates": {"passed": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CalibrationError, "does not release tempo"):
+                load_calibration(path)
+
+    def test_loader_rejects_malformed_released_metrics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "calibration.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "1.1",
+                        "calibrationVersion": "test",
+                        "datasetHash": "abc",
+                        "approved": True,
+                        "releasedMetrics": {"tempo": False},
+                        "thresholds": {"tempo": {"minimumConfidence": 0.8}},
+                        "releaseGates": {"passed": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CalibrationError, "invalid released metrics"):
+                load_calibration(path)
+
+    def test_duplicate_teacher_annotation_is_rejected(self):
+        record = self._record(
+            "take-duplicate-teacher",
+            "performer",
+            "piece",
+            "calibration",
+            1,
+            0.9,
+        )
+        record["teacherAnnotations"].append(dict(record["teacherAnnotations"][0]))
+        with self.assertRaisesRegex(ValueError, "duplicate teacher"):
+            calibrate(
+                {
+                    "schemaVersion": "1.0",
+                    "datasetVersion": "test",
+                    "records": [record],
+                }
+            )
+
+    def test_duplicate_system_worst_measure_is_rejected(self):
+        record = self._record(
+            "take-duplicate-worst",
+            "performer",
+            "piece",
+            "test",
+            1,
+            0.9,
+        )
+        record["systemWorstMeasures"] = [1, 2, 3, 4, 4]
+        with self.assertRaisesRegex(ValueError, "distinct system worst"):
+            calibrate(
+                {
+                    "schemaVersion": "1.0",
+                    "datasetVersion": "test",
+                    "records": [record],
+                }
+            )
 
     def test_complete_teacher_dataset_produces_loadable_artifact(self):
         dataset = {
@@ -171,7 +273,12 @@ class CalibrationTests(unittest.TestCase):
         }
         artifact = calibrate(dataset)
         self.assertTrue(artifact["approved"])
+        self.assertEqual(
+            set(artifact["releasedMetrics"]),
+            {"pitch", "rhythm", "tempo", "dynamics", "pedal"},
+        )
         self.assertEqual(artifact["releaseGates"]["teacherRankSpearman"], 1.0)
+        self.assertTrue(artifact["releaseGates"]["advancedEvaluationPassed"])
         self.assertTrue(
             all(
                 result["passed"]
@@ -183,6 +290,53 @@ class CalibrationTests(unittest.TestCase):
             path.write_text(json.dumps(artifact), encoding="utf-8")
             loaded = load_calibration(path)
         self.assertEqual(loaded["calibrationVersion"], "synthetic-calibration-v1")
+
+    def test_tempo_can_release_without_publishing_advanced_evaluation(self):
+        records = []
+        for split, start, stop in (("calibration", 1, 21), ("test", 21, 41)):
+            for index in range(start, stop):
+                safe = bool(index % 2)
+                record = self._record(
+                    f"{split}-{index}",
+                    f"{split}-performer-{index}",
+                    f"{split}-piece-{index}",
+                    split,
+                    index,
+                    0.9 if safe else 0.2,
+                    safe=safe,
+                )
+                record["metricConfidence"] = {"tempo": record["metricConfidence"]["tempo"]}
+                record["technicalGroundTruth"]["safeToScore"] = {"tempo": safe}
+                record["systemOverallRank"] = None
+                record.pop("systemWorstMeasures")
+                records.append(record)
+        target = self._record(
+            "take_980da1b96a3d4bcc9c6c",
+            "target-performer",
+            "target-piece",
+            "test",
+            41,
+            0.2,
+            target=True,
+            safe=False,
+        )
+        target["metricConfidence"] = {"tempo": 0.2}
+        target["technicalGroundTruth"]["safeToScore"] = {"tempo": False}
+        target["systemOverallRank"] = None
+        target.pop("systemWorstMeasures")
+        records.append(target)
+
+        artifact = calibrate(
+            {
+                "schemaVersion": "1.0",
+                "datasetVersion": "tempo-only",
+                "records": records,
+            }
+        )
+
+        self.assertTrue(artifact["approved"])
+        self.assertEqual(artifact["releasedMetrics"], ["tempo"])
+        self.assertFalse(artifact["releaseGates"]["advancedEvaluationPassed"])
 
 
 if __name__ == "__main__":

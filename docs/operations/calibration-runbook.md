@@ -17,8 +17,11 @@ python poc\scripts\calibrate_teacher_evaluation.py `
   --out C:\secure-ledgerlines-evaluation\calibration.json
 ```
 
-終了コード `0` の場合だけ候補にできる。`2` は教師数、相関、worst-5一致、
-対象テイク回帰、指標別false-passのいずれかが未達である。
+終了コード `0` の場合だけtempo較正artifactの候補にできる。`2` はデータ件数、
+対象テイク回帰、tempoの未知test false-passのいずれかが未達である。
+artifact schemaは`1.1`。`releasedMetrics` にない指標は公開しない。
+`advancedEvaluationPassed: false` の場合、
+教師順位相関やworst-5一致が未達なので高度評価は引き続き非公開にする。
 
 ## 配備
 

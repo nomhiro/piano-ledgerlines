@@ -21,6 +21,8 @@
 5. `python poc/scripts/calibrate_teacher_evaluation.py --dataset <json> --out <artifact>`
    を実行する。
 6. `approved: true` かつ release gate を満たした artifact だけを本番へ配備する。
+   `releasedMetrics` にない指標は公開せず、`advancedEvaluationPassed: false` の場合は
+   教師視点の高度評価を公開しない。現在のworkerが本番公開できるのはtempoだけである。
 
 対象テイク `take_980da1b96a3d4bcc9c6c` は manifest に登録済みだが、音声と教師注釈が
 このリポジトリにないため `pending_external_annotation` である。この状態では較正artifactを

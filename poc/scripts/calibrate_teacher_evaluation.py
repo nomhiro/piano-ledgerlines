@@ -94,24 +94,40 @@ def evaluate_threshold(rows: list[tuple[float, bool]], threshold: dict | None) -
 def validate_dataset(dataset: dict[str, Any]) -> None:
     if dataset.get("schemaVersion") != "1.0":
         raise ValueError("unsupported dataset schema")
-    assignments: dict[tuple[str, str], str] = {}
+    performer_assignments: dict[str, str] = {}
+    piece_assignments: dict[str, str] = {}
     take_ids: set[str] = set()
     for record in dataset.get("records", []):
-        key = (record["performerId"], record["pieceId"])
         if record["takeId"] in take_ids:
             raise ValueError("duplicate takeId")
         take_ids.add(record["takeId"])
-        assigned = assignments.setdefault(key, record["split"])
-        if assigned != record["split"]:
-            raise ValueError("performer/piece leakage across dataset splits")
+        split = record["split"]
+        performer_split = performer_assignments.setdefault(record["performerId"], split)
+        if performer_split != split:
+            raise ValueError("performer leakage across dataset splits")
+        piece_split = piece_assignments.setdefault(record["pieceId"], split)
+        if piece_split != split:
+            raise ValueError("piece leakage across dataset splits")
         if record["annotationStatus"] == "annotated":
             teachers = {item["teacherId"] for item in record["teacherAnnotations"]}
             if len(teachers) < 3:
                 raise ValueError(f"{record['takeId']} needs at least three independent teachers")
+            if len(teachers) != len(record["teacherAnnotations"]):
+                raise ValueError(f"{record['takeId']} has duplicate teacher annotations")
             if record["technicalGroundTruth"] is None:
                 raise ValueError(f"{record['takeId']} lacks technical ground truth")
-            if any(len(item["worstMeasures"]) != 5 for item in record["teacherAnnotations"]):
+            if any(
+                len(item["worstMeasures"]) != 5
+                or len(set(item["worstMeasures"])) != 5
+                for item in record["teacherAnnotations"]
+            ):
                 raise ValueError(f"{record['takeId']} needs exactly five worst measures per teacher")
+            system_worst = record.get("systemWorstMeasures")
+            if record.get("systemEvaluationStatus") != "withheld" and system_worst is not None:
+                if len(system_worst) != 5 or len(set(system_worst)) != 5:
+                    raise ValueError(
+                        f"{record['takeId']} needs exactly five distinct system worst measures"
+                    )
 
 
 def calibrate(dataset: dict[str, Any]) -> dict[str, Any]:
@@ -123,6 +139,7 @@ def calibrate(dataset: dict[str, Any]) -> dict[str, Any]:
     test = [record for record in annotated if record["split"] == "test"]
     thresholds = {}
     confidence_validation = {}
+    released_metrics = []
     for metric in METRICS:
         calibration_rows = []
         for record in calibration:
@@ -142,6 +159,8 @@ def calibrate(dataset: dict[str, Any]) -> dict[str, Any]:
             if confidence is not None and safe is not None:
                 test_rows.append((float(confidence), bool(safe)))
         confidence_validation[metric] = evaluate_threshold(test_rows, thresholds[metric])
+        if thresholds[metric] is not None and confidence_validation[metric]["passed"]:
+            released_metrics.append(metric)
 
     system_ranks, teacher_ranks = [], []
     worst_scores = []
@@ -169,29 +188,38 @@ def calibrate(dataset: dict[str, Any]) -> dict[str, Any]:
 
     rho = spearman(system_ranks, teacher_ranks)
     worst = sum(worst_scores) / len(worst_scores) if worst_scores else 0.0
-    gates_passed = (
+    dataset_gate_passed = (
         len(calibration) >= MIN_CALIBRATION_RECORDS
         and len(test) >= MIN_TEST_RECORDS
+        and target_passed
+    )
+    advanced_evaluation_passed = (
+        dataset_gate_passed
+        and len(system_ranks) >= MIN_TEST_RECORDS
+        and len(worst_scores) >= MIN_TEST_RECORDS
         and not math.isnan(rho)
         and rho >= 0.7
         and worst >= 0.7
-        and target_passed
-        and all(value is not None for value in thresholds.values())
-        and all(value["passed"] for value in confidence_validation.values())
     )
+    gates_passed = dataset_gate_passed and "tempo" in released_metrics
     canonical = json.dumps(dataset, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return {
-        "schemaVersion": "1.0",
+        "schemaVersion": "1.1",
         "calibrationVersion": f"{dataset['datasetVersion']}-calibration-v1",
         "datasetHash": hashlib.sha256(canonical).hexdigest(),
         "approved": gates_passed,
+        "releasedMetrics": released_metrics,
         "thresholds": thresholds,
         "releaseGates": {
             "passed": gates_passed,
+            "datasetPassed": dataset_gate_passed,
             "testRecords": len(test),
             "calibrationRecords": len(calibration),
             "teacherRankSpearman": None if math.isnan(rho) else round(rho, 4),
+            "teacherRankRecords": len(system_ranks),
             "worstFiveAgreement": round(worst, 4),
+            "worstFiveRecords": len(worst_scores),
+            "advancedEvaluationPassed": advanced_evaluation_passed,
             "targetTakeRegression": target_passed,
             "confidenceValidation": confidence_validation,
         },
