@@ -8,6 +8,11 @@
       "pieceId": "song_9f548aff57dd4ea3a17c",
       "split": "test",
       "annotationStatus": "pending_external_annotation",
+      "assetStatus": {
+        "audio": "available_external",
+        "score": "missing",
+        "technicalGroundTruthMidi": "missing"
+      },
       "diagnostics": {
         "referenceNotes": 1242,
         "transcribedNotes": 1495,

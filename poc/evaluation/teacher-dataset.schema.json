@@ -64,6 +64,22 @@
           "systemEvaluationStatus": {
             "enum": ["scored", "withheld"]
           },
+          "assetStatus": {
+            "type": "object",
+            "required": ["audio", "score", "technicalGroundTruthMidi"],
+            "properties": {
+              "audio": {
+                "enum": ["missing", "available_external"]
+              },
+              "score": {
+                "enum": ["missing", "available_external"]
+              },
+              "technicalGroundTruthMidi": {
+                "enum": ["missing", "available_external"]
+              }
+            },
+            "additionalProperties": false
+          },
           "teacherAnnotations": {
             "type": "array",
             "items": {

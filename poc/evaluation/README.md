@@ -24,6 +24,8 @@
    `releasedMetrics` にない指標は公開せず、`advancedEvaluationPassed: false` の場合は
    教師視点の高度評価を公開しない。現在のworkerが本番公開できるのはtempoだけである。
 
-対象テイク `take_980da1b96a3d4bcc9c6c` は manifest に登録済みだが、音声と教師注釈が
-このリポジトリにないため `pending_external_annotation` である。この状態では較正artifactを
-承認できず、本番はフェイルクローズを維持する。
+対象テイク `take_980da1b96a3d4bcc9c6c` は manifest に登録済みで、音声は外部提供済み。
+リポジトリには保存せず、`assetStatus.audio = available_external` だけを記録する。
+対象曲のMusicXML、同時収録または人手修正した正解MIDI、教師注釈は未提供のため
+`pending_external_annotation` である。音声から自動採譜したMIDIを技術的正解として
+流用してはならない。この状態では較正artifactを承認できず、本番はフェイルクローズを維持する。
