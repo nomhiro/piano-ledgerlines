@@ -1,7 +1,7 @@
 import { CosmosClient, type Container, type SqlQuerySpec } from "@azure/cosmos";
 import https from "node:https";
 import path from "node:path";
-import type { Repository } from "./repository";
+import type { Repository, SongTakeSummary } from "./repository";
 import type { CreateSongInput, CreateTakeInput, SongDoc, TakeDoc } from "./types";
 import { newSongId, newTakeId } from "./ids";
 import { getConfig } from "./config";
@@ -67,6 +67,31 @@ export class CosmosRepository implements Repository {
       parameters: [{ name: "@userId", value: userId }],
     };
     return (await this.songs.items.query<SongDoc>(query, { partitionKey: userId }).fetchAll()).resources;
+  }
+
+  async listSongTakeSummaries(userId: string, songIds: string[]): Promise<Record<string, SongTakeSummary>> {
+    if (songIds.length === 0) return {};
+    const query: SqlQuerySpec = {
+      query: "SELECT c.id, c.songId, c.label, c.status, c.recordedAt, c.overallScore FROM c WHERE c.userId = @userId AND ARRAY_CONTAINS(@songIds, c.songId)",
+      parameters: [{ name: "@userId", value: userId }, { name: "@songIds", value: songIds }],
+    };
+    const takes = (await this.takes.items.query<Pick<TakeDoc, "id" | "songId" | "label" | "status" | "recordedAt" | "overallScore">>(query, { partitionKey: userId }).fetchAll()).resources;
+    const summaries: Record<string, SongTakeSummary> = {};
+    for (const take of takes) {
+      const summary = summaries[take.songId] ?? { count: 0, latest: null };
+      summary.count += 1;
+      if (!summary.latest || take.recordedAt > summary.latest.recordedAt) {
+        summary.latest = {
+          id: take.id,
+          label: take.label,
+          status: take.status,
+          recordedAt: take.recordedAt,
+          overallScore: take.overallScore,
+        };
+      }
+      summaries[take.songId] = summary;
+    }
+    return summaries;
   }
 
   async updateSong(userId: string, songId: string, patch: Partial<SongDoc>): Promise<SongDoc> {

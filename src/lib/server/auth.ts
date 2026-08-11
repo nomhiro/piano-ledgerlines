@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
+import { headers } from "next/headers";
 import { getConfig } from "./config";
 
 export interface AuthenticatedUser {
@@ -39,6 +40,27 @@ function userFromClaims(claims: JWTPayload): AuthenticatedUser {
   return { id, roles, plan, isDevelopmentFallback: false };
 }
 
+interface EasyAuthPrincipal {
+  userId?: unknown;
+  identityProvider?: unknown;
+  claims?: unknown;
+}
+
+function userFromEasyAuthHeader(encodedPrincipal: string): AuthenticatedUser {
+  let principal: EasyAuthPrincipal;
+  try {
+    principal = JSON.parse(Buffer.from(encodedPrincipal, "base64").toString("utf8")) as EasyAuthPrincipal;
+  } catch {
+    throw new AuthError("invalid Easy Auth principal");
+  }
+  if (typeof principal.userId !== "string" || !principal.userId) {
+    throw new AuthError("Easy Auth user id is missing");
+  }
+  const provider = typeof principal.identityProvider === "string" ? principal.identityProvider : "google";
+  const id = principal.userId.includes(":") ? principal.userId : `${provider}:${principal.userId}`;
+  return { id, roles: [], plan: "free", isDevelopmentFallback: false };
+}
+
 /**
  * Verifies an Entra access token. The development fallback is deliberately
  * explicit and cannot be enabled by a request header or query parameter.
@@ -46,6 +68,11 @@ function userFromClaims(claims: JWTPayload): AuthenticatedUser {
 export async function getAuthenticatedUser(request: Request): Promise<AuthenticatedUser> {
   const config = getConfig();
   const header = request.headers.get("authorization");
+  if (config.authMode === "google") {
+    const principal = request.headers.get("x-ms-client-principal");
+    if (!principal) throw new AuthError();
+    return userFromEasyAuthHeader(principal);
+  }
   if (!header) {
     if (config.authMode === "development") {
       return { id: config.devUserId, roles: ["developer"], plan: "free", isDevelopmentFallback: true };
@@ -67,4 +94,9 @@ export async function getAuthenticatedUser(request: Request): Promise<Authentica
   } catch {
     throw new AuthError("invalid or expired token");
   }
+}
+
+export async function getAuthenticatedServerUser(): Promise<AuthenticatedUser> {
+  const requestHeaders = new Headers(await headers());
+  return getAuthenticatedUser(new Request("http://localhost", { headers: requestHeaders }));
 }

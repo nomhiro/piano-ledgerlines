@@ -4,6 +4,7 @@ import { coachReviewSchema, fallbackReview, type CoachInput } from "../src/lib/s
 import { redactTelemetry } from "../src/lib/server/observability";
 import { assertTakeTransition } from "../src/lib/server/take-state";
 import { getConfig, resetConfigForTests } from "../src/lib/server/config";
+import { getAuthenticatedUser } from "../src/lib/server/auth";
 
 const input: CoachInput = {
   song: {
@@ -107,5 +108,29 @@ test("production rejects emulator and local cloud profiles", () => {
   else process.env.LEDGERLINES_AZURE_CLOUD = previous.cloud;
   if (previous.emulator === undefined) delete process.env.LEDGERLINES_AZURE_EMULATOR;
   else process.env.LEDGERLINES_AZURE_EMULATOR = previous.emulator;
+  resetConfigForTests();
+});
+
+test("Google Easy Auth principal resolves to the storage user id", async () => {
+  const env = process.env as Record<string, string | undefined>;
+  const previous = {
+    auth: process.env.LEDGERLINES_AUTH_MODE,
+    nodeEnv: process.env.NODE_ENV,
+  };
+  env.NODE_ENV = "production";
+  process.env.LEDGERLINES_AUTH_MODE = "google";
+  resetConfigForTests();
+  const principal = Buffer.from(JSON.stringify({
+    userId: "100007109722337889200",
+    identityProvider: "google",
+  })).toString("base64");
+  const user = await getAuthenticatedUser(new Request("http://localhost", {
+    headers: { "x-ms-client-principal": principal },
+  }));
+  assert.equal(user.id, "google:100007109722337889200");
+  if (previous.auth === undefined) delete process.env.LEDGERLINES_AUTH_MODE;
+  else process.env.LEDGERLINES_AUTH_MODE = previous.auth;
+  if (previous.nodeEnv === undefined) delete env.NODE_ENV;
+  else env.NODE_ENV = previous.nodeEnv;
   resetConfigForTests();
 });

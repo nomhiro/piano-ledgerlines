@@ -4,10 +4,23 @@ import { songs, getLatestTake, getTakesForSong } from "@/lib/mock/data";
 import { SONG_STATUS_LABELS } from "@/lib/mock/types";
 import { Badge, Card, PageHeader, ScoreRing } from "@/components/ui";
 import { daysUntil, formatDate } from "@/lib/format";
-import { listSongs } from "@/lib/server/repository";
+import { listSongTakeSummaries, listSongs } from "@/lib/server/repository";
+
+const TAKE_STATUS_LABELS: Record<string, string> = {
+  uploading: "アップロード中",
+  uploaded: "アップロード済み",
+  queued: "解析待ち",
+  transcribing: "音声解析中",
+  aligning: "楽譜と照合中",
+  scoring: "採点中",
+  reviewing: "確認中",
+  completed: "分析済み",
+  failed: "分析失敗",
+};
 
 export default async function SongsPage() {
   const realSongs = await listSongs();
+  const takeSummaries = await listSongTakeSummaries(realSongs.map((song) => song.id));
 
   return (
     <div>
@@ -26,9 +39,11 @@ export default async function SongsPage() {
       />
 
       <div className="space-y-3">
-        {realSongs.map((song) => (
-          <Link key={song.id} href={`/songs/${song.id}`}>
-            <Card className="flex flex-wrap items-center gap-5 p-5 transition-colors hover:border-violet-500/50">
+        {realSongs.map((song) => {
+          const latest = takeSummaries[song.id]?.latest;
+          return (
+            <Link key={song.id} href={`/songs/${song.id}`}>
+              <Card className="flex flex-wrap items-center gap-5 p-5 transition-colors hover:border-violet-500/50">
               <div
                 className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg"
                 style={{
@@ -57,16 +72,32 @@ export default async function SongsPage() {
                     : "警告なし"}
                 </div>
               </div>
-              <div className="w-40 text-xs text-[var(--muted)]">
-                <div>テイクは曲詳細から確認</div>
-                <div className="mt-1">
-                  {song.status === "ready" ? "録音できます" : "楽譜を登録してください"}
+                <div className="w-40 text-xs text-[var(--muted)]">
+                  <div>
+                    テイク {takeSummaries[song.id]?.count ?? 0} 件
+                    {latest && (
+                      <span> ・ 最終録音 {formatDate(latest.recordedAt)}</span>
+                    )}
+                  </div>
+                  <div className="mt-1">
+                    {latest
+                      ? TAKE_STATUS_LABELS[latest.status] ?? latest.status
+                      : song.status === "ready"
+                        ? "録音できます"
+                        : "楽譜を登録してください"}
+                  </div>
                 </div>
-              </div>
-              <ScoreRing score={0} size={62} label="最新" />
-            </Card>
-          </Link>
-        ))}
+                {latest?.overallScore !== null && latest?.overallScore !== undefined ? (
+                  <ScoreRing score={latest.overallScore} size={62} label="最新" />
+                ) : (
+                  <div className="flex h-[62px] w-[62px] items-center justify-center rounded-full border border-[var(--border)] text-center text-[10px] text-[var(--muted)]">
+                    未算出
+                  </div>
+                )}
+              </Card>
+            </Link>
+          );
+        })}
 
         {songs.map((song) => {
           const list = getTakesForSong(song.id);
