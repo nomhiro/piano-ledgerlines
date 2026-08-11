@@ -98,7 +98,10 @@ def sync_local_doc(store: CloudStore, job: dict[str, Any], document: dict[str, A
             "failure",
             "overallScore",
             "metrics",
+            "metricConfidence",
+            "metricEvaluations",
             "metricsNAReason",
+            "evaluation",
             "measureScores",
             "issues",
             "aiReview",
@@ -140,6 +143,14 @@ def process_job(store: CloudStore, job: dict[str, Any]) -> None:
         update: Callable[[dict[str, Any]], None] = lambda document: sync_local_doc(store, job, document)
         result_code = run_analyze(data_dir, take_id, on_update=update)
         final_document = json.loads((data_dir / "takes" / f"{take_id}.json").read_text(encoding="utf-8"))
+        evaluation = final_document.get("evaluation") or {}
+        LOGGER.info(
+            "Evaluation outcome take=%s status=%s reason=%s calibration=%s",
+            take_id,
+            evaluation.get("status"),
+            evaluation.get("reasonCode"),
+            evaluation.get("calibrationVersion"),
+        )
 
         derived_prefix = f"users/{user_id}/songs/{song_id}/takes/{take_id}"
         transcription = data_dir / "derived-takes" / take_id / "transcription.mid"

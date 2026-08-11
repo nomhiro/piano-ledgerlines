@@ -19,6 +19,20 @@ export async function POST(
     const take = await getTake(takeId, user.id);
     if (!take) throw new NotFoundError("take not found");
     if (take.status !== "completed") throw new ValidationError("take scores are not ready");
+    const scoredMetrics = Object.fromEntries(
+      Object.entries(take.metrics ?? {}).map(([key, value]) => [
+        key,
+        take.metricEvaluations?.[key as keyof typeof take.metricEvaluations]?.status === "scored"
+          ? value
+          : null,
+      ])
+    ) as typeof take.metrics;
+    if (!Object.values(scoredMetrics ?? {}).some((value) => value !== null)) {
+      throw new ValidationError("analysis has no calibrated metrics for coaching");
+    }
+    const scoredIssues = take.issues.filter(
+      (issue) => take.metricEvaluations?.[issue.metric]?.status === "scored"
+    );
     const song = await getSong(take.songId, user.id);
     if (!song) throw new NotFoundError("song not found");
 
@@ -36,10 +50,11 @@ export async function POST(
         requestedMeasureRange: take.requestedMeasureRange,
         playedMeasureRange: take.playedMeasureRange,
         overallScore: take.overallScore,
-        metrics: take.metrics,
+        metrics: scoredMetrics,
+        metricEvaluations: take.metricEvaluations,
         metricsNAReason: take.metricsNAReason,
       },
-      issues: take.issues,
+      issues: scoredIssues,
       history: [],
     }, correlationId);
 

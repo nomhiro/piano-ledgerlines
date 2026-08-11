@@ -244,30 +244,10 @@ def run_omr(data_dir: Path, song_id: str) -> int:
         return 1
 
 
-def mask_unavailable_pedal(result: dict) -> dict:
-    """reference.py は現状MusicXMLからペダル記号を抽出していないため、
-    pedal指標は「測定不能(N/A)」として扱い、加重平均から除外する。
-    metrics.mdの「nullと欠損の区別」(api.md P4)に沿った処理。
-    """
-    from ledgerlines_worker.metrics import WEIGHTS
-
-    for ms in result["measureScores"]:
-        ms["metrics"]["pedal"] = None
-        active = {k: w for k, w in WEIGHTS.items() if ms["metrics"].get(k) is not None}
-        tw = sum(active.values())
-        ms["score"] = round(sum(ms["metrics"][k] * w for k, w in active.items()) / tw, 2) if tw else None
-
-    result["metrics"]["pedal"] = None
-    active = {k: w for k, w in WEIGHTS.items() if result["metrics"].get(k) is not None}
-    tw = sum(active.values())
-    result["overallScore"] = (
-        round(sum(result["metrics"][k] * w for k, w in active.items()) / tw, 2) if tw else None
-    )
-    return result
-
-
 def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
     from ledgerlines_worker import align as align_mod
+    from ledgerlines_worker import calibration as calibration_mod
+    from ledgerlines_worker import confidence as confidence_mod
     from ledgerlines_worker import metrics as metrics_mod
     from ledgerlines_worker import preprocess as preprocess_mod
     from ledgerlines_worker import transcribe as transcribe_mod
@@ -308,7 +288,10 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
 
         est_notes_full, est_pedal = metrics_mod.load_est(midi_path)
         result = metrics_mod.compute(reference, est_notes_full, alignment, est_pedal, ref_pedal=[])
-        result = mask_unavailable_pedal(result)
+        calibration = calibration_mod.load_calibration()
+        result = confidence_mod.apply_fail_closed_policy(
+            result, reference, alignment, len(est_notes_full), calibration
+        )
         issues = generate_issues(result["measureScores"])
 
         update({
@@ -316,16 +299,20 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
             "progress": 1.0,
             "overallScore": result["overallScore"],
             "metrics": result["metrics"],
-            "metricsNAReason": {"pedal": "参照譜からペダル記号を抽出できていないため測定できません。"},
+            "metricConfidence": result["metricConfidence"],
+            "metricEvaluations": result["metricEvaluations"],
+            "metricsNAReason": result["metricsNAReason"],
+            "evaluation": result["evaluation"],
             "measureScores": result["measureScores"],
             "issues": issues,
             "failure": None,
             "aiReview": None,  # S6 (Microsoft Foundry) は未実装。後続フェーズで差し込む。
             "analysis": {
-                "pipelineVersion": "0.1.0-m5",
+                "pipelineVersion": "0.2.0-m5-confidence-guard",
                 "preprocess": {**pre, "path": str(pre["path"])},
                 "baseTempo": result["baseTempo"],
                 "takes": alignment.get("takes"),
+                "diagnostics": result["diagnostics"],
             },
         })
         print(json.dumps({"ok": True, "takeId": take_id, "overallScore": result["overallScore"]}))

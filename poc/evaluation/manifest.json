@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.0",
+  "datasetVersion": "issue-8-pending-v1",
+  "records": [
+    {
+      "takeId": "take_980da1b96a3d4bcc9c6c",
+      "performerId": "external_pending",
+      "pieceId": "song_9f548aff57dd4ea3a17c",
+      "split": "test",
+      "annotationStatus": "pending_external_annotation",
+      "assetStatus": {
+        "audio": "available_external",
+        "score": "missing",
+        "technicalGroundTruthMidi": "missing"
+      },
+      "diagnostics": {
+        "referenceNotes": 1242,
+        "transcribedNotes": 1495,
+        "matchedNotes": 974,
+        "extraNotes": 521
+      },
+      "technicalGroundTruth": null,
+      "teacherAnnotations": []
+    }
+  ]
+}

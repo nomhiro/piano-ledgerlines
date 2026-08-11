@@ -640,6 +640,17 @@ export interface MeasureScore {
   noteCount: number;
 }
 
+export type EvaluationStatus =
+  | "scored" | "reference" | "withheld" | "unavailable";
+
+export interface MetricEvaluation {
+  status: EvaluationStatus;
+  confidence: number | null; // 較正前は正答確率ではなく対応品質。null可
+  reasonCode: string | null;
+  reason: string | null;
+  evidence: Record<string, unknown>;
+}
+
 export type TakeStatus =
   | "uploading" | "queued" | "transcribing" | "aligning"
   | "scoring" | "reviewing" | "completed" | "failed";
@@ -663,6 +674,8 @@ export interface Take {
   failure: { code: FailureCode; message: string } | null;
   overallScore: Score;
   metrics: Record<MetricKey, Score>;
+  metricConfidence: Record<MetricKey, number | null>;
+  metricEvaluations: Partial<Record<MetricKey, MetricEvaluation>>;
   metricsNAReason: Partial<Record<MetricKey, string>>;
   measureScores: MeasureScore[];
   issues: Issue[];

@@ -20,7 +20,12 @@ export async function GET(
       durationSec: take.durationSec, requestedMeasureRange: take.requestedMeasureRange,
       playedMeasureRange: take.playedMeasureRange, requestedTempo: take.requestedTempo,
       inputKind: take.inputKind, status: take.status, progress: take.progress, failure: take.failure,
-      overallScore: take.overallScore, metrics: take.metrics, metricsNAReason: take.metricsNAReason,
+      overallScore: take.overallScore, metrics: take.metrics,
+      metricConfidence: take.metricConfidence ?? {
+        pitch: null, rhythm: null, tempo: null, dynamics: null, pedal: null,
+      },
+      metricEvaluations: take.metricEvaluations ?? {},
+      metricsNAReason: take.metricsNAReason, evaluation: take.evaluation ?? null,
       measureScores: take.measureScores, issues: take.issues, aiReview: take.aiReview,
       analysis: take.analysis, memo: take.memo,
       links: { audio: `/api/takes/${take.id}/audio`, score: `/api/songs/${take.songId}/score-file` },

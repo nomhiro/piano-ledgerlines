@@ -1,0 +1,23 @@
+{
+  "songId": "song_9f548aff57dd4ea3a17c",
+  "takeId": "take_980da1b96a3d4bcc9c6c",
+  "referenceNotes": 1242,
+  "transcribedNotes": 1495,
+  "matchedNotes": 974,
+  "extraNotes": 521,
+  "rawScores": {
+    "overallScore": 59.54,
+    "metrics": {
+      "pitch": 9.99,
+      "rhythm": 63.3,
+      "tempo": 95.93,
+      "dynamics": 98.58,
+      "pedal": null
+    }
+  },
+  "expected": {
+    "evaluationStatus": "withheld",
+    "pitchStatus": "withheld",
+    "tempoStatus": "reference"
+  }
+}

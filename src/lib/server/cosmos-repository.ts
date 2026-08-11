@@ -112,7 +112,9 @@ export class CosmosRepository implements Repository {
       durationSec: input.durationSec, requestedMeasureRange: input.requestedMeasureRange,
       playedMeasureRange: null, requestedTempo: input.requestedTempo ?? null,
       inputKind: input.inputKind, contentType: input.contentType, status: "uploading",
-      progress: 0, failure: null, overallScore: null, metrics: null, metricsNAReason: {},
+      progress: 0, failure: null, overallScore: null, metrics: null,
+      metricConfidence: { pitch: null, rhythm: null, tempo: null, dynamics: null, pedal: null },
+      metricEvaluations: {}, metricsNAReason: {}, evaluation: null,
       measureScores: [], issues: [], aiReview: null, analysis: null, memo: "",
       createdAt: now, updatedAt: now,
     };
