@@ -1,7 +1,7 @@
 import path from "node:path";
 
 export type BackendKind = "local" | "azure";
-export type AuthMode = "development" | "entra";
+export type AuthMode = "development" | "entra" | "google";
 
 export interface AppConfig {
   nodeEnv: string;
@@ -70,8 +70,8 @@ export function getConfig(): AppConfig {
     ? "entra"
     : "development";
   const authMode = (process.env.LEDGERLINES_AUTH_MODE ?? defaultAuthMode) as AuthMode;
-  if (authMode !== "development" && authMode !== "entra") {
-    throw new Error('LEDGERLINES_AUTH_MODE must be "development" or "entra"');
+  if (authMode !== "development" && authMode !== "entra" && authMode !== "google") {
+    throw new Error('LEDGERLINES_AUTH_MODE must be "development", "entra", or "google"');
   }
 
   const repositoryBackend = backend("LEDGERLINES_REPOSITORY", "local");

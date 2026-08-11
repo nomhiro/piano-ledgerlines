@@ -13,6 +13,7 @@ import {
 import type { CreateSongInput, CreateTakeInput, SongDoc, TakeDoc } from "./types";
 import { newSongId, newTakeId } from "./ids";
 import { getConfig } from "./config";
+import { getAuthenticatedServerUser } from "./auth";
 import { CosmosRepository } from "./cosmos-repository";
 import { assertTakeTransition } from "./take-state";
 
@@ -20,6 +21,7 @@ export interface Repository {
   createSong(userId: string, input: CreateSongInput): Promise<SongDoc>;
   getSong(userId: string, songId: string): Promise<SongDoc | null>;
   listSongs(userId: string): Promise<SongDoc[]>;
+  listSongTakeSummaries(userId: string, songIds: string[]): Promise<Record<string, SongTakeSummary>>;
   updateSong(userId: string, songId: string, patch: Partial<SongDoc>): Promise<SongDoc>;
   deleteSong(userId: string, songId: string): Promise<void>;
   saveScoreFile(userId: string, songId: string, fileName: string, bytes: Buffer): Promise<string>;
@@ -29,6 +31,17 @@ export interface Repository {
   countTakesSince(userId: string, sinceIso: string): Promise<number>;
   updateTake(userId: string, takeId: string, patch: Partial<TakeDoc>): Promise<TakeDoc>;
   saveAudioFile(userId: string, takeId: string, fileName: string, bytes: Buffer): Promise<string>;
+}
+
+export interface SongTakeSummary {
+  count: number;
+  latest: {
+    id: string;
+    label: string;
+    status: TakeDoc["status"];
+    recordedAt: string;
+    overallScore: number | null;
+  } | null;
 }
 
 function nowIso(): string {
@@ -101,6 +114,28 @@ export class LocalRepository implements Repository {
   async listSongs(userId: string): Promise<SongDoc[]> {
     const docs = await listJsonFiles<SongDoc>(songsDir());
     return docs.filter((doc) => doc.userId === userId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async listSongTakeSummaries(userId: string, songIds: string[]): Promise<Record<string, SongTakeSummary>> {
+    const wanted = new Set(songIds);
+    const summaries: Record<string, SongTakeSummary> = {};
+    const docs = await listJsonFiles<TakeDoc>(takesDir());
+    for (const doc of docs) {
+      if (doc.userId !== userId || !wanted.has(doc.songId)) continue;
+      const summary = summaries[doc.songId] ?? { count: 0, latest: null };
+      summary.count += 1;
+      if (!summary.latest || doc.recordedAt > summary.latest.recordedAt) {
+        summary.latest = {
+          id: doc.id,
+          label: doc.label,
+          status: doc.status,
+          recordedAt: doc.recordedAt,
+          overallScore: doc.overallScore,
+        };
+      }
+      summaries[doc.songId] = summary;
+    }
+    return summaries;
   }
 
   async updateSong(userId: string, songId: string, patch: Partial<SongDoc>): Promise<SongDoc> {
@@ -254,22 +289,32 @@ export async function countTakesSince(userId: string, sinceIso: string): Promise
   return getRepository().countTakesSince(userId, sinceIso);
 }
 
-// Compatibility helpers for server-rendered local-development pages.
-const defaultUser = (): string => getConfig().devUserId;
-export const createSong = (input: CreateSongInput, userId = defaultUser()) => getRepository().createSong(userId, input);
-export const getSong = (songId: string, userId = defaultUser()) => getRepository().getSong(userId, songId);
-export const listSongs = (userId = defaultUser()) => getRepository().listSongs(userId);
-export const updateSong = (songId: string, patch: Partial<SongDoc>, userId = defaultUser()) => getRepository().updateSong(userId, songId, patch);
-export const deleteSong = (songId: string, userId = defaultUser()) => getRepository().deleteSong(userId, songId);
-export const saveScoreFile = (songId: string, fileName: string, bytes: Buffer, userId = defaultUser()) =>
-  getRepository().saveScoreFile(userId, songId, fileName, bytes);
-export const createTake = (songId: string, input: CreateTakeInput, userId = defaultUser()) =>
-  getRepository().createTake(userId, songId, input);
-export const getTake = (takeId: string, userId = defaultUser()) => getRepository().getTake(userId, takeId);
-export const listTakesBySong = (songId: string, userId = defaultUser()) => getRepository().listTakesBySong(userId, songId);
-export const updateTake = (takeId: string, patch: Partial<TakeDoc>, userId = defaultUser()) =>
-  getRepository().updateTake(userId, takeId, patch);
-export const saveAudioFile = (takeId: string, fileName: string, bytes: Buffer, userId = defaultUser()) =>
-  getRepository().saveAudioFile(userId, takeId, fileName, bytes);
+async function defaultUser(): Promise<string> {
+  return (await getAuthenticatedServerUser()).id;
+}
+export const createSong = async (input: CreateSongInput, userId?: string) =>
+  getRepository().createSong(userId ?? (await defaultUser()), input);
+export const getSong = async (songId: string, userId?: string) =>
+  getRepository().getSong(userId ?? (await defaultUser()), songId);
+export const listSongs = async (userId?: string) =>
+  getRepository().listSongs(userId ?? (await defaultUser()));
+export const listSongTakeSummaries = async (songIds: string[], userId?: string) =>
+  getRepository().listSongTakeSummaries(userId ?? (await defaultUser()), songIds);
+export const updateSong = async (songId: string, patch: Partial<SongDoc>, userId?: string) =>
+  getRepository().updateSong(userId ?? (await defaultUser()), songId, patch);
+export const deleteSong = async (songId: string, userId?: string) =>
+  getRepository().deleteSong(userId ?? (await defaultUser()), songId);
+export const saveScoreFile = async (songId: string, fileName: string, bytes: Buffer, userId?: string) =>
+  getRepository().saveScoreFile(userId ?? (await defaultUser()), songId, fileName, bytes);
+export const createTake = async (songId: string, input: CreateTakeInput, userId?: string) =>
+  getRepository().createTake(userId ?? (await defaultUser()), songId, input);
+export const getTake = async (takeId: string, userId?: string) =>
+  getRepository().getTake(userId ?? (await defaultUser()), takeId);
+export const listTakesBySong = async (songId: string, userId?: string) =>
+  getRepository().listTakesBySong(userId ?? (await defaultUser()), songId);
+export const updateTake = async (takeId: string, patch: Partial<TakeDoc>, userId?: string) =>
+  getRepository().updateTake(userId ?? (await defaultUser()), takeId, patch);
+export const saveAudioFile = async (takeId: string, fileName: string, bytes: Buffer, userId?: string) =>
+  getRepository().saveAudioFile(userId ?? (await defaultUser()), takeId, fileName, bytes);
 
 export { DATA_DIR };
