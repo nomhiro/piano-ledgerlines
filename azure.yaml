@@ -8,17 +8,16 @@ infra:
   path: infra
   module: main
 
-# Resource provisioning is implemented, but application and worker images are
-# intentionally not configured yet. Add these services after publishing images:
-#
-# services:
-#   web:
-#     project: .
-#     language: js
-#     host: containerapp
-#     image: <registry>/<ledgerlines-web>:<tag>
-#   worker:
-#     project: worker
-#     language: python
-#     host: containerapp
-#     image: <registry>/<ledgerlines-worker>:<tag>
+services:
+  web:
+    project: .
+    language: js
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+  worker:
+    project: worker
+    language: python
+    host: containerapp
+    docker:
+      path: ./worker/Dockerfile
