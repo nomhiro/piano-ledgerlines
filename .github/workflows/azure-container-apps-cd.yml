@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 jobs:
   deploy:
@@ -16,9 +17,8 @@ jobs:
 
     env:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-      ACR_NAME: ${{ vars.ACR_NAME }}
-      WEB_IMAGE_NAME: ${{ vars.WEB_IMAGE_NAME }}
       AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+      GHCR_IMAGE_NAME: ghcr.io/${{ github.repository }}
       IMAGE_TAG: ${{ github.sha }}
 
     steps:
@@ -38,15 +38,22 @@ jobs:
           inlineScript: |
             az extension add --name containerapp --upgrade --allow-preview true
 
-      - name: Log in to Azure Container Registry
-        run: |
-          az acr login --name "${ACR_NAME}"
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push web image
+      - name: Build and push web image to GHCR
         run: |
-          IMAGE_REF="${ACR_NAME}.azurecr.io/${WEB_IMAGE_NAME}:${IMAGE_TAG}"
-          LATEST_REF="${ACR_NAME}.azurecr.io/${WEB_IMAGE_NAME}:latest"
-          docker build -t "$IMAGE_REF" -t "$LATEST_REF" .
+          IMAGE_REF="${GHCR_IMAGE_NAME}:${IMAGE_TAG}"
+          LATEST_REF="${GHCR_IMAGE_NAME}:latest"
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            -t "$IMAGE_REF" \
+            -t "$LATEST_REF" \
+            .
           docker push "$IMAGE_REF"
           docker push "$LATEST_REF"
 
@@ -57,4 +64,4 @@ jobs:
             az containerapp update \
               --name "${AZURE_CONTAINER_APP_NAME}" \
               --resource-group "${AZURE_RESOURCE_GROUP}" \
-              --image "${ACR_NAME}.azurecr.io/${WEB_IMAGE_NAME}:${IMAGE_TAG}"
+              --image "${GHCR_IMAGE_NAME}:${IMAGE_TAG}"
