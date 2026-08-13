@@ -84,8 +84,25 @@ azd provision
 変更前の確認は `az deployment group what-if` を使います。stg / prod のパラメータ例、
 環境切り替え、Foundry の任意有効化、削除手順は
 [Azure リソース管理](./docs/operations/azure-iac.md) を参照してください。
-Next.js と Python ワーカーのイメージは未作成のため、Container Apps のホスティングと
-アプリデプロイは別作業です。`azure.yaml` に追加位置をコメントで明示しています。
+
+## GitHub Actions による Azure Container Apps CD
+
+`main` ブランチへの push と手動実行で、Web アプリの Docker イメージを Azure Container Registry に push し、既存の Azure Container App を更新するワークフローを用意しています。
+
+- 対象: `.github/workflows/azure-container-apps-cd.yml`
+- 実行トリガー: `push` to `main` / `workflow_dispatch`
+- 認証: OIDC（`azure/login@v2`）
+- 必要な GitHub シークレット:
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+- 必要な GitHub variables:
+  - `ACR_NAME`
+  - `WEB_IMAGE_NAME`
+  - `AZURE_RESOURCE_GROUP`
+  - `AZURE_CONTAINER_APP_NAME`
+
+ワークフローは既存の Container App を更新するだけで、CI の実行はローカル開発時に担当します。レジストリに push した `:latest` と Git SHA タグを使い、環境が管理されたリソースに対して安全にロールアウトできます。
 
 ## 技術スタック（モック）
 
