@@ -87,6 +87,27 @@ azd provision
 Next.js と Python ワーカーのイメージは未作成のため、Container Apps のホスティングと
 アプリデプロイは別作業です。`azure.yaml` に追加位置をコメントで明示しています。
 
+## GitHub Actions での CD
+
+GitHub Actions で Azure Container Apps への継続デプロイを行う場合は、
+`.github/workflows/azure-cd.yml` を利用します。CI は GitHub 側では実行せず、
+ローカル開発時に `npm run build` と `npx tsc --noEmit` を実施する前提です。
+
+必要な GitHub 設定は次の通りです。
+
+- GitHub Secrets
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_SUBSCRIPTION_ID`
+- GitHub Variables
+  - `ACR_NAME`
+  - `WEB_IMAGE_NAME`
+  - `AZURE_RESOURCE_GROUP`
+  - `AZURE_CONTAINER_APP_NAME`
+
+`main` への push と `workflow_dispatch` でデプロイが走り、Acr へイメージを push
+した後に既存の Container App を更新します。
+
 ## 技術スタック（モック）
 
 - Next.js 16 (App Router) / React 19 / TypeScript
