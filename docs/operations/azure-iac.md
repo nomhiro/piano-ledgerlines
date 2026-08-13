@@ -7,8 +7,8 @@ Azure OpenAI 互換の Foundry アカウントとモデルデプロイは、リ�
 モデル提供状況を確認した後に `enableFoundry=true` で有効化します。
 
 Next.js の Web Container App と Python 解析ワーカーは、既存の Container Apps managed
-environment / ACR を利用して配備します。Python ワーカーのイメージを ACR に公開した
-後、`enableWorkerHosting=true` と `workerImage` を指定して `azd provision` を実行します。
+environment を利用して配備します。Python ワーカーの公開 GHCR イメージを指定して、
+`enableWorkerHosting=true` と `workerImage` を指定して `azd provision` を実行します。
 Worker は Storage Queue を常時監視し、Managed Identity で Blob / Cosmos / Queue に接続します。
 
 ## 前提
@@ -93,12 +93,14 @@ azd down
 
 ## 5. 解析ワーカーの配備
 
-まずイメージを ACR にビルドします。
+GitHub Actions が Web とワーカーのイメージを GHCR に公開します。手動で作成する場合は、
+GHCR にログインしてワーカーイメージをビルド・pushします。
 
 ```powershell
-az acr build --registry <registry-name> `
-  --image ledgerlines/analysis-worker:<git-sha> `
-  --file worker/Dockerfile .
+docker login ghcr.io
+docker build -f worker/Dockerfile `
+  --tag ghcr.io/<owner>/<repository>-analysis-worker:<git-sha> .
+docker push ghcr.io/<owner>/<repository>-analysis-worker:<git-sha>
 ```
 
 次に、対象環境のパラメータへ次を設定して Provision します。
@@ -107,8 +109,7 @@ az acr build --registry <registry-name> `
 {
   "enableWorkerHosting": { "value": true },
   "containerEnvironmentName": { "value": "<managed-environment-name>" },
-  "containerRegistryName": { "value": "<registry-name>" },
-  "workerImage": { "value": "<registry>.azurecr.io/ledgerlines/analysis-worker:<git-sha>" }
+  "workerImage": { "value": "ghcr.io/<owner>/<repository>-analysis-worker:<git-sha>" }
 }
 ```
 

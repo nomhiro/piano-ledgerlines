@@ -4,10 +4,7 @@ param workerContainerAppName string
 @description('Existing Container Apps managed environment name.')
 param managedEnvironmentName string
 
-@description('Existing Azure Container Registry name.')
-param registryName string
-
-@description('Fully qualified worker image, including tag.')
+@description('Fully qualified public worker image, including tag.')
 param workerImage string
 
 @description('Resource ID of the worker user-assigned managed identity.')
@@ -34,10 +31,6 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' exist
   name: managedEnvironmentName
 }
 
-resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
-  name: registryName
-}
-
 resource worker 'Microsoft.App/containerApps@2024-03-01' = {
   name: workerContainerAppName
   location: location
@@ -52,12 +45,6 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
     managedEnvironmentId: managedEnvironment.id
     configuration: {
       activeRevisionsMode: 'Single'
-      registries: [
-        {
-          server: registry.properties.loginServer
-          identity: workerIdentityResourceId
-        }
-      ]
     }
     template: {
       containers: [

@@ -42,10 +42,7 @@ param enableWorkerHosting bool = false
 @description('Existing Container Apps managed environment name.')
 param containerEnvironmentName string = ''
 
-@description('Existing Azure Container Registry name.')
-param containerRegistryName string = ''
-
-@description('Worker image reference in Azure Container Registry.')
+@description('Worker image reference in GitHub Container Registry.')
 param workerImage string = ''
 
 @description('Worker Container App name.')
@@ -215,7 +212,6 @@ module analysisWorker './modules/analysis-worker.bicep' = if (enableWorkerHostin
   params: {
     workerContainerAppName: workerContainerAppName
     managedEnvironmentName: containerEnvironmentName
-    registryName: containerRegistryName
     workerImage: workerImage
     workerIdentityResourceId: identity.outputs.workerResourceId
     workerIdentityClientId: identity.outputs.workerClientId
