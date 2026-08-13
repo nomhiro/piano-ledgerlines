@@ -118,3 +118,19 @@ docker push ghcr.io/<owner>/<repository>-analysis-worker:<git-sha>
 `queued → transcribing → aligning → scoring → completed` と遷移してから Web の
 `LEDGERLINES_ANALYSIS_ENABLED` を有効化します。Worker が停止している状態で Web だけを
 有効化しないでください。
+
+## Web の Google 認証
+
+本番 Web は Azure Container Apps の Easy Auth（Google）で認証します。Container App の
+認証設定では `/api/health` を除外し、未認証リクエストは `AllowAnonymous` にします。
+ページ側の `src/proxy.ts` が未認証アクセスを `/.auth/login/google` へリダイレクトし、
+Easy Auth が `x-ms-client-principal` を付与します。
+
+Google Cloud OAuth クライアントには、次の Authorized redirect URI を登録します。
+
+```text
+https://<container-app-fqdn>/.auth/login/google/callback
+```
+
+`RedirectToLoginPage` を Easy Auth 側で指定すると、認証設定によってはページの
+Server Component に到達する前に 401 となるため、アプリ側のリダイレクトを使用します。
