@@ -8,6 +8,8 @@ import {
   getAssignmentsForSong,
 } from "@/lib/mock/data";
 import ShareView from "@/components/ShareView";
+import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
+import { toHistorySong, toHistoryTake } from "@/lib/real-history";
 
 export default async function SharePage({
   searchParams,
@@ -15,14 +17,40 @@ export default async function SharePage({
   searchParams: Promise<{ song?: string }>;
 }) {
   const { song: songId } = await searchParams;
-  const song = getSong(songId ?? "") ?? songs[0];
+  const realSongs = await listRealSongs();
+  const selectableSongs = [...realSongs.map(toHistorySong), ...songs];
+  const selectedId = songId && selectableSongs.some((candidate) => candidate.id === songId)
+    ? songId
+    : selectableSongs[0]?.id;
+
+  if (!selectedId) notFound();
+
+  if (selectedId.startsWith("song_")) {
+    const realSong = await getRealSong(selectedId);
+    const takes = realSong ? (await listTakesBySong(selectedId)).map(toHistoryTake) : [];
+    if (!realSong || takes.length === 0) notFound();
+
+    return (
+      <Suspense>
+        <ShareView
+          songs={selectableSongs}
+          song={toHistorySong(realSong)}
+          takes={takes}
+          comments={[]}
+          assignments={[]}
+        />
+      </Suspense>
+    );
+  }
+
+  const song = getSong(selectedId) ?? songs[0];
   const takes = getTakesForSong(song.id);
   if (takes.length === 0) notFound();
 
   return (
     <Suspense>
       <ShareView
-        songs={songs}
+        songs={selectableSongs}
         song={song}
         takes={takes}
         comments={getCommentsForSong(song.id)}

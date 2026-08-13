@@ -14,9 +14,11 @@ export default function SongSelector({
   const pathname = usePathname();
   const params = useSearchParams();
 
+  const selectedId = songs.some((song) => song.id === current) ? current : songs[0]?.id ?? "";
+
   return (
     <select
-      value={current}
+      value={selectedId}
       onChange={(e) => {
         const next = new URLSearchParams(params.toString());
         next.set("song", e.target.value);
