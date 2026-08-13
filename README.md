@@ -87,22 +87,21 @@ azd provision
 
 ## GitHub Actions による Azure Container Apps CD
 
-`main` ブランチへの push と手動実行で、Web アプリの Docker イメージを Azure Container Registry に push し、既存の Azure Container App を更新するワークフローを用意しています。
+`main` ブランチへの push と手動実行で、GitHub Actions が Web アプリの Docker イメージを GitHub Container Registry（GHCR）へ push し、既存の Azure Container App を更新するワークフローを用意しています。Web の CD では Azure Container Registry を使用しないため、Web 用の ACR コストは発生しません。
 
 - 対象: `.github/workflows/azure-container-apps-cd.yml`
 - 実行トリガー: `push` to `main` / `workflow_dispatch`
 - 認証: OIDC（`azure/login@v2`）
+- イメージ: `ghcr.io/nomhiro/piano-ledgerlines:<git-sha>`
 - 必要な GitHub シークレット:
   - `AZURE_CLIENT_ID`
   - `AZURE_TENANT_ID`
   - `AZURE_SUBSCRIPTION_ID`
 - 必要な GitHub variables:
-  - `ACR_NAME`
-  - `WEB_IMAGE_NAME`
   - `AZURE_RESOURCE_GROUP`
   - `AZURE_CONTAINER_APP_NAME`
 
-ワークフローは既存の Container App を更新するだけで、CI の実行はローカル開発時に担当します。レジストリに push した `:latest` と Git SHA タグを使い、環境が管理されたリソースに対して安全にロールアウトできます。
+`GITHUB_TOKEN` による GHCR への push 権限はワークフローの `packages: write` で付与されます。Azure Container Apps から認証なしで pull できるよう、初回 push 後に `nomhiro/piano-ledgerlines` の GHCR パッケージを Public に設定してください。既存の ACR は分析ワーカー用の構成で参照される可能性があるため、削除せず Web CD の依存だけを外しています。
 
 ## 技術スタック（モック）
 
