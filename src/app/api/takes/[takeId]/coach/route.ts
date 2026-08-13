@@ -60,7 +60,7 @@ export async function POST(
 
     let persisted = true;
     try {
-      await updateTake(take.id, { aiReview: result }, user.id);
+      await updateTake(take.id, { aiReview: result.review }, user.id);
     } catch {
       // A coach outage or persistence race must never hide already-computed scores.
       persisted = false;
