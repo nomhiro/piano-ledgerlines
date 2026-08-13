@@ -51,14 +51,16 @@ Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeW
 進捗・結果を Cosmos DB、採譜結果を Blob Storage へ保存します。
 
 ```powershell
-az acr build --registry <registry> `
-  --image ledgerlines/analysis-worker:<git-sha> `
-  --file worker/Dockerfile .
+docker login ghcr.io
+docker build -f worker/Dockerfile `
+  --tag ghcr.io/<owner>/<repository>-analysis-worker:<git-sha> .
+docker push ghcr.io/<owner>/<repository>-analysis-worker:<git-sha>
 ```
 
 `infra/main.bicep` の `enableWorkerHosting=true` と `workerImage` に公開済み
-イメージを指定して `azd provision` を実行すると、Worker Managed Identity を割り当てた
-Container App が Queue を監視します。Worker の起動と Queue 疎通を確認した後に Web の
+GHCR イメージを指定して `azd provision` を実行すると、Worker Managed Identity を割り当てた
+Container App が認証なしでイメージを pull して Queue を監視します。Worker の起動と Queue
+疎通を確認した後に Web の
 解析有効化フラグを有効化してください。
 
 ## PDF楽譜のOMR

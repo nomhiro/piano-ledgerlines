@@ -18,7 +18,9 @@ jobs:
     env:
       AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+      AZURE_ANALYSIS_WORKER_NAME: ${{ vars.AZURE_ANALYSIS_WORKER_NAME }}
       GHCR_IMAGE_NAME: ghcr.io/${{ github.repository }}
+      GHCR_WORKER_IMAGE_NAME: ghcr.io/${{ github.repository }}-analysis-worker
       IMAGE_TAG: ${{ github.sha }}
 
     steps:
@@ -57,7 +59,20 @@ jobs:
           docker push "$IMAGE_REF"
           docker push "$LATEST_REF"
 
-      - name: Update Azure Container App image
+      - name: Build and push analysis worker image to GHCR
+        run: |
+          IMAGE_REF="${GHCR_WORKER_IMAGE_NAME}:${IMAGE_TAG}"
+          LATEST_REF="${GHCR_WORKER_IMAGE_NAME}:latest"
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            -f worker/Dockerfile \
+            -t "$IMAGE_REF" \
+            -t "$LATEST_REF" \
+            .
+          docker push "$IMAGE_REF"
+          docker push "$LATEST_REF"
+
+      - name: Update web Container App image
         uses: azure/cli@v2
         with:
           inlineScript: |
@@ -65,3 +80,23 @@ jobs:
               --name "${AZURE_CONTAINER_APP_NAME}" \
               --resource-group "${AZURE_RESOURCE_GROUP}" \
               --image "${GHCR_IMAGE_NAME}:${IMAGE_TAG}"
+
+      - name: Update analysis worker Container App image
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az containerapp update \
+              --name "${AZURE_ANALYSIS_WORKER_NAME}" \
+              --resource-group "${AZURE_RESOURCE_GROUP}" \
+              --image "${GHCR_WORKER_IMAGE_NAME}:${IMAGE_TAG}"
+            REGISTRY_SERVER="$(az containerapp registry list \
+              --name "${AZURE_ANALYSIS_WORKER_NAME}" \
+              --resource-group "${AZURE_RESOURCE_GROUP}" \
+              --query "[0].server" \
+              --output tsv)"
+            if [ -n "$REGISTRY_SERVER" ]; then
+              az containerapp registry remove \
+                --name "${AZURE_ANALYSIS_WORKER_NAME}" \
+                --resource-group "${AZURE_RESOURCE_GROUP}" \
+                --server "$REGISTRY_SERVER"
+            fi
