@@ -722,6 +722,25 @@ export interface Take {
 
 ---
 
+## 9. 教室課金ドキュメント
+
+`classrooms` は教室ごとにStripe Customer/Subscriptionを1つだけ保持します。
+`billing.status` はStripe statusの安全側アプリ正規化値で、`active` は
+`active` と `trialing`、`past_due` はそのまま利用可能、`canceled`/`incomplete` は
+停止を表します。元のStripe statusは `billing.stripeStatus` に保持します。
+
+基本料金はSubscriptionの固定base item、学生料金は有効な学生membership数の
+subscription itemです。quantity=0のitemは作らず、0への削除も
+`always_invoice` で日割り差額を確定します。`stripeStudentSubscriptionItemId`、
+`billableStudentCount`、periodを同じCAS更新で収束させます。
+
+`billing-events` はevent IDをidempotency keyとして使い、payload本文ではなくSHA-256
+hashだけを保存します。状態は `processing`、`processed`、`failed` で、失敗イベントは
+再送時に再処理できます。Stripe外部APIとCosmosはtransactionではないため、membership
+更新は外部操作後にETag/CASで反映し、失敗時はreconciliationで補償します。
+
+---
+
 ## 10. 関連ドキュメント
 
 - [機能仕様](../spec/functional.md)

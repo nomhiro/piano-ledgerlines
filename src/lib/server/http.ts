@@ -26,6 +26,22 @@ export class QuotaExceededError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  readonly status = 403;
+  constructor(message = "you do not have permission to perform this action") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
+export class ConfigurationError extends Error {
+  readonly status = 503;
+  constructor(message = "billing is not configured") {
+    super(message);
+    this.name = "ConfigurationError";
+  }
+}
+
 export function requestId(request: Request): string {
   return request.headers.get("x-request-id")?.slice(0, 128) || randomUUID();
 }
@@ -44,6 +60,10 @@ export function errorResponse(
         ? 404
         : error instanceof QuotaExceededError
           ? 402
+          : error instanceof ForbiddenError
+            ? 403
+            : error instanceof ConfigurationError
+              ? 503
           : 500;
   const code = error instanceof AuthError
     ? "UNAUTHENTICATED"
@@ -53,6 +73,10 @@ export function errorResponse(
         ? "NOT_FOUND"
         : error instanceof QuotaExceededError
           ? "QUOTA_EXCEEDED"
+          : error instanceof ForbiddenError
+            ? "FORBIDDEN"
+            : error instanceof ConfigurationError
+              ? "CONFIGURATION_ERROR"
           : "INTERNAL";
   const message = status === 500 ? fallbackMessage : error instanceof Error ? error.message : fallbackMessage;
   return NextResponse.json(

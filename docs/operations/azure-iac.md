@@ -134,3 +134,27 @@ https://<container-app-fqdn>/.auth/login/google/callback
 
 `RedirectToLoginPage` を Easy Auth 側で指定すると、認証設定によってはページの
 Server Component に到達する前に 401 となるため、アプリ側のリダイレクトを使用します。
+
+## Stripe secrets and billing configuration
+
+本番のStripe値はContainer Appのsecret参照またはKey Vault連携で注入し、
+リポジトリ、Bicep parameter、イメージ、ログへコピーしません。必要なserver-only設定は
+次の5つです。
+
+| Name | Purpose |
+|---|---|
+| `STRIPE_SECRET_KEY` | Stripe Node SDK secret key |
+| `STRIPE_WEBHOOK_SECRET` | `/api/stripe/webhook` の署名検証 |
+| `STRIPE_CLASSROOM_BASE_PRICE_ID` | 教室基本料金のrecurring Price |
+| `STRIPE_CLASSROOM_STUDENT_PRICE_ID` | 有効学生1人のrecurring Price |
+| `LEDGERLINES_APP_BASE_URL` | 検証済みsuccess/cancel/Portal return URLの基底 |
+
+Priceは月額recurringとしてStripe Dashboardで作成し、税・クーポン・返金・年額・
+請求書払いはこの層では設定しません。`LEDGERLINES_APP_BASE_URL` は本番ではHTTPSのみ
+受け付け、Checkout URLのパスやqueryはサーバーが固定生成します。
+
+Webhook endpointは `https://<container-app-fqdn>/api/stripe/webhook` に登録し、
+`checkout.session.completed`、`customer.subscription.created|updated|deleted`、
+`invoice.paid`、`invoice.payment_failed`、`invoice.payment_action_required` を送ります。
+Stripeのdelivery retryと順序逆転は実装が吸収するため、失敗時はDashboardの再送を優先し、
+SubscriptionをStripeから再取得するreconciliationを実行します。

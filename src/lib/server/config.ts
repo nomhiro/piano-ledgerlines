@@ -44,6 +44,11 @@ export interface AppConfig {
   coachPromptVersion: string;
   pipelineVersion: string;
   telemetryBackend: "none" | "console";
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+  stripeClassroomBasePriceId?: string;
+  stripeClassroomStudentPriceId?: string;
+  ledgerlinesAppBaseUrl?: string;
 }
 
 let cachedConfig: AppConfig | undefined;
@@ -129,6 +134,11 @@ export function getConfig(): AppConfig {
     coachPromptVersion: process.env.LEDGERLINES_COACH_PROMPT_VERSION ?? "coach-v1",
     pipelineVersion: process.env.LEDGERLINES_PIPELINE_VERSION ?? "pipeline-v1",
     telemetryBackend: process.env.LEDGERLINES_TELEMETRY === "console" ? "console" : "none",
+    stripeSecretKey: process.env.STRIPE_SECRET_KEY?.trim(),
+    stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET?.trim(),
+    stripeClassroomBasePriceId: process.env.STRIPE_CLASSROOM_BASE_PRICE_ID?.trim(),
+    stripeClassroomStudentPriceId: process.env.STRIPE_CLASSROOM_STUDENT_PRICE_ID?.trim(),
+    ledgerlinesAppBaseUrl: process.env.LEDGERLINES_APP_BASE_URL?.trim(),
   };
 
   if (config.azureEmulator && nodeEnv === "production") {

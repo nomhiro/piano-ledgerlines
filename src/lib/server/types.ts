@@ -179,6 +179,12 @@ export interface ClassroomDoc {
     stripeCustomerId: string | null;
     stripeSubscriptionId: string | null;
     status: ClassroomContractStatus;
+    stripeStatus?: string | null;
+    stripeBaseSubscriptionItemId?: string | null;
+    stripeStudentSubscriptionItemId?: string | null;
+    stripeCurrentPeriodStart?: string | null;
+    stripeCurrentPeriodEnd?: string | null;
+    billingVersion?: number;
   };
   appStatus: ClassroomAppStatus;
   createdAt: string;
@@ -220,6 +226,10 @@ export interface BillingEventDoc {
   payloadHash: string;
   processedAt: string | null;
   createdAt: string;
+  status?: "processing" | "processed" | "failed";
+  attemptCount?: number;
+  lastError?: string | null;
+  stripeCreatedAt?: number;
 }
 
 // api.md 5.1 `POST /songs` 相当（ローカル簡略版: SASなしの直接multipartアップロード）

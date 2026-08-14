@@ -1,5 +1,6 @@
 import type { AuthenticatedUser } from "./auth";
 import { AuthError, getAuthenticatedServerUser } from "./auth";
+import { classroomHasPaidEntitlement } from "./billing";
 import {
   getRepository,
   RepositoryConflictError,
@@ -165,7 +166,7 @@ export function buildAccountContext(
   const owner = activeClassroom?.role === "owner";
   const teacher = activeClassroom?.role === "teacher";
   const classroomEntitlement =
-    mode === "classroom" && (contractStatus === "active" || contractStatus === "past_due");
+    mode === "classroom" && classroomHasPaidEntitlement(contractStatus);
 
   return {
     user: {

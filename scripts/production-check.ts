@@ -5,6 +5,8 @@ import { coachReviewSchema, fallbackReview, type CoachInput } from "../src/lib/s
 import { redactTelemetry } from "../src/lib/server/observability";
 import { assertTakeTransition } from "../src/lib/server/take-state";
 import { getConfig, resetConfigForTests } from "../src/lib/server/config";
+import { getStripeBillingConfig } from "../src/lib/server/stripe";
+import { mapStripeSubscriptionStatus } from "../src/lib/server/billing";
 import { AuthError, getAuthenticatedUser, type AuthenticatedUser } from "../src/lib/server/auth";
 import {
   buildAccountContext,
@@ -560,5 +562,35 @@ test("GET /api/account returns the authenticated personal context", async () => 
   else env.NODE_ENV = previous.nodeEnv;
   if (previous.user === undefined) delete env.LEDGERLINES_DEV_USER_ID;
   else env.LEDGERLINES_DEV_USER_ID = previous.user;
+  resetConfigForTests();
+});
+
+test("Stripe status mapping keeps trial grace and stops unpaid contracts", () => {
+  assert.deepEqual(mapStripeSubscriptionStatus("active").access, "available");
+  assert.deepEqual(mapStripeSubscriptionStatus("trialing").access, "available");
+  assert.deepEqual(mapStripeSubscriptionStatus("past_due").access, "available");
+  assert.deepEqual(mapStripeSubscriptionStatus("unpaid").access, "suspended");
+  assert.deepEqual(mapStripeSubscriptionStatus("incomplete_expired").access, "suspended");
+  assert.deepEqual(mapStripeSubscriptionStatus("future_status").access, "suspended");
+});
+
+test("Stripe billing configuration fails closed without server settings", () => {
+  const env = process.env as Record<string, string | undefined>;
+  const names = [
+    "STRIPE_SECRET_KEY",
+    "STRIPE_WEBHOOK_SECRET",
+    "STRIPE_CLASSROOM_BASE_PRICE_ID",
+    "STRIPE_CLASSROOM_STUDENT_PRICE_ID",
+    "LEDGERLINES_APP_BASE_URL",
+  ];
+  const previous = new Map(names.map((name) => [name, env[name]]));
+  for (const name of names) delete env[name];
+  resetConfigForTests();
+  assert.throws(() => getStripeBillingConfig(), /billing is not configured/);
+  for (const name of names) {
+    const value = previous.get(name);
+    if (value === undefined) delete env[name];
+    else env[name] = value;
+  }
   resetConfigForTests();
 });
