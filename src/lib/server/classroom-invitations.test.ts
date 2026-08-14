@@ -276,9 +276,10 @@ test("teacher seat reservation is CAS-safe and token hash is never returned", as
   const owner = googleUser(`owner-${Date.now()}`, `owner-${Date.now()}@example.com`);
   const classroom = await activeClassroom(repository, owner);
   const sender = new InMemoryEmailSender();
+  const teacherEmail = `teacher-${Date.now()}@example.com`;
   const results = await Promise.allSettled([
-    createClassroomInvitation(classroom.id, owner, { email: "teacher@example.com", role: "teacher" }, repository, sender),
-    createClassroomInvitation(classroom.id, owner, { email: "teacher@example.com", role: "teacher" }, repository, sender),
+    createClassroomInvitation(classroom.id, owner, { email: teacherEmail, role: "teacher" }, repository, sender),
+    createClassroomInvitation(classroom.id, owner, { email: teacherEmail, role: "teacher" }, repository, sender),
   ]);
   const successCount = results.filter((result) => result.status === "fulfilled").length;
   assert.ok(successCount >= 1 && successCount <= 2);

@@ -39,6 +39,48 @@ function now(): Date {
   return new Date();
 }
 
+interface InvitationFence {
+  id: string;
+  generation: number | null;
+  reservationVersion: string | null;
+  reservationOwnerToken: string | null;
+  acceptOperationVersion: string | null;
+  claimedByUserId: string | null;
+  status: ClassroomInvitationDoc["status"];
+}
+
+class StaleInvitationFenceError extends Error {
+  constructor() {
+    super("invitation generation fence changed");
+    this.name = "StaleInvitationFenceError";
+  }
+}
+
+function captureInvitationFence(invitation: ClassroomInvitationDoc): InvitationFence {
+  return {
+    id: invitation.id,
+    generation: invitation.generation ?? null,
+    reservationVersion: invitation.reservationVersion ?? null,
+    reservationOwnerToken: invitation.reservationOwnerToken ?? null,
+    acceptOperationVersion: invitation.acceptOperationVersion ?? null,
+    claimedByUserId: invitation.claimedByUserId ?? null,
+    status: invitation.status,
+  };
+}
+
+function matchesInvitationFence(
+  invitation: ClassroomInvitationDoc,
+  fence: InvitationFence,
+): boolean {
+  return invitation.id === fence.id &&
+    (invitation.generation ?? null) === fence.generation &&
+    (invitation.reservationVersion ?? null) === fence.reservationVersion &&
+    (invitation.reservationOwnerToken ?? null) === fence.reservationOwnerToken &&
+    (invitation.acceptOperationVersion ?? null) === fence.acceptOperationVersion &&
+    (invitation.claimedByUserId ?? null) === fence.claimedByUserId &&
+    invitation.status === fence.status;
+}
+
 async function reconcileTeacherSeatReservations(
   classroomId: string,
   repository: Repository,
@@ -118,11 +160,11 @@ async function reconcileTeacherSeatReservations(
         ...reservation,
         generation: invitation?.generation ?? reservation.generation,
         version: invitation?.reservationVersion ?? reservation.version,
-        state: (reservation.state === "sending" || reservation.state === "resending") &&
+        state: (reservation.state === "sending" || reservation.state === "resending" || reservation.state === "linked") &&
           reservation.deliveryLeaseExpiresAt &&
           reservation.deliveryLeaseExpiresAt <= timestamp.toISOString()
           ? "linked"
-          : reservation.state === "sending" || reservation.state === "resending"
+          : reservation.state === "sending" || reservation.state === "resending" || reservation.state === "linked"
             ? reservation.state
           : invitation?.status === "accepting"
             ? "accepting"
@@ -1151,27 +1193,36 @@ async function fenceAcceptingInvitationsForMember(
   const invitations = await repository.listClassroomInvitations(classroomId);
   for (const invitation of invitations) {
     if (invitation.status !== "accepting" || invitation.claimedByUserId !== userId) continue;
-    const revoked = await updateInvitationWithCas(invitation, (current) => {
-      if (current.status !== "accepting" || current.claimedByUserId !== userId) return current;
-      return { ...current, status: "revoked", updatedAt: now().toISOString() };
-    }, repository);
-    if (revoked.status === "revoked") await releaseInvitationReservation(
-      revoked,
-      repository,
-      revoked.reservationOwnerToken ?? "",
-      revoked.reservationVersion ?? "",
-      revoked.generation ?? 0,
-    );
+    const fence = captureInvitationFence(invitation);
+    try {
+      await updateInvitationWithCas(invitation, (current) => {
+        if (!matchesInvitationFence(current, fence)) throw new StaleInvitationFenceError();
+        return { ...current, status: "revoked", updatedAt: now().toISOString() };
+      }, repository);
+      await releaseInvitationReservation(
+        invitation,
+        repository,
+        fence.reservationOwnerToken ?? "",
+        fence.reservationVersion ?? "",
+        fence.generation ?? 0,
+      );
+    } catch (error) {
+      if (!(error instanceof StaleInvitationFenceError)) throw error;
+    }
   }
 }
 
-async function acceptPendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
+async function acceptPendingReservation(
+  invitation: ClassroomInvitationDoc,
+  fence: InvitationFence,
+  repository: Repository,
+): Promise<void> {
   await releaseInvitationReservation(
     invitation,
     repository,
-    invitation.reservationOwnerToken ?? "",
-    invitation.reservationVersion ?? "",
-    invitation.generation ?? 0,
+    fence.reservationOwnerToken ?? "",
+    fence.reservationVersion ?? "",
+    fence.generation ?? 0,
   );
 }
 
@@ -1370,18 +1421,25 @@ export async function resendClassroomInvitation(
 }
 
 async function expireInvitation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<ClassroomInvitationDoc> {
-  const changed = await updateInvitationWithCas(invitation, (current) => {
-    if (current.status !== "pending" || (current.expiresAt && current.expiresAt > now().toISOString())) return current;
-    return { ...current, status: "expired", tokenHash: current.tokenHash, updatedAt: now().toISOString() };
-  }, repository);
-  if (changed.status === "expired") await releaseInvitationReservation(
-    changed,
+  const fence = captureInvitationFence(invitation);
+  try {
+    await updateInvitationWithCas(invitation, (current) => {
+      if (!matchesInvitationFence(current, fence)) throw new StaleInvitationFenceError();
+      if (current.status !== "pending" || (current.expiresAt && current.expiresAt > now().toISOString())) return current;
+      return { ...current, status: "expired", tokenHash: current.tokenHash, updatedAt: now().toISOString() };
+    }, repository);
+  } catch (error) {
+    if (error instanceof StaleInvitationFenceError) return invitation;
+    throw error;
+  }
+  if (fence.status === "pending") await releaseInvitationReservation(
+    invitation,
     repository,
-    changed.reservationOwnerToken ?? "",
-    changed.reservationVersion ?? "",
-    changed.generation ?? 0,
+    fence.reservationOwnerToken ?? "",
+    fence.reservationVersion ?? "",
+    fence.generation ?? 0,
   );
-  return changed;
+  return { ...invitation, status: "expired" };
 }
 
 export async function revokeClassroomInvitation(
@@ -1396,18 +1454,24 @@ export async function revokeClassroomInvitation(
   if (access.member.role === "teacher" && existing.role !== "student") throw new ForbiddenError();
   if (existing.status !== "pending") throw new ConflictError("invitation is no longer pending");
   await assertDeliveryIdle(existing, repository);
-  const revoked = await updateInvitationWithCas(existing, (current) => {
-    if (current.status !== "pending") {
-      throw new ConflictError("invitation acceptance is already in progress");
+  const fence = captureInvitationFence(existing);
+  try {
+    await updateInvitationWithCas(existing, (current) => {
+      if (!matchesInvitationFence(current, fence)) throw new StaleInvitationFenceError();
+      return { ...current, status: "revoked", updatedAt: now().toISOString() };
+    }, repository);
+  } catch (error) {
+    if (error instanceof StaleInvitationFenceError) {
+      throw new ConflictError("invitation changed while revoking");
     }
-    return { ...current, status: "revoked", updatedAt: now().toISOString() };
-  }, repository);
-  if (revoked.status === "revoked") await releaseInvitationReservation(
-    revoked,
+    throw error;
+  }
+  await releaseInvitationReservation(
+    existing,
     repository,
-    revoked.reservationOwnerToken ?? "",
-    revoked.reservationVersion ?? "",
-    revoked.generation ?? 0,
+    fence.reservationOwnerToken ?? "",
+    fence.reservationVersion ?? "",
+    fence.generation ?? 0,
   );
 }
 
@@ -1637,12 +1701,10 @@ async function markInvitationAccepted(
   tokenFingerprintValue: string,
   repository: Repository,
 ): Promise<void> {
-  const accepted = await updateInvitationWithCas(invitation, (current) => {
-    if (current.status === "accepted") {
-      if (current.acceptedByUserId === userId) return current;
-      throw new ConflictError("invitation has already been used");
-    }
+  const fence = captureInvitationFence(invitation);
+  await updateInvitationWithCas(invitation, (current) => {
     if (
+      !matchesInvitationFence(current, fence) ||
       current.status !== "accepting" ||
       current.acceptOperationVersion !== operationVersion ||
       current.claimedByUserId !== userId ||
@@ -1662,7 +1724,7 @@ async function markInvitationAccepted(
       updatedAt: now().toISOString(),
     };
   }, repository);
-  await acceptPendingReservation(accepted, repository);
+  await acceptPendingReservation(invitation, fence, repository);
 }
 
 export async function acceptClassroomInvitation(
