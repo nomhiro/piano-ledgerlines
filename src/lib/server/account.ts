@@ -1,5 +1,8 @@
 import type { AuthenticatedUser } from "./auth";
+export { safeAccountDisplayName, getAvatarLabel } from "@/lib/account-view-model";
+import { safeAccountDisplayName } from "@/lib/account-view-model";
 import { AuthError, getAuthenticatedServerUser } from "./auth";
+import { classroomHasPaidEntitlement } from "./billing";
 import {
   getRepository,
   RepositoryConflictError,
@@ -139,6 +142,7 @@ export function buildAccountContext(
   classrooms: ClassroomDoc[],
   members: ClassroomMemberDoc[],
 ): AccountContext {
+  const displayName = safeAccountDisplayName(profile.displayName, profile.email || user.email);
   const byClassroom = new Map(classrooms.map((classroom) => [classroom.id, classroom]));
   const summaries = members
     .map((member): AccountClassroomSummary | null => {
@@ -158,27 +162,27 @@ export function buildAccountContext(
     .filter((summary): summary is AccountClassroomSummary => summary !== null);
   const activeClassroom =
     summaries.find(
-      (summary) => summary.membershipStatus === "active" && summary.appStatus === "active",
+      (summary) => summary.membershipStatus === "active",
     ) ?? null;
   const mode = activeClassroom ? "classroom" : "individual";
   const contractStatus = activeClassroom?.contractStatus ?? "none";
   const owner = activeClassroom?.role === "owner";
   const teacher = activeClassroom?.role === "teacher";
   const classroomEntitlement =
-    mode === "classroom" && (contractStatus === "active" || contractStatus === "past_due");
+    mode === "classroom" && classroomHasPaidEntitlement(contractStatus);
 
   return {
     user: {
       id: user.id,
       email: user.email,
-      displayName: user.displayName,
+      displayName,
       provider: user.provider,
       plan: user.plan,
     },
     profile: {
       id: profile.id,
       email: profile.email,
-      displayName: profile.displayName,
+      displayName,
       provider: profile.provider,
       settings: profile.settings,
     },

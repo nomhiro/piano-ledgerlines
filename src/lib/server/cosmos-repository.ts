@@ -108,6 +108,10 @@ export class CosmosRepository implements Repository {
     return (await this.readRecord<ClassroomDoc>(this.classrooms, classroomId, classroomId))?.document ?? null;
   }
 
+  async getClassroomRecord(classroomId: string): Promise<RepositoryDocument<ClassroomDoc> | null> {
+    return this.readRecord<ClassroomDoc>(this.classrooms, classroomId, classroomId);
+  }
+
   async upsertClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc> {
     return (await this.upsertRecord(this.classrooms, classroom, classroom.id, options)).document;
   }
@@ -118,6 +122,22 @@ export class CosmosRepository implements Repository {
       parameters: [{ name: "@ownerUserId", value: ownerUserId }],
     };
     return (await this.classrooms.items.query<ClassroomDoc>(query).fetchAll()).resources;
+  }
+
+  async findClassroomByStripeCustomerId(customerId: string): Promise<ClassroomDoc | null> {
+    const query: SqlQuerySpec = {
+      query: "SELECT TOP 1 * FROM c WHERE c.billing.stripeCustomerId = @customerId",
+      parameters: [{ name: "@customerId", value: customerId }],
+    };
+    return (await this.classrooms.items.query<ClassroomDoc>(query).fetchAll()).resources[0] ?? null;
+  }
+
+  async findClassroomByStripeSubscriptionId(subscriptionId: string): Promise<ClassroomDoc | null> {
+    const query: SqlQuerySpec = {
+      query: "SELECT TOP 1 * FROM c WHERE c.billing.stripeSubscriptionId = @subscriptionId",
+      parameters: [{ name: "@subscriptionId", value: subscriptionId }],
+    };
+    return (await this.classrooms.items.query<ClassroomDoc>(query).fetchAll()).resources[0] ?? null;
   }
 
   async createClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
@@ -132,6 +152,17 @@ export class CosmosRepository implements Repository {
         classroomId,
       )
     )?.document ?? null;
+  }
+
+  async getClassroomMemberRecord(
+    classroomId: string,
+    userId: string,
+  ): Promise<RepositoryDocument<ClassroomMemberDoc> | null> {
+    return this.readRecord(
+      this.classroomMembers,
+      classroomMemberId(classroomId, userId),
+      classroomId,
+    );
   }
 
   async upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
@@ -194,6 +225,10 @@ export class CosmosRepository implements Repository {
 
   async getBillingEvent(eventId: string): Promise<BillingEventDoc | null> {
     return (await this.readRecord<BillingEventDoc>(this.billingEvents, eventId, eventId))?.document ?? null;
+  }
+
+  async getBillingEventRecord(eventId: string): Promise<RepositoryDocument<BillingEventDoc> | null> {
+    return this.readRecord<BillingEventDoc>(this.billingEvents, eventId, eventId);
   }
 
   async upsertBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc> {

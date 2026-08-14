@@ -1,5 +1,24 @@
 # Azure リソース管理（Bicep + azd）
 
+## 教室運用チェックリスト
+
+- ロールは `owner`（請求・メンバー管理）、`teacher`（生徒の読み取りと生徒招待）、
+  `student`（自分のデータと先生一覧）に固定し、API でも再検証する。
+- 個人利用には教室データを表示せず、教室作成後は Stripe Checkout を HTTPS の
+  Stripe ホストに限定して遷移する。`past_due` は猶予期間、`canceled`/`inactive` は
+  請求復旧のみとする。
+- 招待と Stripe 操作は `Idempotency-Key`、Cosmos ETag CAS、定期 reconciliation で
+  冪等にする。失敗した招待・課金処理は再送/ポータルから回復し、秘密値や Stripe
+  セッション内部をログに出さない。
+- ユーザーが教室を退出しても曲・録音・楽譜は個人データとして保持し、削除要求時に
+  Cosmos と Blob のユーザープレフィックスを消去する。保持期間と監査ログは環境ごとに
+  定める。
+
+Stripe の webhook は Managed Identity で Key Vault の署名設定を参照する。ACS の送信元
+ドメイン、DNS SPF/DKIM、カスタムドメイン証明書を本番前に検証する。ローカルでは
+`npm run azure:up`、`npm run azure:health` と開発 Stripe/ACS のモック設定を使い、
+決済 URL は実際に遷移せずレスポンスのホスト検証までをテストする。
+
 `infra/main.bicep` はリソースグループスコープの宣言型デプロイです。環境ごとに
 Storage（Blob コンテナと Queue）、Cosmos DB Serverless、Log Analytics /
 Application Insights、Key Vault、ユーザー割り当て Managed Identity と RBAC を作成します。
@@ -10,6 +29,30 @@ Next.js の Web Container App と Python 解析ワーカーは、既存の Conta
 environment を利用して配備します。Python ワーカーの公開 GHCR イメージを指定して、
 `enableWorkerHosting=true` と `workerImage` を指定して `azd provision` を実行します。
 Worker は Storage Queue を常時監視し、Managed Identity で Blob / Cosmos / Queue に接続します。
+
+## 教室機能のセットアップ手順（Stripe + ACS）
+
+1. Stripe Dashboardで教室基本料金と有効生徒数の月額 recurring Priceを作成し、
+   `STRIPE_CLASSROOM_BASE_PRICE_ID` と `STRIPE_CLASSROOM_STUDENT_PRICE_ID` を
+   Container App secretまたはKey Vault参照として設定する。Webhook endpointを
+   `/api/stripe/webhook`へ登録し、`STRIPE_SECRET_KEY` と
+   `STRIPE_WEBHOOK_SECRET`を同じserver-only経路へ注入する。
+2. `enableCommunicationEmail=true`でACS EmailをProvisionし、送信専用の
+   `email-sender` Managed Identityを作成する。Web identityとは分離し、
+   ACS resource scopeのRBACだけをこのidentityへ付与する。
+3. `AZURE_COMMUNICATION_EMAIL_ENDPOINT`、検証済みの
+   `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS`、
+   `AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID`、
+   `LEDGERLINES_INVITATION_TOKEN_SECRET`を設定する。custom domainを使う場合は
+   ACSが提示するSPF/DKIM/DMARCとDNS検証を完了してからsender addressを切り替える。
+4. `LEDGERLINES_APP_BASE_URL`をHTTPSの本番originに設定し、Checkout/Portalの
+   return URLを同一originまたはStripeが返すHTTPS URLに限定する。値はログやparameter
+   fileへ書かない。
+5. ローカルでは `npm run azure:up`、`npm run azure:health`、`npm run lint`、
+   `npm run test:classroom`、`npm run test:infra`を実行する。Stripe CLIの
+   `stripe listen --forward-to localhost:3000/api/stripe/webhook`を使う場合も、
+   表示されたwebhook signing secretだけをローカル環境変数へ設定し、実決済URLへ
+   遷移せずUIのHTTPS host検証とIdempotency-Key再送を確認する。
 
 ## 前提
 
@@ -77,6 +120,65 @@ Private Endpoint と VNet 統合は、本番ネットワーク設計が確定し
 `allowSharedKeyAccess=false`、Blob の匿名公開無効、TLS 1.2、Key Vault RBAC、
 Cosmos のローカル認証無効が既定の安全策です。
 
+## Classroom invitation email
+
+`infra/main.bicep` は既定では ACS Email を作成しません。環境ごとに
+`enableCommunicationEmail=true` を指定して What-if を確認してから Provision します。
+このオプションは Communication Service、Email Service、Azure-managed domain と専用の
+`email-sender` user-assigned managed identityを作成し、そのidentityだけに
+`Communication and Email Service Owner` RBACをACS resource scopeで付与します。既存の
+Web identityにはACS roleを付与しません。現行ACSには送信専用のcustom RBAC roleを安定運用
+できるサポートがないため、動かないcustom roleへ置換せず、専用identity + resource scope
+でblast radiusを限定します。
+
+```json
+{
+  "enableCommunicationEmail": { "value": true },
+  "emailDataLocation": { "value": "Japan" }
+}
+```
+
+Provision 後の `communicationEmailEndpoint` を
+`AZURE_COMMUNICATION_EMAIL_ENDPOINT` に設定し、Azure-managed domain または検証済み
+customer-managed domain の送信元を `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS` に設定します。
+output `emailSenderManagedIdentityClientId` を
+`AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID` に設定します。本番ではこの値が未設定なら
+アプリはfail closedし、ACS Email clientはこのclient IDを明示した
+`DefaultAzureCredential`を使います。
+アプリは接続文字列・アクセスキーを使わず `DefaultAzureCredential`（本番は Managed Identity）
+で認証します。`LEDGERLINES_EMAIL_BACKEND=azure` が本番の必須設定です。開発では
+`memory`（既定）または本文・宛先を出力しない `console` を明示的に選択できます。
+招待URL、トークン、宛先アドレス、本文をログや telemetry に出力しないでください。
+`LEDGERLINES_INVITATION_TOKEN_SECRET` はランダムな32バイト以上の値をKey Vaultまたは
+Container App secretから注入し、ローテーション時は旧versionとの段階移行を行います。
+`LEDGERLINES_INVITE_RATE_LIMIT` と `LEDGERLINES_INVITE_RATE_WINDOW_MINUTES` は
+repository-backedの教室単位制限であり、プロセスメモリのrate limiterではありません。
+
+customer-managed domainを使う場合、email domainの検証を先に完了し、DNSへ指定された
+SPF、DKIM、DMARCレコードを登録してから `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS`
+を切り替えます。BicepのAzure-managed domain作成を、未検証domainの自動置換に使わない
+でください。prodではデプロイ後にACSの送信成功statusとbounce監視を確認します。
+
+### Container Appへのidentity割当
+
+Web Container Appを作成・更新した後、`emailSenderManagedIdentityResourceId`を
+user-assigned identityとして割り当てます。既存のWeb identityとは別に指定します。
+
+```powershell
+$emailIdentity = az deployment group show `
+  --resource-group ledgerlines-prod-rg `
+  --name prod `
+  --query properties.outputs.emailSenderManagedIdentityResourceId.value -o tsv
+az containerapp identity assign `
+  --name ledgerlines-prod-web `
+  --resource-group ledgerlines-prod-rg `
+  --user-assigned $emailIdentity
+```
+
+Container Appのsecret/envへendpoint、sender address、client ID、token signing secretを
+注入し、再起動後に招待送信の成功statusだけを監視します。Web identityからACS roleを
+削除したwhat-if結果に `emailSenderCommunicationEmailRole` だけが残ることを確認します。
+
 ## 環境の更新・削除
 
 ```powershell
@@ -134,3 +236,27 @@ https://<container-app-fqdn>/.auth/login/google/callback
 
 `RedirectToLoginPage` を Easy Auth 側で指定すると、認証設定によってはページの
 Server Component に到達する前に 401 となるため、アプリ側のリダイレクトを使用します。
+
+## Stripe secrets and billing configuration
+
+本番のStripe値はContainer Appのsecret参照またはKey Vault連携で注入し、
+リポジトリ、Bicep parameter、イメージ、ログへコピーしません。必要なserver-only設定は
+次の5つです。
+
+| Name | Purpose |
+|---|---|
+| `STRIPE_SECRET_KEY` | Stripe Node SDK secret key |
+| `STRIPE_WEBHOOK_SECRET` | `/api/stripe/webhook` の署名検証 |
+| `STRIPE_CLASSROOM_BASE_PRICE_ID` | 教室基本料金のrecurring Price |
+| `STRIPE_CLASSROOM_STUDENT_PRICE_ID` | 有効学生1人のrecurring Price |
+| `LEDGERLINES_APP_BASE_URL` | 検証済みsuccess/cancel/Portal return URLの基底 |
+
+Priceは月額recurringとしてStripe Dashboardで作成し、税・クーポン・返金・年額・
+請求書払いはこの層では設定しません。`LEDGERLINES_APP_BASE_URL` は本番ではHTTPSのみ
+受け付け、Checkout URLのパスやqueryはサーバーが固定生成します。
+
+Webhook endpointは `https://<container-app-fqdn>/api/stripe/webhook` に登録し、
+`checkout.session.completed`、`customer.subscription.created|updated|deleted`、
+`invoice.paid`、`invoice.payment_failed`、`invoice.payment_action_required` を送ります。
+Stripeのdelivery retryと順序逆転は実装が吸収するため、失敗時はDashboardの再送を優先し、
+SubscriptionをStripeから再取得するreconciliationを実行します。

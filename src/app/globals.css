@@ -1,5 +1,34 @@
 @import "tailwindcss";
 
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--foreground);
+}
+.input:focus-visible,
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+input[type="file"]:focus-visible {
+  outline: 3px solid #c4b5fd;
+  outline-offset: 2px;
+}
+.button-primary, .button-secondary, .button-danger {
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  transition: opacity 120ms ease;
+}
+.button-primary { background: #7c3aed; color: white; }
+.button-secondary { border: 1px solid var(--border); color: var(--foreground); }
+.button-danger { background: #b91c1c; color: white; }
+.button-primary:disabled, .button-secondary:disabled, .button-danger:disabled { opacity: 0.5; }
+
 :root {
   --background: #0b0d14;
   --surface: #141824;

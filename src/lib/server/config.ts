@@ -2,6 +2,7 @@ import path from "node:path";
 
 export type BackendKind = "local" | "azure";
 export type AuthMode = "development" | "entra" | "google";
+export type EmailBackend = "memory" | "console" | "azure";
 
 export interface AppConfig {
   nodeEnv: string;
@@ -44,6 +45,15 @@ export interface AppConfig {
   coachPromptVersion: string;
   pipelineVersion: string;
   telemetryBackend: "none" | "console";
+  stripeSecretKey?: string;
+  stripeWebhookSecret?: string;
+  stripeClassroomBasePriceId?: string;
+  stripeClassroomStudentPriceId?: string;
+  ledgerlinesAppBaseUrl?: string;
+  emailBackend: EmailBackend;
+  azureCommunicationEmailEndpoint?: string;
+  azureCommunicationEmailSenderAddress?: string;
+  azureEmailManagedIdentityClientId?: string;
 }
 
 let cachedConfig: AppConfig | undefined;
@@ -84,6 +94,12 @@ export function getConfig(): AppConfig {
   const queueBackend = backend("LEDGERLINES_QUEUE", "local");
   const azureRequired = repositoryBackend === "azure" || storageBackend === "azure" || queueBackend === "azure";
   const foundryEnabled = process.env.LEDGERLINES_FOUNDRY_ENABLED === "true";
+  const defaultEmailBackend: EmailBackend =
+    nodeEnv === "production" && process.env.NEXT_PHASE !== "phase-production-build" ? "azure" : "memory";
+  const emailBackend = process.env.LEDGERLINES_EMAIL_BACKEND ?? defaultEmailBackend;
+  if (emailBackend !== "memory" && emailBackend !== "console" && emailBackend !== "azure") {
+    throw new Error('LEDGERLINES_EMAIL_BACKEND must be "memory", "console", or "azure"');
+  }
 
   const config: AppConfig = {
     nodeEnv,
@@ -129,6 +145,15 @@ export function getConfig(): AppConfig {
     coachPromptVersion: process.env.LEDGERLINES_COACH_PROMPT_VERSION ?? "coach-v1",
     pipelineVersion: process.env.LEDGERLINES_PIPELINE_VERSION ?? "pipeline-v1",
     telemetryBackend: process.env.LEDGERLINES_TELEMETRY === "console" ? "console" : "none",
+    stripeSecretKey: process.env.STRIPE_SECRET_KEY?.trim(),
+    stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET?.trim(),
+    stripeClassroomBasePriceId: process.env.STRIPE_CLASSROOM_BASE_PRICE_ID?.trim(),
+    stripeClassroomStudentPriceId: process.env.STRIPE_CLASSROOM_STUDENT_PRICE_ID?.trim(),
+    ledgerlinesAppBaseUrl: process.env.LEDGERLINES_APP_BASE_URL?.trim(),
+    emailBackend,
+    azureCommunicationEmailEndpoint: process.env.AZURE_COMMUNICATION_EMAIL_ENDPOINT?.trim(),
+    azureCommunicationEmailSenderAddress: process.env.AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS?.trim(),
+    azureEmailManagedIdentityClientId: process.env.AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID?.trim(),
   };
 
   if (config.azureEmulator && nodeEnv === "production") {
@@ -181,6 +206,9 @@ export function getConfig(): AppConfig {
   if (foundryEnabled) {
     required("AZURE_FOUNDRY_ENDPOINT", config.foundryEndpoint);
     required("AZURE_FOUNDRY_DEPLOYMENT", config.foundryDeployment);
+  }
+  if (nodeEnv === "production" && process.env.NEXT_PHASE !== "phase-production-build" && emailBackend !== "azure") {
+    throw new Error("Production email delivery must use Azure Communication Services");
   }
   if (!Number.isInteger(config.sasLifetimeSeconds) || config.sasLifetimeSeconds < 60 || config.sasLifetimeSeconds > 3600) {
     throw new Error("AZURE_SAS_LIFETIME_SECONDS must be an integer between 60 and 3600");

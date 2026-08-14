@@ -48,6 +48,21 @@ param workerImage string = ''
 @description('Worker Container App name.')
 param workerContainerAppName string = '${resourceNamePrefix}-analysis-worker'
 
+@description('Deploy Azure Communication Services Email resources for classroom invitations.')
+param enableCommunicationEmail bool = false
+
+@description('Azure Communication Services resource name.')
+param communicationServiceName string = '${resourceNamePrefix}-comm'
+
+@description('Azure Communication Services Email resource name.')
+param emailServiceName string = '${resourceNamePrefix}-email'
+
+@description('Email domain resource name. AzureManagedDomain is provisioned by Azure.')
+param emailDomainName string = 'AzureManagedDomain'
+
+@description('Data residency location for ACS Email.')
+param emailDataLocation string = 'Japan'
+
 var normalizedPrefix = toLower(replace(replace(resourceNamePrefix, '-', ''), '_', ''))
 var nameSuffix = uniqueString(subscription().id, resourceGroup().id)
 var storageAccountName = take('${normalizedPrefix}${nameSuffix}', 24)
@@ -56,6 +71,7 @@ var cosmosAccountName = take('${normalizedPrefix}-cosmos-${nameSuffix}', 44)
 var foundryAccountName = take('${normalizedPrefix}-ai-${nameSuffix}', 64)
 var webIdentityName = take('${resourceNamePrefix}-web', 128)
 var workerIdentityName = take('${resourceNamePrefix}-worker', 128)
+var emailSenderIdentityName = take('${resourceNamePrefix}-email-sender', 128)
 
 var blobContainers = [
   'scores'
@@ -124,6 +140,7 @@ module identity './modules/identity.bicep' = {
     location: location
     webIdentityName: webIdentityName
     workerIdentityName: workerIdentityName
+    emailSenderIdentityName: emailSenderIdentityName
     tags: {
       environment: environmentName
       component: 'identity'
@@ -212,6 +229,22 @@ module foundry './modules/foundry.bicep' = {
   }
 }
 
+module communicationEmail './modules/communication-email.bicep' = {
+  name: '${environmentName}-communication-email'
+  params: {
+    communicationServiceName: communicationServiceName
+    emailServiceName: emailServiceName
+    emailDomainName: emailDomainName
+    dataLocation: emailDataLocation
+    enabled: enableCommunicationEmail
+    tags: {
+      environment: environmentName
+      component: 'email'
+      managedBy: 'bicep'
+    }
+  }
+}
+
 module rbac './modules/rbac.bicep' = {
   name: '${environmentName}-rbac'
   params: {
@@ -220,6 +253,9 @@ module rbac './modules/rbac.bicep' = {
     keyVaultName: keyVault.outputs.name
     webPrincipalId: identity.outputs.webPrincipalId
     workerPrincipalId: identity.outputs.workerPrincipalId
+    communicationServiceName: communicationServiceName
+    enableCommunicationEmail: enableCommunicationEmail
+    emailSenderPrincipalId: identity.outputs.emailSenderPrincipalId
   }
 }
 
@@ -271,8 +307,16 @@ output webManagedIdentityPrincipalId string = identity.outputs.webPrincipalId
 output workerManagedIdentityName string = identity.outputs.workerName
 output workerManagedIdentityPrincipalId string = identity.outputs.workerPrincipalId
 output workerManagedIdentityClientId string = identity.outputs.workerClientId
+output emailSenderManagedIdentityName string = identity.outputs.emailSenderName
+output emailSenderManagedIdentityPrincipalId string = identity.outputs.emailSenderPrincipalId
+output emailSenderManagedIdentityClientId string = identity.outputs.emailSenderClientId
+output emailSenderManagedIdentityResourceId string = identity.outputs.emailSenderResourceId
 output foundryEnabled bool = enableFoundry
 output foundryEndpoint string = foundry.outputs.endpoint
 output foundryDeploymentName string = foundry.outputs.deploymentName
+output communicationEmailEnabled bool = enableCommunicationEmail
+output communicationServiceName string = communicationEmail.outputs.communicationServiceName
+output communicationEmailEndpoint string = communicationEmail.outputs.endpoint
+output communicationEmailDomainName string = communicationEmail.outputs.emailDomainName
 output appImageConfiguration string = 'Hosting is intentionally not provisioned: publish an app image, then add a web service to azure.yaml.'
 output workerImageConfiguration string = enableWorkerHosting ? workerImage : 'Worker hosting disabled. Set enableWorkerHosting=true and provide workerImage.'

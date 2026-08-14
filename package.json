@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:production": "tsx --test scripts/production-check.ts",
+    "test:classroom": "tsx --test --test-concurrency=1 src/lib/server/classroom-invitations.test.ts src/lib/server/account.test.ts src/app/classroom-invitations/accept/invitation-client.test.ts",
+    "test:infra": "tsx --test infra/acs-email-identity.test.ts",
     "azure:up": "docker compose -f docker-compose.azure-local.yml up -d",
     "azure:down": "docker compose -f docker-compose.azure-local.yml down",
     "azure:health": "tsx scripts/azure-local.ts health",
@@ -20,6 +22,7 @@
     "test:azure-local": "tsx scripts/azure-local-smoke.ts"
   },
   "dependencies": {
+    "@azure/communication-email": "^1.1.0",
     "@azure/cosmos": "^4.10.0",
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.33.0",
@@ -33,6 +36,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.10.0",
+    "stripe": "^22.5.0",
     "tone": "^15.1.22",
     "zod": "^4.4.3"
   },

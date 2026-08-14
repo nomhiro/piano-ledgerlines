@@ -1,5 +1,17 @@
 # データモデル設計 — Ledger Lines
 
+## 教室 UI のデータ境界
+
+`user` の `email` と `displayName` は認証プロバイダーから同期する。教室画面のメンバー
+レスポンスはロールに応じて安全な表示名だけを返し、メールアドレスはオーナーに限って返す。
+`classroom-member` は `owner` / `teacher` / `student` と世代付きの状態遷移
+(`provisioning` → `active` → `removing` → `removed`) を持つ。
+`billableStudentCount` と `teacherLimit` は請求・予約処理が確定した値であり、UI の表示用に
+再計算 API (`POST /classrooms/{id}/reconciliation`) を提供する。
+
+退出した生徒の個人 `song` / `take` / 音声は削除せず、教室参照だけを削除する。
+削除・保持期間はユーザーのデータ削除要求と Blob ライフサイクル規則に従う。
+
 | 項目 | 内容 |
 |---|---|
 | ドキュメントID | DESIGN-DATA |
@@ -121,7 +133,26 @@ work/{takeId}/preprocessed.wav
 
 `src/lib/server/types.ts` の `UserProfileDoc`、`ClassroomDoc`、
 `ClassroomMemberDoc`、`ClassroomInvitationDoc`、`BillingEventDoc` が
-Cosmos/Local共通の永続化型である。契約・招待送信・Stripe webhook処理は後続層が実装する。
+Cosmos/Local共通の永続化型である。`ClassroomInvitationDoc` は
+`role`、normalized email、version付きHMAC token hash、期限、inviter/accepted user、
+delivery status、送信・再送時刻を持ち、平文tokenは保存しない。承諾開始時は
+`pending → accepting → accepted` をCASでclaimし、accept operation、claimed user、
+token fingerprint、claim時刻をfenceとして保存する。`accepting` 中は再送・取消・期限切れ
+を許可せず、同じuser/tokenだけが再開できる。教室の
+`invitationReservations` は email/role fingerprintをkeyにしたstructured reservation ledgerで、
+creating/committing/linked/pending/acceptingの状態、invitationId、owner token、version、generation、作成時刻、
+短いcreation lease期限を持つ。
+招待IDはclassroom、role、normalized email fingerprintからserver HMACで決定し、
+同一keyのdocを物理的に一つへ固定する。docは `preparing → pending` を同generationの
+reservationVersion fenceで遷移し、preparingは承諾・送信対象にならない。
+`reservedTeacherSeatCount` は active/provisioning teacher と有効なteacher reservationを
+reconciliationで再計算する。旧 `pendingInvitationKeys` は読み取りせず、migration時に安全に
+削除する。
+studentの `ClassroomMemberDoc.billingDesiredStatus` は、まだmembershipが
+`provisioning`でも承諾sagaが課金対象として予約したか（`active`）を表す。
+`removing`/`removed` は `removed` として数量から除外する。
+招待送信は server-only の `EmailSender` 抽象を介し、本番では Azure Communication
+Services Email、開発では明示的な in-memory/console-safe 実装を使う。
 `RepositoryWriteOptions.ifMatch` と `RepositoryDocument.etag` により、更新競合を明示的に扱う。
 Localのdomain record更新は `proper-lockfile` のWindows対応atomic lock directory、
 mtime lease、stale recovery、bounded retry/release契約を使い、独自のlockPath
@@ -137,9 +168,9 @@ rename/deleteは行わない。lockは短いread/check/atomic rename critical se
 {
   "id": "usr_01HQ...",              // Entra のオブジェクトIDから導出
   "type": "user",
-  "displayName": "野村 大樹",
+  "displayName": "利用者の表示名",       // 例示。認証プロバイダーから同期
   "email": "...",
-  "teacherName": "白鳥ピアノ教室",   // 任意
+  "teacherName": "教室名（例）",      // 任意。教室membershipとは別の旧例示フィールド
   "settings": {
     "dailyPracticeMinutes": 30,     // 練習メニュー生成の上限
     "locale": "ja-JP",
@@ -719,6 +750,41 @@ export interface Take {
 > `Score` が `null` を取りうる（N/A 対応）、`confidence` の追加、
 > `scoreMeasure` の追加（繰り返し対応）、`status`/`failure` の追加、
 > `issues.measures` が配列（グルーピング対応）。
+
+---
+
+## 9. 教室課金ドキュメント
+
+`classrooms` は教室ごとにStripe Customer/Subscriptionを1つだけ保持します。
+`billing.status` はStripe statusの安全側アプリ正規化値で、`active` は
+`active` と `trialing`、`past_due` はそのまま利用可能、`canceled`/`incomplete` は
+停止を表します。元のStripe statusは `billing.stripeStatus` に保持します。
+
+基本料金はSubscriptionの固定base item、学生料金は有効な学生membership数の
+subscription itemです。quantity=0のitemは作らず、0への削除も
+`always_invoice` で日割り差額を確定します。`stripeStudentSubscriptionItemId`、
+`billableStudentCount`、periodを同じCAS更新で収束させます。
+
+`billing-events` はevent IDをidempotency keyとして使い、payload本文ではなくSHA-256
+hashだけを保存します。状態は `processing`、`processed`、`failed` で、processingには
+owner token、開始時刻、expiryを持つleaseを保存します。active lease中はdeliveryを503にし、
+stale leaseだけをCAS reclaimします。失敗イベントは再送時に再処理できます。
+
+Checkout attemptもoperation key hash、session ID/URL、expiryを保持し、同じHTTP retryだけを
+再利用します。Portal attemptもfingerprint、session ID/URL、created/expiryを保持し、consumed
+状態をStripeから取得できないため30秒のtransport retry window後は必ず新attemptを作ります。
+Stripe外部APIとCosmosはtransactionではないため、membership更新は教室単位の
+operation leaseをETag/CASで取得して直列化し、外部操作後にSubscriptionを再取得します。
+同一student Price itemが複数存在する場合はcanonical itemを選び、余剰itemを削除してから
+remote再解析でexactly one（quantity 0は0 itemまたはquantity 0 item）を確認してlocal
+count/item IDをCAS反映します。inactive subscriptionではpending operationを
+`blocked_inactive`として再契約待ちにし、completedへ進めません。失敗・クラッシュ時はlease expiry後にreconciliationで
+remote/localを補償します。
+
+Subscriptionのcurrent identityは `stripeSubscriptionSelectionKey` (version 1) として
+`created`、利用可能status rank、Subscription IDの順で永続化します。remote list選択と
+CAS callbackは同じtotal orderingを使うため、同一秒の再契約や同一status複数契約でも
+全リトライが同じcurrentを選び、古いeventで巻き戻りません。
 
 ---
 

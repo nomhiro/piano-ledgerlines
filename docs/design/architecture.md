@@ -89,6 +89,7 @@ flowchart TB
 | 10 | エッジ | Azure Front Door | Standard |
 | 11 | 非正規化更新 | Azure Functions（Cosmos DB トリガー） | Consumption |
 | 12 | コンテナレジストリ | Azure Container Registry | Basic |
+| 13 | 教室招待メール | Azure Communication Services Email | 専用 sender Managed Identity、ACS resource scope RBAC、Azure-managed / 検証済み domain |
 
 ### 2.2 主要な選定理由
 

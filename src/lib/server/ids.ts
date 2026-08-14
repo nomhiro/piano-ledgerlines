@@ -14,6 +14,10 @@ export function newTakeId(): string {
   return `take_${shortId()}`;
 }
 
+export function newClassroomId(): string {
+  return `classroom_${shortId()}`;
+}
+
 export function classroomMemberId(classroomId: string, userId: string): string {
   return `member_${createHash("sha256").update(`${classroomId}:${userId}`).digest("hex").slice(0, 32)}`;
 }

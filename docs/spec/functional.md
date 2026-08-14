@@ -25,6 +25,20 @@
 
 本プロダクトは、**録音するだけ**でこの3つに答える。
 
+### 1.4 個人利用と教室利用
+
+アカウントは教室に所属していない場合「個人利用」と表示し、架空の教室名や
+デモユーザー名を表示しない。Google の `displayName` / `email` をアカウント表示に
+使い、欠損時はメールのローカル部など安全な非 PII のフォールバックを使う。
+教室ではオーナー・先生・生徒のロールに応じてナビゲーションと操作を分ける。
+`past_due` は猶予期間中のため警告付きで利用可能、`inactive` は復旧操作のみ可能とする。
+
+オーナーは教室名、先生枠、請求対象生徒数、契約状態、請求ポータル、チェックアウト、
+メンバー・招待の CRUD と請求数の再調整を扱う。先生は生徒一覧と招待および読み取り専用
+の練習詳細を扱う。生徒は先生一覧を閲覧でき、退出時も個人の曲・録音データは保持される。
+招待や課金の二重送信を防ぐため、クライアントは各リクエストに一意な
+`Idempotency-Key` を付ける。外部決済 URL は Stripe の HTTPS ホストだけへ遷移する。
+
 ### 1.3 設計原則
 
 | 原則 | 意味 |
@@ -579,6 +593,33 @@ AC-14  測定ノイズ未満の差分が「横ばい」と表示され、改善�
 | R5 | ルバートを「テンポが不安定」と誤判定する | 中上級者に不評 | テンポ指標は「意図的な揺れ」を区別する設計にする（[指標定義](./metrics.md) 参照） |
 | R6 | 解析コストが想定を超える | 事業性 | CPU推論の実現性をM4で確認。無理ならフリーミアムの回数制限で調整 |
 | R7 | 楽譜と演奏の小節対応がずれる（繰り返し・ダカーポ） | 分析全体が無効 | MusicXMLの繰り返し記号を展開した「演奏順」を正とする。M4で検証 |
+| R8 | 教室招待メールの誤送信・token漏えい | 個人情報・招待の不正利用 | 本番は ACS Email + Managed Identity に限定し、未設定時は fail-closed。in-memory/console-safe sender は開発専用とし、宛先・本文・token をログに出さない |
+
+---
+
+## 8.1 教室サブスクリプションとmembership
+
+- ownerを含むteacher上限は `teacherLimit`（初期値5）。active/provisioning teacherと
+  pending teacher invitationを `reservedTeacherSeatCount` とETag CASで予約し、重複招待・
+  同時承諾・再送をべき等に処理する。
+- ownerはteacher/student、teacherはstudentだけを招待する。招待は7日を既定値とする
+  bounded expiry、一度限りのversion付きHMAC token、normalized email完全一致を要求する。
+  Googleアカウントのない代理studentは作らない。
+- active studentだけをStripe quantityへ反映する。studentの承諾と除籍は同じ
+  `operationVersion` のquantity sagaを使う。billing leaseを取得した後に
+  `ClassroomMemberDoc` を再読し、active + 課金予約済みprovisioningだけをdesired state
+  として数量を確定するため、accept/removeの同時実行でcaller側のstale countを使わない。
+  外部失敗時はprovisioning/removingを残してreconciliation可能にする。
+- 招待承諾は副作用の前に invitation を `accepting` へdurable claimする。
+  `accepting` 中のrevoke/expire/resendは409とし、final accepted CASは同じ
+  operation/user/token fingerprintを要求する。teacher/student membershipとprofile参照には
+  generation fenceを持たせ、removing/removedや別generationをactiveへ戻さない。
+- 除籍・退会はmembership/profile参照だけを削除し、studentのsongs、takes、音声Blobは
+  削除しない。teacherの生徒読み取りはclassroom-scoped routeで毎回active membership、
+  contract、student membershipを検証し、teacherの書き込みは存在しない。
+- ACS Emailはproductionではendpoint、verified sender、Managed Identity/RBACを必須とし、
+  `beginSend().pollUntilDone()`の成功statusだけをdelivery成功とする。DNS検証が必要な
+  customer-managed domainはSPF/DKIM/DMARCを運用手順で完了してから有効化する。
 
 ---
 

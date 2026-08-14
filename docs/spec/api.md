@@ -1,5 +1,27 @@
 # API仕様 — Ledger Lines
 
+## 教室 UI API
+
+| メソッド | パス | 権限 | 用途 |
+|---|---|---|---|
+| `GET` | `/classrooms/{id}` | 所属メンバー | 教室状態とロール別メンバー表示（メールはオーナーのみ） |
+| `PATCH` | `/classrooms/{id}` | オーナー | 教室名更新。Cosmos ETag の CAS で競合を防止 |
+| `POST` | `/classrooms` | 認証済み | 個人利用から下書き教室を作成 |
+| `POST` | `/classrooms/{id}/checkout` | オーナー | Stripe Checkout。`Idempotency-Key` 必須 |
+| `POST` | `/classrooms/{id}/billing-portal` | オーナー | Stripe Billing Portal の再開・管理 |
+| `POST` | `/classrooms/{id}/reconciliation` | オーナー | 生徒数・先生枠・Stripe quantity を再調整 |
+| `GET/POST` | `/classrooms/{id}/invitations` | オーナー/先生 | 招待一覧・作成（先生は生徒のみ） |
+| `DELETE` | `/classrooms/{id}/members/{userId}` | 所属ルール | 先生/オーナーによる削除、生徒自身の退出 |
+| `GET` | `/classrooms/{id}/students/{studentId}/songs` | オーナー/先生 | 生徒の読み取り専用曲一覧 |
+| `GET` | `/classrooms/{id}/students/{studentId}/songs/{songId}` | オーナー/先生 | 生徒の読み取り専用曲・テイク |
+
+`past_due` は猶予期間として読み取り・招待を含む通常利用を許可する。`canceled` や
+`inactive` では個人データを削除せず、オーナーの請求復旧操作だけを許可する。
+403/404 のレスポンスや UI は対象ユーザー・曲の存在を推測できる情報を含めない。
+教室一覧・作成・更新のレスポンスは Stripe ID、招待secret/tokenHash、ACS設定を含めず、
+メンバーのメールは owner にだけ返す。`PATCH` は空白をtrimした1〜120文字を受け付け、
+Cosmos ETag競合時は409を返す。
+
 | 項目 | 内容 |
 |---|---|
 | ドキュメントID | SPEC-API |
@@ -77,6 +99,7 @@
 | `QUOTA_EXCEEDED` | 402 | 月間テイク数の上限 | プラン案内 |
 | `RATE_LIMITED` | 429 | レート制限 | `Retry-After` 秒後に再試行 |
 | `UPSTREAM_UNAVAILABLE` | 503 | Foundry 等の一時障害 | 再試行ボタン |
+| `CONFIGURATION_ERROR` | 503 | 課金設定が未構成 | 管理者へ連絡 |
 | `INTERNAL` | 500 | 想定外 | 汎用エラー |
 
 ### 2.3 解析失敗コード（`FailureCode`）
@@ -188,6 +211,37 @@ POST /api/shares/{token}/comments
 | 34 | PATCH | `/shares/{id}` | 有効/無効の切替 |
 | 35 | GET | `/shares/{token}` | 共有ビューのデータ（未認証） |
 | 36 | GET | `/practice-plan` | 今日の練習メニュー |
+| 37 | GET | `/classrooms/{id}/members` | owner/teacher向けmembership一覧 |
+| 38 | GET | `/classrooms/{id}/invitations` | roleに応じた招待一覧 |
+| 39 | POST | `/classrooms/{id}/invitations` | teacher/student招待の作成 |
+| 40 | POST | `/classrooms/{id}/invitations/{invitationId}/resend` | pending招待の再送 |
+| 41 | DELETE | `/classrooms/{id}/invitations/{invitationId}` | 招待の取消 |
+| 42 | POST | `/classroom-invitations/accept` | Googleアカウントで招待承諾 |
+| 43 | DELETE | `/classrooms/{id}/members/{userId}` | ownerの除籍／student本人の退会 |
+| 44 | POST | `/classrooms/{id}/reconciliation` | owner限定の課金数量再収束 |
+| 45 | GET | `/classrooms/{id}/students/{studentId}/songs` | teacher/ownerの生徒曲一覧 |
+| 46 | GET | `/classrooms/{id}/students/{studentId}/songs/{songId}` | teacher/ownerの曲詳細 |
+| 47 | GET | `/classrooms/{id}/students/{studentId}/songs/{songId}/takes` | teacher/ownerのテイク一覧 |
+| 48 | GET | `/classrooms/{id}/students/{studentId}/takes/{takeId}` | teacher/ownerのテイク詳細 |
+
+---
+
+## 4.1 教室招待・認可
+
+教室契約が `active`、`trialing` 相当の `active`、または `past_due` のときだけ
+招待・membership変更・生徒読み取りを許可する。`unpaid`、`canceled`、
+`incomplete_expired` 等では403とし、課金ポータルとowner限定のreconciliationだけを残す。
+ownerはteacher/student、teacherはstudentだけを招待できる。studentは招待できず、
+teacherは複数教室、生徒は有効教室1つに限定する。
+
+招待URLは `classroomId`、`invitationId` と十分なentropyのsecretをfragmentに含め、
+ページはfragment secretを同一tabのsessionStorageへ保存して直ちにhistoryから消し、
+未ログイン時のOAuth `post_login_redirect_uri` にはIDsだけを渡す。ログイン後に同じtabの
+sessionStorageからsecretを取得してaccept APIへJSON POSTする。secretが欠落した場合は
+メールリンクを開き直すよう案内する。サーバーはnormalized Google email、期限、pending status、
+version付きHMACをCASで再検証する。承諾は teacher では membership/profile CAS、
+student では `provisioning → Stripe quantity → active` の順で収束し、Stripe失敗時に
+招待をacceptedへ進めない。曲・テイク・Blobの所有者は常にstudent userIdのままである。
 
 ---
 
@@ -800,7 +854,74 @@ PoVモックは `src/lib/mock/generate.ts` でデータを生成しているが�
 
 ---
 
-## 9. 未決事項
+## 9. 教室招待メールとStripe課金
+
+教室招待のメール配信は API route から直接 SDK を呼ばず、server-only の `EmailSender`
+インターフェースへ依存する。`AzureEmailSender` は Azure Communication Services Email
+の `EmailClient.beginSend()` を開始し、`pollUntilDone()` で完了を確認する。宛先・本文・
+招待URL/token はレスポンス、ログ、telemetry に含めない。
+
+本番は `LEDGERLINES_EMAIL_BACKEND=azure` と
+`AZURE_COMMUNICATION_EMAIL_ENDPOINT`、`AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS` を
+必須とし、未設定または `memory`/`console` のままでは配信経路の初期化時に fail-closed する。
+開発の既定は in-memory sender で、外部送信を行わない。
+
+### 9.1 教室Stripe課金
+
+課金routeは Node.js runtime のserver-only処理です。Stripeのsecret、Customer ID、
+Subscription ID、Webhook payloadはクライアントへ返さず、ログにも出しません。
+Stripe未設定のlocal/testでは課金routeだけが `CONFIGURATION_ERROR` (503) になります。
+
+| Method | Path | 認可 | 内容 |
+|---|---|---|---|
+| `POST` | `/api/classrooms` | 認証済みowner候補 | `{ "name": "..." }` でdraft教室とowner membershipを作成 |
+| `POST` | `/api/classrooms/{classroomId}/checkout` | 教室ownerのみ | 固定base PriceでSubscription Checkout URLを返す |
+| `POST` | `/api/classrooms/{classroomId}/billing-portal` | 教室ownerのみ | 保存済みStripe CustomerのPortal URLを返す |
+| `POST` | `/api/stripe/webhook` | Stripe署名 | raw bodyを検証し、課金状態を反映 |
+
+Checkoutは `STRIPE_CLASSROOM_BASE_PRICE_ID` のitemだけで開始します。Stripeの
+Subscription item quantity=0は採用せず、学生が最初に有効化されたときに
+`STRIPE_CLASSROOM_STUDENT_PRICE_ID` のitemをquantity付きで作成します。増減・削除は
+`proration_behavior=always_invoice` を明示し、月途中の差額を即時invoiceにします。
+Checkout/Portalは検証済みの `Idempotency-Key`（未指定時はrequest ID）をnamespace/hash化して
+Stripeへ渡します。Checkout attempt/session ID、session URL、expiryを教室へCAS保存し、
+有効sessionは同じHTTP retryで再利用、処理中の別操作は503、完了または期限切れ後だけ新attempt
+へ進みます。
+Portalもsession URLとrequest fingerprintをCAS保存しますが、Stripe Portal URLのconsumed状態は
+取得できないため、transport retry windowは30秒に限定します。同じkeyの即時retryだけ再利用し、
+window後はサーバー生成の新attempt keyで新URLを発行します。
+
+Webhookは重複・順序逆転を前提にしています。event IDを `billing-events` にCAS保存し、
+owner token・開始時刻・expiry付きleaseで `processing → processed` または
+`processing → failed` を記録します。active lease中のdeliveryは503、stale leaseはCAS reclaim
+します。Subscription
+eventではpayloadのstatusを盲信せず、StripeからSubscriptionを再取得して最新items、
+customer、periodを反映します。customer/classroom metadataと固定base Priceを検証し、
+customerの全Subscriptionから `(created, usable status rank, subscription ID)` の
+selection keyが最大の対象契約だけを反映します。同一秒のactive/trialing/past_dueは
+canceled/incomplete_expired/unpaidより優先し、同一status・同一秒でもIDで決定します。
+`active`/`trialing`/`past_due` は利用可能、
+`unpaid`/`canceled`/`incomplete_expired` と未知statusは停止です。
+
+ローカルではStripe CLIを次のように起動し、表示された `whsec_...` を環境変数へ設定します。
+
+```powershell
+stripe listen --forward-to localhost:3000/api/stripe/webhook
+stripe trigger checkout.session.completed
+```
+
+失敗イベントはStripe Dashboardから再送し、必要なら運用者がreconciliation service
+（`reconcileBillableStudentQuantity`）を実行します。学生membership変更は
+`provisioning`/`removing` とStripe外部操作を分離するsaga契約で扱い、外部呼び出し失敗時は
+membershipを確定せず同じoperation versionで再照合します。学生数量leaseは教室単位で外部
+mutationを直列化し、同じstudent Price itemが複数ならcanonical itemへ集約して余剰を削除します。
+非利用可能subscriptionではpending operationを`blocked_inactive`へ遷移させ、
+`completed`にはしません。再契約でactiveへ戻ったWebhookまたは同じoperationVersionの
+reconciliationがremote student itemを再解析し、canonicalize後にcountとoperationを完了させます。
+
+---
+
+## 10. 未決事項
 
 | # | 論点 | 決定時期 |
 |---|---|---|
@@ -811,7 +932,7 @@ PoVモックは `src/lib/mock/generate.ts` でデータを生成しているが�
 
 ---
 
-## 10. 関連ドキュメント
+## 11. 関連ドキュメント
 
 - [機能仕様](./functional.md)
 - [評価指標定義](./metrics.md)

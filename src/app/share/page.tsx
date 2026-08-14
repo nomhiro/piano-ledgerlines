@@ -1,15 +1,8 @@
 import { Suspense } from "react";
-import { notFound } from "next/navigation";
-import {
-  songs,
-  getSong,
-  getTakesForSong,
-  getCommentsForSong,
-  getAssignmentsForSong,
-} from "@/lib/mock/data";
 import ShareView from "@/components/ShareView";
 import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
 import { toHistorySong, toHistoryTake } from "@/lib/real-history";
+import { getAccountContextForLayout } from "@/lib/server/account";
 
 export default async function SharePage({
   searchParams,
@@ -18,17 +11,37 @@ export default async function SharePage({
 }) {
   const { song: songId } = await searchParams;
   const realSongs = await listRealSongs();
-  const selectableSongs = [...realSongs.map(toHistorySong), ...songs];
+  const account = await getAccountContextForLayout();
+  const selectableSongs = realSongs.map(toHistorySong);
   const selectedId = songId && selectableSongs.some((candidate) => candidate.id === songId)
     ? songId
     : selectableSongs[0]?.id;
 
-  if (!selectedId) notFound();
+  if (!selectedId) {
+    return (
+      <div className="max-w-xl space-y-3">
+        <h1 className="text-2xl font-bold">先生と共有</h1>
+        <p className="text-sm text-[var(--muted)]">
+          共有できる録音済みの曲がありません。曲を登録して録音すると、共有設定を確認できます。
+        </p>
+        <p className="text-sm text-[var(--muted)]">
+          {account?.activeClassroom ? "教室の共有先が設定されていません。" : "共有先未設定（個人利用）"}
+        </p>
+      </div>
+    );
+  }
 
   if (selectedId.startsWith("song_")) {
     const realSong = await getRealSong(selectedId);
     const takes = realSong ? (await listTakesBySong(selectedId)).map(toHistoryTake) : [];
-    if (!realSong || takes.length === 0) notFound();
+    if (!realSong || takes.length === 0) {
+      return (
+        <div className="space-y-3">
+          <h1 className="text-2xl font-bold">共有できません</h1>
+          <p className="text-sm text-[var(--muted)]">曲または録音が見つかりません。</p>
+        </div>
+      );
+    }
 
     return (
       <Suspense>
@@ -38,24 +51,12 @@ export default async function SharePage({
           takes={takes}
           comments={[]}
           assignments={[]}
+          viewerDisplayName={account?.profile.displayName}
+          classroomName={account?.activeClassroom?.name}
         />
       </Suspense>
     );
   }
 
-  const song = getSong(selectedId) ?? songs[0];
-  const takes = getTakesForSong(song.id);
-  if (takes.length === 0) notFound();
-
-  return (
-    <Suspense>
-      <ShareView
-        songs={selectableSongs}
-        song={song}
-        takes={takes}
-        comments={getCommentsForSong(song.id)}
-        assignments={getAssignmentsForSong(song.id)}
-      />
-    </Suspense>
-  );
+  return <p className="text-sm text-[var(--muted)]">曲を読み込めませんでした。</p>;
 }

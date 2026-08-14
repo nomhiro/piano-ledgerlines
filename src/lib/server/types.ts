@@ -142,6 +142,8 @@ export interface ClassroomReference {
   classroomId: string;
   role: ClassroomRole;
   status: ClassroomMemberStatus;
+  generation?: number;
+  operationVersion?: string | null;
 }
 
 export interface UserProfileDoc {
@@ -174,15 +176,83 @@ export interface ClassroomDoc {
   name: string;
   ownerUserId: string;
   teacherLimit: number;
+  /** Includes active/provisioning teachers and pending teacher invitations. */
+  reservedTeacherSeatCount?: number;
+  teacherSeatVersion?: number;
+  invitationRateLimits?: Record<string, {
+    windowStartedAt: string;
+    count: number;
+  }>;
+  /** @deprecated Legacy documents are migrated and this field is deleted by reconciliation. */
+  pendingInvitationKeys?: Record<string, string>;
+  invitationReservations?: Record<string, ClassroomInvitationReservationDoc>;
   billableStudentCount: number;
   billing: {
     stripeCustomerId: string | null;
     stripeSubscriptionId: string | null;
     status: ClassroomContractStatus;
+    stripeStatus?: string | null;
+    stripeBaseSubscriptionItemId?: string | null;
+    stripeStudentSubscriptionItemId?: string | null;
+    stripeCurrentPeriodStart?: string | null;
+    stripeCurrentPeriodEnd?: string | null;
+    stripeSubscriptionCreatedAt?: number | null;
+    stripeSubscriptionSelectionKey?: string | null;
+    stripeSubscriptionSelectionVersion?: number;
+    billingVersion?: number;
+    checkoutAttempt?: CheckoutAttemptDoc | null;
+    portalAttempt?: PortalAttemptDoc | null;
+    studentQuantityOperation?: BillingOperationLeaseDoc | null;
   };
   appStatus: ClassroomAppStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ClassroomInvitationReservationDoc {
+  invitationId: string;
+  role: Exclude<ClassroomRole, "owner">;
+  emailRoleFingerprint: string;
+  state: "creating" | "committing" | "linked" | "pending" | "accepting" | "sending" | "resending";
+  ownerToken: string;
+  version: string;
+  generation: number;
+  deliveryOwnerToken?: string | null;
+  deliveryLeaseExpiresAt?: string | null;
+  deliverySourceGeneration?: number | null;
+  deliverySourceVersion?: string | null;
+  createdAt: string;
+  leaseExpiresAt: string;
+}
+
+export interface CheckoutAttemptDoc {
+  operationKeyHash: string;
+  attemptId: string;
+  sessionId: string | null;
+  sessionUrl: string | null;
+  status: "pending" | "completed" | "expired";
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface PortalAttemptDoc {
+  operationKeyHash: string;
+  attemptId: string;
+  sessionId: string | null;
+  sessionUrl: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface BillingOperationLeaseDoc {
+  operationVersion: string;
+  ownerToken: string;
+  targetQuantity: number;
+  status: "pending" | "pending_reconciliation" | "completed" | "failed" | "blocked_inactive";
+  startedAt: string;
+  expiresAt: string;
+  completedAt?: string | null;
+  lastError?: string | null;
 }
 
 export interface ClassroomMemberDoc {
@@ -192,6 +262,9 @@ export interface ClassroomMemberDoc {
   userId: string;
   role: ClassroomRole;
   status: ClassroomMemberStatus;
+  operationVersion?: string | null;
+  billingDesiredStatus?: "active" | "removed" | null;
+  generation?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -203,10 +276,23 @@ export interface ClassroomInvitationDoc {
   email: string;
   normalizedEmail: string;
   role: Exclude<ClassroomRole, "owner">;
-  status: "pending" | "accepted" | "expired" | "revoked";
+  status: "preparing" | "pending" | "accepting" | "accepted" | "expired" | "revoked";
   tokenHash: string | null;
+  tokenVersion?: number;
+  generation?: number;
+  reservationVersion?: string | null;
+  reservationOwnerToken?: string | null;
   expiresAt: string | null;
   createdByUserId: string;
+  acceptedByUserId?: string | null;
+  acceptOperationVersion?: string | null;
+  claimedByUserId?: string | null;
+  claimedTokenFingerprint?: string | null;
+  claimedAt?: string | null;
+  sentAt?: string | null;
+  resentAt?: string | null;
+  deliveryStatus?: "pending" | "sent" | "failed";
+  deliveryError?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -220,6 +306,13 @@ export interface BillingEventDoc {
   payloadHash: string;
   processedAt: string | null;
   createdAt: string;
+  status?: "processing" | "processed" | "failed";
+  attemptCount?: number;
+  lastError?: string | null;
+  stripeCreatedAt?: number;
+  processingOwnerToken?: string | null;
+  processingStartedAt?: string | null;
+  processingExpiresAt?: string | null;
 }
 
 // api.md 5.1 `POST /songs` 相当（ローカル簡略版: SASなしの直接multipartアップロード）

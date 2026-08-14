@@ -9,8 +9,8 @@ import type {
   TeacherComment,
 } from "./types";
 
-export const CURRENT_USER = { name: "野村 大樹", role: "student" as const };
-export const TEACHER = { name: "白鳥 玲子 先生", role: "teacher" as const };
+export const CURRENT_USER = { name: "現在の利用者", role: "student" as const };
+export const TEACHER = { name: "担当の先生", role: "teacher" as const };
 
 export const songs: Song[] = [
   {
