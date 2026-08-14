@@ -2,24 +2,13 @@ import { getAuthenticatedUser } from "@/lib/server/auth";
 import { requireClassroomRole, safeMemberView } from "@/lib/server/classroom-access";
 import { errorResponse, ConflictError, ConfigurationError, jsonResponse, readJson, ValidationError } from "@/lib/server/http";
 import { getRepository, RepositoryConflictError } from "@/lib/server/repository";
-import type { ClassroomDoc } from "@/lib/server/types";
+import { classroomHasPaidEntitlement } from "@/lib/server/billing";
+import { safeClassroomView } from "@/lib/server/classroom-view";
 import { z } from "zod";
 
 export const runtime = "nodejs";
 
 const updateClassroomSchema = z.object({ name: z.string().trim().min(1).max(120) }).strict();
-
-function safeClassroomView(classroom: ClassroomDoc) {
-  return {
-    id: classroom.id,
-    name: classroom.name,
-    appStatus: classroom.appStatus,
-    contractStatus: classroom.billing.status,
-    teacherLimit: classroom.teacherLimit,
-    billableStudentCount: classroom.billableStudentCount,
-    hasBillingCustomer: Boolean(classroom.billing.stripeCustomerId),
-  };
-}
 
 async function updateClassroomName(
   classroomId: string,
@@ -63,19 +52,29 @@ export async function GET(
     );
     const members = await repository.listClassroomMembers(classroomId);
     const includeEmail = access.member.role === "owner";
-    const memberViews = await Promise.all(
-      members
-        .filter((member) => member.status === "active")
-        .map(async (member) =>
-          safeMemberView(member, await repository.getUser(member.userId), includeEmail),
-        ),
-    );
+    const canViewRoster =
+      access.member.role === "owner" ||
+      (access.classroom.appStatus === "active" &&
+        classroomHasPaidEntitlement(access.classroom.billing.status));
+    const memberViews = canViewRoster
+      ? await Promise.all(
+          members
+            .filter((member) => member.status === "active")
+            .map(async (member) =>
+              safeMemberView(member, await repository.getUser(member.userId), includeEmail),
+            ),
+        )
+      : [];
     const teachers = memberViews.filter((member) => member.role === "owner" || member.role === "teacher");
     return jsonResponse(
       {
         classroom: safeClassroomView(access.classroom),
         role: access.member.role,
-        members: access.member.role === "student" ? teachers : memberViews,
+        members: !canViewRoster
+          ? []
+          : access.member.role === "student"
+            ? teachers
+            : memberViews,
       },
       request,
     );

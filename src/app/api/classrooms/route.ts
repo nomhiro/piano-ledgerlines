@@ -2,7 +2,7 @@ import { getAuthenticatedUser } from "@/lib/server/auth";
 import { createDraftClassroom } from "@/lib/server/billing";
 import { errorResponse, readJson, ValidationError, jsonResponse } from "@/lib/server/http";
 import { getRepository } from "@/lib/server/repository";
-import type { ClassroomDoc } from "@/lib/server/types";
+import { safeClassroomView } from "@/lib/server/classroom-view";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -10,18 +10,6 @@ export const runtime = "nodejs";
 const createClassroomSchema = z.object({
   name: z.string().trim().min(1).max(120),
 }).strict();
-
-function safeClassroomView(classroom: ClassroomDoc) {
-  return {
-    id: classroom.id,
-    name: classroom.name,
-    appStatus: classroom.appStatus,
-    contractStatus: classroom.billing.status,
-    teacherLimit: classroom.teacherLimit,
-    billableStudentCount: classroom.billableStudentCount,
-    hasBillingCustomer: Boolean(classroom.billing.stripeCustomerId),
-  };
-}
 
 export async function POST(request: Request) {
   try {

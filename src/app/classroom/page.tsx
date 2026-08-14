@@ -3,8 +3,17 @@ import { getAccountContextForLayout } from "@/lib/server/account";
 
 export const dynamic = "force-dynamic";
 
-export default async function ClassroomPage() {
+export default async function ClassroomPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ classroomId?: string }>;
+}) {
   const account = await getAccountContextForLayout();
-  const initialClassroom = account?.activeClassroom ?? account?.classrooms[0] ?? null;
+  const { classroomId: selectedId } = await searchParams;
+  const initialClassroom =
+    account?.classrooms.find((classroom) => classroom.id === selectedId) ??
+    account?.activeClassroom ??
+    account?.classrooms[0] ??
+    null;
   return <ClassroomView account={account} initialClassroom={initialClassroom} />;
 }

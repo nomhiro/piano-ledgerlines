@@ -7,10 +7,12 @@ import { getRepository, getSong, listTakesBySong } from "@/lib/server/repository
 
 export const dynamic = "force-dynamic";
 
-async function loadSong(studentId: string, songId: string) {
+async function loadSong(studentId: string, songId: string, requestedClassroomId?: string) {
   const user = await getAuthenticatedServerUser();
   const account = await getAccountContextForLayout();
-  const classroomId = account?.activeClassroom?.id;
+  const classroomId =
+    account?.classrooms.find((classroom) => classroom.id === requestedClassroomId)?.id ??
+    account?.activeClassroom?.id;
   if (!classroomId) throw new NotFoundError("classroom not found");
   const access = await assertTeacherCanAccessStudent(classroomId, user.id, studentId, getRepository());
   const song = await getSong(songId, studentId);
@@ -27,11 +29,16 @@ async function loadSong(studentId: string, songId: string) {
 
 export default async function ClassroomStudentSongPage({
   params,
-}: { params: Promise<{ studentId: string; songId: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ studentId: string; songId: string }>;
+  searchParams: Promise<{ classroomId?: string }>;
+}) {
   const { studentId, songId } = await params;
+  const { classroomId } = await searchParams;
   let data;
   try {
-    data = await loadSong(studentId, songId);
+    data = await loadSong(studentId, songId, classroomId);
   } catch (error) {
     if (error instanceof ForbiddenError) return <SafeError message="この曲を表示する権限がありません。" />;
     if (error instanceof NotFoundError) return <SafeError message="曲または教室が見つかりません。" />;
@@ -41,7 +48,7 @@ export default async function ClassroomStudentSongPage({
   return (
     <div className="space-y-5">
       <header>
-        <Link href={`/classroom/students/${encodeURIComponent(studentId)}`} className="text-xs text-violet-300 hover:underline">← 生徒の曲一覧</Link>
+        <Link href={`/classroom/students/${encodeURIComponent(studentId)}?classroomId=${encodeURIComponent(data.classroomId)}`} className="text-xs text-violet-300 hover:underline">← 生徒の曲一覧</Link>
         <h1 className="mt-3 text-2xl font-bold">{song.title}</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">{data.studentDisplayName}さん / {song.composer} ・ 読み取り専用</p>
         <div className="mt-3 flex flex-wrap gap-2">

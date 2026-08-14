@@ -7,10 +7,12 @@ import { getRepository, listSongTakeSummaries, listSongs } from "@/lib/server/re
 
 export const dynamic = "force-dynamic";
 
-async function loadStudent(studentId: string) {
+async function loadStudent(studentId: string, requestedClassroomId?: string) {
   const user = await getAuthenticatedServerUser();
   const account = await getAccountContextForLayout();
-  const classroomId = account?.activeClassroom?.id;
+  const classroomId =
+    account?.classrooms.find((classroom) => classroom.id === requestedClassroomId)?.id ??
+    account?.activeClassroom?.id;
   if (!classroomId) throw new NotFoundError("classroom not found");
   const access = await assertTeacherCanAccessStudent(classroomId, user.id, studentId, getRepository());
   const songs = await listSongs(studentId);
@@ -25,11 +27,16 @@ async function loadStudent(studentId: string) {
 
 export default async function ClassroomStudentPage({
   params,
-}: { params: Promise<{ studentId: string }> }) {
+  searchParams,
+}: {
+  params: Promise<{ studentId: string }>;
+  searchParams: Promise<{ classroomId?: string }>;
+}) {
   const { studentId } = await params;
+  const { classroomId } = await searchParams;
   let data;
   try {
-    data = await loadStudent(studentId);
+    data = await loadStudent(studentId, classroomId);
   } catch (error) {
     if (error instanceof ForbiddenError) return <SafeError message="この生徒の情報を表示する権限がありません。" />;
     if (error instanceof NotFoundError) return <SafeError message="生徒または教室が見つかりません。" />;

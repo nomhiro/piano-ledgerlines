@@ -374,6 +374,27 @@ export default function ClassroomView({
           {STATUS_LABEL[status] ?? status}
         </span>
       </header>
+      {account.classrooms.length > 1 && (
+        <nav aria-label="教室を選択">
+          <ul className="flex flex-wrap gap-2">
+            {account.classrooms.map((summary) => (
+              <li key={summary.id}>
+                <Link
+                  href={`/classroom?classroomId=${encodeURIComponent(summary.id)}`}
+                  aria-current={summary.id === classroom.classroom.id ? "page" : undefined}
+                  className={`inline-block rounded-lg border px-3 py-2 text-xs ${
+                    summary.id === classroom.classroom.id
+                      ? "border-violet-400 bg-violet-500/15 text-violet-100"
+                      : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--foreground)]"
+                  }`}
+                >
+                  {summary.name}（{summary.role === "owner" ? "オーナー" : summary.role === "teacher" ? "先生" : "生徒"}）
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
       {status === "past_due" && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100" role="status">
           支払いの確認中です。猶予期間中は教室を利用できます。オーナーは支払い方法を確認してください。
@@ -455,7 +476,7 @@ export default function ClassroomView({
                 {member.email && <div className="text-xs text-[var(--muted)]">{member.email}</div>}
               </div>
               {!isStudent && member.role === "student" && canViewStudentData && (
-                <Link href={`/classroom/students/${encodeURIComponent(member.userId)}`} className="button-secondary">詳細を見る</Link>
+                <Link href={`/classroom/students/${encodeURIComponent(member.userId)}?classroomId=${encodeURIComponent(classroom.classroom.id)}`} className="button-secondary">詳細を見る</Link>
               )}
               {classroom.role === "owner" && member.role !== "owner" && (
                 pendingRemoval === member.userId ? (
