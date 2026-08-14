@@ -28,12 +28,12 @@ export default function AppShell({
   account,
 }: {
   children: ReactNode;
-  account: AccountContext;
+  account: AccountContext | null;
 }) {
   const pathname = usePathname();
-  const initials = account.profile.displayName.trim().slice(0, 2) || "LL";
+  const initials = account?.profile.displayName.trim().slice(0, 2) || "LL";
   const classroomName =
-    account.mode === "classroom" ? account.activeClassroom?.name : undefined;
+    account?.mode === "classroom" ? account.activeClassroom?.name : undefined;
 
   return (
     <div className="flex min-h-screen">
@@ -84,8 +84,14 @@ export default function AppShell({
               {initials}
             </div>
             <div className="leading-tight">
-              <div className="text-xs">{account.profile.displayName}</div>
-              <div className="text-[10px] text-[var(--muted)]">{account.profile.email}</div>
+              {account ? (
+                <>
+                  <div className="text-xs">{account.profile.displayName}</div>
+                  <div className="text-[10px] text-[var(--muted)]">{account.profile.email}</div>
+                </>
+              ) : (
+                <div className="text-xs text-[var(--muted)]">ログインが必要です</div>
+              )}
               {classroomName && (
                 <div className="text-[10px] text-[var(--muted)]">{classroomName}</div>
               )}

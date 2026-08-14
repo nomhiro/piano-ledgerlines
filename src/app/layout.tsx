@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
-import { getAccountContext } from "@/lib/server/account";
+import { getAccountContextForLayout } from "@/lib/server/account";
 
 export const metadata: Metadata = {
   title: "Ledger Lines — AIピアノ練習コーチ",
@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const account = await getAccountContext();
+  const account = await getAccountContextForLayout();
   return (
     <html lang="ja">
       <body>

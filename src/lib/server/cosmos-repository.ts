@@ -40,6 +40,12 @@ function conflict(error: unknown): boolean {
     ((error as { code?: number }).code === 409 || (error as { code?: number }).code === 412);
 }
 
+export function cosmosWriteMode(options?: RepositoryWriteOptions): "create" | "replace" | "upsert" {
+  if (options?.ifNoneMatch) return "create";
+  if (options?.ifMatch) return "replace";
+  return "upsert";
+}
+
 export class CosmosRepository implements Repository {
   private readonly songs: Container;
   private readonly takes: Container;
@@ -227,19 +233,25 @@ export class CosmosRepository implements Repository {
     partitionKey: string,
     options?: RepositoryWriteOptions,
   ): Promise<RepositoryDocument<T>> {
-    if (options?.ifNoneMatch) {
-      const current = await this.readRecord<T>(container, document.id, partitionKey);
-      if (current) throw new RepositoryConflictErrorClass("document already exists");
+    const mode = cosmosWriteMode(options);
+    if (mode === "create") return this.createRecord(container, document, partitionKey);
+    const ifMatch = options?.ifMatch;
+    if (mode === "replace" && !ifMatch) {
+      throw new RepositoryConflictErrorClass("etag is required for replace");
     }
     try {
-      const response = options?.ifMatch
-        ? await container.item(document.id, partitionKey).replace(document, {
-            accessCondition: { type: "IfMatch", condition: options.ifMatch },
+      const response = mode === "replace"
+        ? await container.item(document.id, partitionKey).replace<T>(document, {
+            accessCondition: { type: "IfMatch", condition: ifMatch ?? "" },
           })
         : await container.items.upsert<T>(document);
       return { document: response.resource ?? document, etag: response.etag ?? null };
     } catch (error) {
-      if (conflict(error)) throw new RepositoryConflictErrorClass("etag does not match");
+      if (conflict(error)) {
+        throw new RepositoryConflictErrorClass(
+          cosmosWriteMode(options) === "create" ? "document already exists" : "etag does not match",
+        );
+      }
       throw error;
     }
   }

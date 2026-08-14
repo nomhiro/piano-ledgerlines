@@ -5,13 +5,19 @@ import { redactTelemetry } from "../src/lib/server/observability";
 import { assertTakeTransition } from "../src/lib/server/take-state";
 import { getConfig, resetConfigForTests } from "../src/lib/server/config";
 import { AuthError, getAuthenticatedUser, type AuthenticatedUser } from "../src/lib/server/auth";
-import { buildAccountContext, createUserProfile, normalizeEmail } from "../src/lib/server/account";
+import {
+  buildAccountContext,
+  createUserProfile,
+  getAccountContextForLayout,
+  normalizeEmail,
+} from "../src/lib/server/account";
 import { GET as getAccount } from "../src/app/api/account/route";
 import {
   LocalRepository,
   RepositoryConflictError,
 } from "../src/lib/server/repository";
 import { classroomMemberId } from "../src/lib/server/ids";
+import { cosmosWriteMode } from "../src/lib/server/cosmos-repository";
 import type {
   BillingEventDoc,
   ClassroomDoc,
@@ -269,6 +275,75 @@ test("account context defaults to individual ownership and preserves own-data wr
   assert.equal(context.activeClassroom, null);
   assert.equal(context.entitlement.monthlyTakeLimit, 5);
   assert.equal(context.permissions.canWriteOwnData, true);
+});
+
+test("layout account boundary handles only authentication failures", async () => {
+  assert.equal(
+    await getAccountContextForLayout(async () => {
+      throw new AuthError();
+    }),
+    null,
+  );
+  await assert.rejects(
+    getAccountContextForLayout(async () => {
+      throw new Error("database unavailable");
+    }),
+    /database unavailable/,
+  );
+});
+
+test("LocalRepository compare-and-swap rejects one of two concurrent writers", async () => {
+  const repository = new LocalRepository();
+  const user: AuthenticatedUser = {
+    id: `google:cas_test_${Date.now()}`,
+    roles: [],
+    plan: "free",
+    provider: "google",
+    email: "cas@example.com",
+    displayName: "CAS User",
+    emailVerified: true,
+    isDevelopmentFallback: false,
+  };
+  const original = await repository.upsertUser(createUserProfile(user));
+  const [left, right] = await Promise.allSettled([
+    repository.upsertUserRecord(
+      { ...original, displayName: "Writer A" },
+      { ifMatch: (await repository.getUserRecord(user.id))!.etag! },
+    ),
+    repository.upsertUserRecord(
+      { ...original, displayName: "Writer B" },
+      { ifMatch: (await repository.getUserRecord(user.id))!.etag! },
+    ),
+  ]);
+  assert.equal([left, right].filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal([left, right].filter((result) =>
+    result.status === "rejected" && result.reason instanceof RepositoryConflictError,
+  ).length, 1);
+  const final = await repository.getUser(user.id);
+  assert.ok(final?.displayName === "Writer A" || final?.displayName === "Writer B");
+
+  const createOnlyUser: AuthenticatedUser = { ...user, id: `${user.id}:create-only` };
+  const createOnlyProfile = createUserProfile(createOnlyUser);
+  const [createLeft, createRight] = await Promise.allSettled([
+    repository.upsertUserRecord(createOnlyProfile, { ifNoneMatch: true }),
+    repository.upsertUserRecord(createOnlyProfile, { ifNoneMatch: true }),
+  ]);
+  assert.equal(
+    [createLeft, createRight].filter((result) => result.status === "fulfilled").length,
+    1,
+  );
+  assert.equal(
+    [createLeft, createRight].filter((result) =>
+      result.status === "rejected" && result.reason instanceof RepositoryConflictError,
+    ).length,
+    1,
+  );
+});
+
+test("Cosmos conditional writes select atomic create or replace operations", () => {
+  assert.equal(cosmosWriteMode({ ifNoneMatch: true }), "create");
+  assert.equal(cosmosWriteMode({ ifMatch: "etag" }), "replace");
+  assert.equal(cosmosWriteMode(), "upsert");
 });
 
 test("LocalRepository supports classroom and billing CRUD with deterministic memberships", async () => {

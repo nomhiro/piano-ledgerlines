@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   DATA_DIR,
@@ -124,6 +124,19 @@ async function readJson<T>(filePath: string): Promise<T> {
 async function writeJson(filePath: string, data: unknown): Promise<void> {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
+}
+
+async function writeJsonAtomically(filePath: string, data: unknown): Promise<void> {
+  await ensureDir(path.dirname(filePath));
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  let renamed = false;
+  try {
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
+    await fs.rename(tempPath, filePath);
+    renamed = true;
+  } finally {
+    if (!renamed) await fs.rm(tempPath, { force: true });
+  }
 }
 
 async function listJsonFiles<T>(dir: string): Promise<T[]> {
@@ -258,15 +271,17 @@ export class LocalRepository implements Repository {
     document: T,
     options?: RepositoryWriteOptions,
   ): Promise<RepositoryDocument<T>> {
-    const current = await this.readDomainRecord<T>(filePath);
-    if (options?.ifNoneMatch && current) throw new RepositoryConflictError("document already exists");
-    if (current) this.assertWriteCondition(current, options);
-    await writeJson(filePath, document);
-    return { document, etag: domainEtag(document) };
+    return withDomainLock(filePath, async () => {
+      const current = await this.readDomainRecord<T>(filePath);
+      if (options?.ifNoneMatch && current) throw new RepositoryConflictError("document already exists");
+      this.assertWriteCondition(current, options);
+      await writeJsonAtomically(filePath, document);
+      return { document, etag: domainEtag(document) };
+    });
   }
 
-  private assertWriteCondition<T>(current: RepositoryDocument<T>, options?: RepositoryWriteOptions): void {
-    if (options?.ifMatch && options.ifMatch !== current.etag) {
+  private assertWriteCondition<T>(current: RepositoryDocument<T> | null, options?: RepositoryWriteOptions): void {
+    if (options?.ifMatch && (!current || options.ifMatch !== current.etag)) {
       throw new RepositoryConflictError("etag does not match");
     }
   }
@@ -478,6 +493,39 @@ function isEnoent(error: unknown): boolean {
 
 function domainEtag(document: unknown): string {
   return createHash("sha256").update(JSON.stringify(document)).digest("hex");
+}
+
+const DOMAIN_LOCK_TIMEOUT_MS = 5_000;
+const DOMAIN_LOCK_RETRY_MS = 25;
+
+async function withDomainLock<T>(filePath: string, action: () => Promise<T>): Promise<T> {
+  const lockPath = `${filePath}.lock`;
+  await ensureDir(path.dirname(filePath));
+  const deadline = Date.now() + DOMAIN_LOCK_TIMEOUT_MS;
+  let lockHandle: FileHandle | undefined;
+  while (!lockHandle) {
+    try {
+      lockHandle = await fs.open(lockPath, "wx");
+    } catch (error) {
+      if (!isFileExists(error)) throw error;
+      if (Date.now() >= deadline) {
+        throw new RepositoryConflictError("timed out acquiring repository lock");
+      }
+      await new Promise((resolve) => setTimeout(resolve, DOMAIN_LOCK_RETRY_MS));
+    }
+  }
+
+  try {
+    return await action();
+  } finally {
+    await lockHandle.close();
+    await fs.rm(lockPath, { force: true });
+  }
+}
+
+function isFileExists(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    (error as { code?: string }).code === "EEXIST";
 }
 
 let repository: Repository | undefined;

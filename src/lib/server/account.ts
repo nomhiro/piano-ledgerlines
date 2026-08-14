@@ -1,5 +1,5 @@
 import type { AuthenticatedUser } from "./auth";
-import { getAuthenticatedServerUser } from "./auth";
+import { AuthError, getAuthenticatedServerUser } from "./auth";
 import { getRepository, type Repository } from "./repository";
 import type {
   ClassroomContractStatus,
@@ -197,4 +197,15 @@ export async function getAccountContext(
     members.push(member);
   }
   return buildAccountContext(authenticatedUser, profile, classrooms, members);
+}
+
+export async function getAccountContextForLayout(
+  load: () => Promise<AccountContext> = () => getAccountContext(),
+): Promise<AccountContext | null> {
+  try {
+    return await load();
+  } catch (error) {
+    if (error instanceof AuthError) return null;
+    throw error;
+  }
 }
