@@ -118,6 +118,10 @@ export default function ClassroomView({
   const confirmationRef = useRef<HTMLButtonElement>(null);
   const activeConfirmationTriggerRef = useRef<HTMLButtonElement | null>(null);
   const previousConfirmation = useRef<string | null>(null);
+  const confirmationSuccessTarget = useRef<"members" | "invitations" | "leave" | null>(null);
+  const membersHeadingRef = useRef<HTMLHeadingElement>(null);
+  const invitationsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const leaveHeadingRef = useRef<HTMLHeadingElement>(null);
   const [leftClassroom, setLeftClassroom] = useState(false);
   const router = useRouter();
 
@@ -157,6 +161,8 @@ export default function ClassroomView({
     setPendingRemoval(null);
     setPendingRevoke(null);
     setConfirmLeave(false);
+    confirmationSuccessTarget.current = null;
+    activeConfirmationTriggerRef.current = null;
     setBusy(null);
     setName("");
     setEmail("");
@@ -190,11 +196,19 @@ export default function ClassroomView({
     if (confirmationKey) {
       confirmationRef.current?.focus();
     } else if (previousConfirmation.current) {
-      if (activeConfirmationTriggerRef.current?.isConnected) {
+      const successTarget = confirmationSuccessTarget.current;
+      if (successTarget === "members") {
+        membersHeadingRef.current?.focus();
+      } else if (successTarget === "invitations") {
+        invitationsHeadingRef.current?.focus();
+      } else if (successTarget === "leave") {
+        leaveHeadingRef.current?.focus();
+      } else if (activeConfirmationTriggerRef.current?.isConnected) {
         activeConfirmationTriggerRef.current.focus();
       } else {
         document.getElementById("classroom-heading")?.focus();
       }
+      confirmationSuccessTarget.current = null;
       activeConfirmationTriggerRef.current = null;
     }
     previousConfirmation.current = confirmationKey;
@@ -288,9 +302,11 @@ export default function ClassroomView({
     try {
       await apiJson(`/api/classrooms/${classroom.classroom.id}/members/${userId}`, { method: "DELETE" });
       setMembers((current) => current.filter((member) => member.userId !== userId));
+      confirmationSuccessTarget.current = "members";
       setPendingRemoval(null);
       setMessage("メンバーを削除しました。");
     } catch (caught) {
+      setPendingRemoval(null);
       setError(caught instanceof Error ? caught.message : "メンバーを削除できませんでした。");
     } finally {
       setBusy(null);
@@ -307,8 +323,11 @@ export default function ClassroomView({
           { method: action === "resend" ? "POST" : "DELETE" },
         );
         await loadClassroom(classroom.classroom.id);
+        if (action === "revoke") confirmationSuccessTarget.current = "invitations";
+        if (action === "revoke") setPendingRevoke(null);
         setMessage(action === "resend" ? "招待を再送しました。" : "招待を取り消しました。");
       } catch (caught) {
+        if (action === "revoke") setPendingRevoke(null);
         setError(caught instanceof Error ? caught.message : "招待を更新できませんでした。");
       } finally {
         setBusy(null);
@@ -324,10 +343,12 @@ export default function ClassroomView({
       setClassroom(null);
       setMembers([]);
       setLeftClassroom(true);
+      confirmationSuccessTarget.current = "leave";
       setConfirmLeave(false);
       setMessage("教室から退出しました。練習データは個人利用として保持されます。");
       router.refresh();
     } catch (caught) {
+      setConfirmLeave(false);
       setError(caught instanceof Error ? caught.message : "退出できませんでした。");
     } finally {
       setBusy(null);
@@ -370,7 +391,7 @@ export default function ClassroomView({
   if (leftClassroom) {
     return (
       <section className="space-y-4" role="status" aria-live="polite">
-        <h1 className="text-2xl font-bold">教室から退会しました</h1>
+        <h1 ref={leaveHeadingRef} tabIndex={-1} className="text-2xl font-bold">教室から退会しました</h1>
         <p className="text-sm text-[var(--muted)]">
           曲・録音・テイクは個人利用のデータとして残っています。
         </p>
@@ -577,7 +598,7 @@ export default function ClassroomView({
 
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">
         <div className="border-b border-[var(--border)] p-4">
-          <h2 className="font-semibold">{isStudent ? "先生" : "メンバー"}</h2>
+          <h2 ref={membersHeadingRef} tabIndex={-1} className="font-semibold">{isStudent ? "先生" : "メンバー"}</h2>
         </div>
         <ul className="divide-y divide-[var(--border)]">
           {(isStudent ? teachers : visibleMembers).map((member, index) => (
@@ -638,7 +659,7 @@ export default function ClassroomView({
 
       {!isStudent && (
         <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
-          <h2 className="font-semibold">招待</h2>
+          <h2 ref={invitationsHeadingRef} tabIndex={-1} className="font-semibold">招待</h2>
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <label className="min-w-[220px] flex-1 text-sm" htmlFor="invite-email">
               招待先メールアドレス
@@ -694,7 +715,6 @@ export default function ClassroomView({
                           aria-describedby={`revoke-description-${invitation.id}`}
                           disabled={busy !== null}
                           onClick={() => {
-                            setPendingRevoke(null);
                             void updateInvitation(invitation.id, "revoke");
                           }}
                           className="text-red-300 hover:underline"
