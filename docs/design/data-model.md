@@ -123,6 +123,9 @@ work/{takeId}/preprocessed.wav
 `ClassroomMemberDoc`、`ClassroomInvitationDoc`、`BillingEventDoc` が
 Cosmos/Local共通の永続化型である。契約・招待送信・Stripe webhook処理は後続層が実装する。
 `RepositoryWriteOptions.ifMatch` と `RepositoryDocument.etag` により、更新競合を明示的に扱う。
+Localのdomain record更新は `proper-lockfile` のWindows対応atomic lock directory、
+mtime lease、stale recovery、bounded retry/release契約を使い、独自のlockPath
+rename/deleteは行わない。lockは短いread/check/atomic rename critical sectionだけを保護する。
 
 ---
 

@@ -11,11 +11,13 @@ import {
   createUserProfile,
   getAccountContextForLayout,
   normalizeEmail,
+  upsertAuthenticatedUserProfile,
 } from "../src/lib/server/account";
 import { GET as getAccount } from "../src/app/api/account/route";
 import {
   LocalRepository,
   RepositoryConflictError,
+  type RepositoryWriteOptions,
 } from "../src/lib/server/repository";
 import { classroomMemberId } from "../src/lib/server/ids";
 import {
@@ -28,6 +30,7 @@ import type {
   ClassroomDoc,
   ClassroomInvitationDoc,
   ClassroomMemberDoc,
+  UserProfileDoc,
 } from "../src/lib/server/types";
 
 const input: CoachInput = {
@@ -297,6 +300,63 @@ test("layout account boundary handles only authentication failures", async () =>
   );
 });
 
+test("profile synchronization preserves concurrent settings and classroom refs", async () => {
+  class MembershipRaceRepository extends LocalRepository {
+    private injectConcurrentUpdate = false;
+    private injected = false;
+
+    armConcurrentUpdate(): void {
+      this.injectConcurrentUpdate = true;
+    }
+
+    override async upsertUserRecord(
+      user: UserProfileDoc,
+      options?: RepositoryWriteOptions,
+    ) {
+      if (this.injectConcurrentUpdate && !this.injected) {
+        this.injected = true;
+        const latest = await super.getUserRecord(user.id);
+        assert.ok(latest?.etag);
+        await super.upsertUserRecord(
+          {
+            ...latest.document,
+            settings: { ...latest.document.settings, dailyPracticeMinutes: 50 },
+            classroomRefs: [
+              { classroomId: "classroom-race", role: "teacher", status: "active" },
+            ],
+          },
+          { ifMatch: latest.etag },
+        );
+      }
+      return super.upsertUserRecord(user, options);
+    }
+  }
+
+  const repository = new MembershipRaceRepository();
+  const user: AuthenticatedUser = {
+    id: `google:profile_race_test_${Date.now()}`,
+    roles: [],
+    plan: "free",
+    provider: "google",
+    email: "profile-race@example.com",
+    displayName: "Profile Race User",
+    emailVerified: true,
+    isDevelopmentFallback: false,
+  };
+  await repository.upsertUser(createUserProfile(user));
+  repository.armConcurrentUpdate();
+  const synced = await upsertAuthenticatedUserProfile(
+    { ...user, email: "updated-profile-race@example.com", displayName: "Updated Profile Race User" },
+    repository,
+  );
+  assert.equal(synced.email, "updated-profile-race@example.com");
+  assert.equal(synced.displayName, "Updated Profile Race User");
+  assert.equal(synced.settings.dailyPracticeMinutes, 50);
+  assert.deepEqual(synced.classroomRefs, [
+    { classroomId: "classroom-race", role: "teacher", status: "active" },
+  ]);
+});
+
 test("LocalRepository compare-and-swap rejects one of two concurrent writers", async () => {
   const repository = new LocalRepository();
   const user: AuthenticatedUser = {
@@ -369,12 +429,7 @@ test("LocalRepository recovers a stale leased domain lock", async () => {
   const profile = createUserProfile(user);
   await repository.upsertUser(profile);
   const lockPath = `${userDocPath(user.id)}.lock`;
-  await fs.writeFile(lockPath, JSON.stringify({
-    ownerToken: "crashed-process",
-    pid: 999999,
-    createdAt: 0,
-    expiresAt: 1,
-  }), "utf8");
+  await fs.mkdir(lockPath);
   const staleAt = new Date(Date.now() - 120_000);
   await fs.utimes(lockPath, staleAt, staleAt);
 

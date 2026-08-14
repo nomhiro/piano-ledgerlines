@@ -1,6 +1,10 @@
 import type { AuthenticatedUser } from "./auth";
 import { AuthError, getAuthenticatedServerUser } from "./auth";
-import { getRepository, type Repository } from "./repository";
+import {
+  getRepository,
+  RepositoryConflictError,
+  type Repository,
+} from "./repository";
 import type {
   ClassroomContractStatus,
   ClassroomDoc,
@@ -93,19 +97,40 @@ export async function upsertAuthenticatedUserProfile(
   repository: Repository = getRepository(),
   now = new Date().toISOString(),
 ): Promise<UserProfileDoc> {
-  const existing = await repository.getUser(user.id);
-  const next: UserProfileDoc = existing
-    ? {
-        ...existing,
-        email: user.email,
-        normalizedEmail: normalizeEmail(user.email),
-        displayName: user.displayName,
-        provider: user.provider,
-        providerSyncedAt: now,
-        updatedAt: now,
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const existing = await repository.getUserRecord(user.id);
+    if (!existing) {
+      try {
+        return await repository.upsertUser(createUserProfile(user, now), { ifNoneMatch: true });
+      } catch (error) {
+        if (!(error instanceof RepositoryConflictError) || attempt === maxAttempts - 1) {
+          throw error;
+        }
+        continue;
       }
-    : createUserProfile(user, now);
-  return repository.upsertUser(next);
+    }
+
+    const next: UserProfileDoc = {
+      ...existing.document,
+      email: user.email,
+      normalizedEmail: normalizeEmail(user.email),
+      displayName: user.displayName,
+      provider: user.provider,
+      providerSyncedAt: now,
+      updatedAt: now,
+    };
+    try {
+      return await repository.upsertUserRecord(next, { ifMatch: existing.etag ?? undefined }).then(
+        (result) => result.document,
+      );
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError) || attempt === maxAttempts - 1) {
+        throw error;
+      }
+    }
+  }
+  throw new RepositoryConflictError("user profile synchronization retries exhausted");
 }
 
 export function buildAccountContext(
