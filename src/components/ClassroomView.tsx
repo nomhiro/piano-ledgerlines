@@ -107,18 +107,17 @@ export default function ClassroomView({
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [pendingRevoke, setPendingRevoke] = useState<string | null>(null);
+  const [nameError, setNameError] = useState("");
+  const [emailError, setEmailError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [invitationError, setInvitationError] = useState("");
   const loadedClassroomId = useRef<string | null>(null);
   const loadVersion = useRef(0);
-  const removalConfirmRef = useRef<HTMLButtonElement>(null);
-  const removalTriggerRef = useRef<HTMLButtonElement>(null);
-  const revokeConfirmRef = useRef<HTMLButtonElement>(null);
-  const revokeTriggerRef = useRef<HTMLButtonElement>(null);
-  const previousRemoval = useRef<string | null>(null);
-  const previousRevoke = useRef<string | null>(null);
+  const confirmationRef = useRef<HTMLButtonElement>(null);
+  const activeConfirmationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const previousConfirmation = useRef<string | null>(null);
   const [leftClassroom, setLeftClassroom] = useState(false);
   const router = useRouter();
 
@@ -162,6 +161,8 @@ export default function ClassroomView({
     setName("");
     setEmail("");
     setInviteRole("student");
+    setNameError("");
+    setEmailError("");
     setMessage("");
     setError("");
     setInvitationError("");
@@ -177,23 +178,27 @@ export default function ClassroomView({
     };
   }, [initialClassroom?.id, loadClassroom]);
 
-  useEffect(() => {
-    if (pendingRemoval) {
-      removalConfirmRef.current?.focus();
-    } else if (previousRemoval.current && removalTriggerRef.current?.isConnected) {
-      removalTriggerRef.current.focus();
-    }
-    previousRemoval.current = pendingRemoval;
-  }, [pendingRemoval]);
+  const confirmationKey = pendingRemoval
+    ? `remove:${pendingRemoval}`
+    : pendingRevoke
+      ? `revoke:${pendingRevoke}`
+      : confirmLeave
+        ? "leave"
+        : null;
 
   useEffect(() => {
-    if (pendingRevoke) {
-      revokeConfirmRef.current?.focus();
-    } else if (previousRevoke.current && revokeTriggerRef.current?.isConnected) {
-      revokeTriggerRef.current.focus();
+    if (confirmationKey) {
+      confirmationRef.current?.focus();
+    } else if (previousConfirmation.current) {
+      if (activeConfirmationTriggerRef.current?.isConnected) {
+        activeConfirmationTriggerRef.current.focus();
+      } else {
+        document.getElementById("classroom-heading")?.focus();
+      }
+      activeConfirmationTriggerRef.current = null;
     }
-    previousRevoke.current = pendingRevoke;
-  }, [pendingRevoke]);
+    previousConfirmation.current = confirmationKey;
+  }, [confirmationKey]);
 
   async function runBilling(action: "checkout" | "billing-portal") {
     if (!classroom) return;
@@ -218,6 +223,11 @@ export default function ClassroomView({
   }
 
   async function createClassroom() {
+    if (!name.trim()) {
+      setNameError("教室名を入力してください。");
+      return;
+    }
+    setNameError("");
     setBusy("create");
     setError("");
     try {
@@ -247,7 +257,12 @@ export default function ClassroomView({
   }
 
   async function invite() {
-    if (!classroom || !email.trim()) return;
+    if (!classroom) return;
+    if (!email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setEmailError("有効なメールアドレスを入力してください。");
+      return;
+    }
+    setEmailError("");
     setBusy("invite");
     setError("");
     try {
@@ -320,7 +335,11 @@ export default function ClassroomView({
   }
 
   async function updateName() {
-    if (!classroom || !name.trim()) return;
+    if (!classroom || !name.trim()) {
+      setNameError("教室名を入力してください。");
+      return;
+    }
+    setNameError("");
     setBusy("rename");
     setError("");
     try {
@@ -377,15 +396,19 @@ export default function ClassroomView({
           <input
             id="classroom-name"
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => {
+              setName(event.target.value);
+              if (nameError) setNameError("");
+            }}
             required
             maxLength={120}
             className="input mt-2"
             placeholder="〇〇ピアノ教室"
-            aria-describedby="classroom-create-help"
-            aria-invalid={Boolean(error)}
+            aria-describedby={`classroom-create-help${nameError ? " classroom-create-error" : ""}`}
+            aria-invalid={nameError ? "true" : undefined}
           />
           <p id="classroom-create-help" className="mt-1 text-xs text-[var(--muted)]">1文字以上120文字以内で入力してください。</p>
+          {nameError && <p id="classroom-create-error" className="text-sm text-red-300" role="alert">{nameError}</p>}
           <button disabled={busy !== null || !name.trim()} className="mt-4 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50">
             {busy === "create" ? "作成中…" : "教室を作成"}
           </button>
@@ -405,11 +428,20 @@ export default function ClassroomView({
             type="button"
             className="button-secondary"
             onClick={() => {
+              const id = initialClassroom.id;
               setError("");
-              loadedClassroomId.current = null;
+              loadedClassroomId.current = id;
+              const version = ++loadVersion.current;
+              setClassroom(null);
+              setBusy("load");
+              void loadClassroom(id, version)
+                .catch((caught) => {
+                  setError(caught instanceof Error ? caught.message : "教室情報を読み込めませんでした。");
+                })
+                .finally(() => setBusy(null));
             }}
           >
-            再試行
+            {busy === "load" ? "読み込み中…" : "再試行"}
           </button>
         </div>
       );
@@ -432,7 +464,7 @@ export default function ClassroomView({
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-xs text-[var(--muted)]">教室 / {classroom.role === "owner" ? "オーナー" : classroom.role === "teacher" ? "先生" : "生徒"}</p>
-          <h1 className="text-2xl font-bold">{classroom.classroom.name}</h1>
+          <h1 id="classroom-heading" tabIndex={-1} className="text-2xl font-bold">{classroom.classroom.name}</h1>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs ${status === "past_due" ? "bg-amber-500/15 text-amber-200" : "bg-violet-500/15 text-violet-200"}`}>
           {STATUS_LABEL[status] ?? status}
@@ -487,16 +519,20 @@ export default function ClassroomView({
                 <input
                   className="input mt-1"
                   value={name}
-                  onChange={(event) => setName(event.target.value)}
+                  onChange={(event) => {
+                    setName(event.target.value);
+                    if (nameError) setNameError("");
+                  }}
                   maxLength={120}
                   required
-                  aria-describedby="classroom-name-help"
-                  aria-invalid={Boolean(error)}
+                  aria-describedby={`classroom-name-help${nameError ? " classroom-name-error" : ""}`}
+                  aria-invalid={nameError ? "true" : undefined}
                 />
               </label>
               <span id="classroom-name-help" className="sr-only">
                 1文字以上120文字以内で入力してください。
               </span>
+              {nameError && <p id="classroom-name-error" className="text-sm text-red-300" role="alert">{nameError}</p>}
               <button type="submit" disabled={busy !== null || !name.trim()} className="button-secondary self-end">
                 {busy === "rename" ? "更新中…" : "教室名を更新"}
               </button>
@@ -559,11 +595,16 @@ export default function ClassroomView({
               )}
               {classroom.role === "owner" && member.role !== "owner" && member.userId && (
                 pendingRemoval === member.userId ? (
-                  <span className="flex items-center gap-2 text-xs" role="alert" aria-live="assertive">
+                  <span className="flex items-center gap-2 text-xs" role="alert" aria-live="assertive" onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setPendingRemoval(null);
+                    }
+                  }}>
                     <span>除籍しますか？</span>
                     <button
                       type="button"
-                      ref={removalConfirmRef}
+                      ref={confirmationRef}
                       aria-describedby={`remove-description-${member.userId}`}
                       disabled={busy !== null}
                       onClick={() => {
@@ -579,8 +620,13 @@ export default function ClassroomView({
                     </button>
                   </span>
                 ) : (
-                  <button type="button" ref={removalTriggerRef} disabled={busy !== null} onClick={() => {
-                    if (member.userId) setPendingRemoval(member.userId);
+                  <button type="button" disabled={busy !== null} onClick={(event) => {
+                  if (member.userId) {
+                    activeConfirmationTriggerRef.current = event.currentTarget;
+                    setPendingRevoke(null);
+                    setConfirmLeave(false);
+                    setPendingRemoval(member.userId);
+                  }
                   }} className="text-xs text-red-300 hover:underline">除籍</button>
                 )
               )}
@@ -596,9 +642,22 @@ export default function ClassroomView({
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <label className="min-w-[220px] flex-1 text-sm" htmlFor="invite-email">
               招待先メールアドレス
-              <input id="invite-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="input mt-1" required aria-describedby="invite-email-help" />
+              <input
+                id="invite-email"
+                type="email"
+                value={email}
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  if (emailError) setEmailError("");
+                }}
+                className="input mt-1"
+                required
+                aria-describedby={`invite-email-help${emailError ? " invite-email-error" : ""}`}
+                aria-invalid={emailError ? "true" : undefined}
+              />
             </label>
             <span id="invite-email-help" className="sr-only">招待を送る相手のメールアドレスを入力してください。</span>
+            {emailError && <span id="invite-email-error" className="text-sm text-red-300" role="alert">{emailError}</span>}
             {classroom.role === "owner" && (
               <label className="text-sm">
                 役割
@@ -623,10 +682,15 @@ export default function ClassroomView({
                   {(invitation.status === "pending" || invitation.deliveryStatus === "failed") && <button type="button" disabled={busy !== null} onClick={() => void updateInvitation(invitation.id, "resend")} className="text-violet-300 hover:underline">再送</button>}
                   {classroom.role === "owner" && invitation.status !== "revoked" && (
                     pendingRevoke === invitation.id ? (
-                      <span className="flex items-center gap-2" role="alert" aria-live="assertive">
+                      <span className="flex items-center gap-2" role="alert" aria-live="assertive" onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setPendingRevoke(null);
+                        }
+                      }}>
                         <button
                           type="button"
-                          ref={revokeConfirmRef}
+                          ref={confirmationRef}
                           aria-describedby={`revoke-description-${invitation.id}`}
                           disabled={busy !== null}
                           onClick={() => {
@@ -641,7 +705,12 @@ export default function ClassroomView({
                         <button type="button" onClick={() => setPendingRevoke(null)} className="hover:underline">戻る</button>
                       </span>
                     ) : (
-                      <button type="button" ref={revokeTriggerRef} disabled={busy !== null} onClick={() => setPendingRevoke(invitation.id)} className="text-red-300 hover:underline">取消</button>
+                      <button type="button" disabled={busy !== null} onClick={(event) => {
+                        activeConfirmationTriggerRef.current = event.currentTarget;
+                        setPendingRemoval(null);
+                        setConfirmLeave(false);
+                        setPendingRevoke(invitation.id);
+                      }} className="text-red-300 hover:underline">取消</button>
                     )
                   )}
                 </span>
@@ -657,11 +726,35 @@ export default function ClassroomView({
           <h2 className="font-semibold">教室から退出</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">退出後も自分の練習データと曲は個人利用として保持されます。</p>
           {!confirmLeave ? (
-            <button type="button" onClick={() => setConfirmLeave(true)} className="mt-3 text-sm text-red-300 hover:underline">退出する</button>
+            <button
+              type="button"
+              onClick={(event) => {
+                activeConfirmationTriggerRef.current = event.currentTarget;
+                setPendingRemoval(null);
+                setPendingRevoke(null);
+                setConfirmLeave(true);
+              }}
+              className="mt-3 text-sm text-red-300 hover:underline"
+            >
+              退出する
+            </button>
           ) : (
-          <div className="mt-3 rounded-lg border border-red-500/30 p-3" role="alert" aria-describedby="leave-description">
+          <div
+            className="mt-3 rounded-lg border border-red-500/30 p-3"
+            role="alert"
+            aria-describedby="leave-description"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setConfirmLeave(false);
+              }
+            }}
+          >
             <p id="leave-description" className="text-sm">本当に退出しますか？教室のメンバー一覧から外れます。練習データと曲は個人利用として保持されます。</p>
-            <div className="mt-3 flex gap-2"><button type="button" disabled={busy !== null} onClick={() => void leave()} className="button-danger">退出を確定</button><button type="button" onClick={() => setConfirmLeave(false)} className="button-secondary">キャンセル</button></div>
+            <div className="mt-3 flex gap-2">
+              <button type="button" ref={confirmationRef} disabled={busy !== null} onClick={() => void leave()} className="button-danger">退出を確定</button>
+              <button type="button" onClick={() => setConfirmLeave(false)} className="button-secondary">キャンセル</button>
+            </div>
             </div>
           )}
         </section>

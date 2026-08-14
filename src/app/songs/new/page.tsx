@@ -106,7 +106,18 @@ export default function NewSongPage() {
             <div className="p-5">
               {phase === "idle" ? (
                 <>
-                  <label className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-[#3b4560] bg-[var(--surface-2)] px-6 py-12 text-center transition-colors hover:border-violet-500">
+                  <div className="relative">
+                    <input
+                      id="score-file-input"
+                      type="file"
+                      className="peer sr-only"
+                      accept=".musicxml,.xml,.mxl,.mid,.midi,.pdf,application/pdf"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleFile(f);
+                      }}
+                    />
+                    <label htmlFor="score-file-input" className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-[#3b4560] bg-[var(--surface-2)] px-6 py-12 text-center transition-colors hover:border-violet-500 peer-focus-visible:outline peer-focus-visible:outline-3 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-violet-300">
                     <Upload size={30} className="text-violet-400" aria-hidden="true" />
                     <div>
                       <div className="text-sm font-medium">
@@ -116,16 +127,8 @@ export default function NewSongPage() {
                         またはクリックしてファイルを選択
                       </div>
                     </div>
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept=".musicxml,.xml,.mxl,.mid,.midi,.pdf,application/pdf"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void handleFile(f);
-                      }}
-                    />
-                  </label>
+                    </label>
+                  </div>
                   <div className="mt-3 text-center">
                     <button
                       type="button"
