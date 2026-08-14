@@ -29,12 +29,18 @@ export default function ShareView({
   takes,
   comments: initialComments,
   assignments: initialAssignments,
+  viewerDisplayName,
+  teacherDisplayName,
+  classroomName,
 }: {
   songs: Song[];
   song: Song;
   takes: Take[];
   comments: TeacherComment[];
   assignments: Assignment[];
+  viewerDisplayName?: string;
+  teacherDisplayName?: string | null;
+  classroomName?: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   const [comments, setComments] = useState(initialComments);
@@ -44,6 +50,7 @@ export default function ShareView({
   const latest = takes[takes.length - 1];
   const shareUrl = `https://ledgerlines.app/s/${song.id}-7f3a9c`;
   const nextId = useRef(0);
+  const viewerName = viewerDisplayName?.trim() || "あなた";
 
   function post() {
     if (!body.trim()) return;
@@ -55,7 +62,7 @@ export default function ShareView({
         songId: song.id,
         takeId: latest.id,
         measure: pinned === "" ? null : Number(pinned),
-        author: "野村 大樹",
+        author: viewerName,
         role: "student",
         body,
         createdAt: "2026-07-25T13:40:00+09:00",
@@ -143,9 +150,9 @@ export default function ShareView({
                   <Users size={16} />
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm">白鳥 玲子 先生</div>
+                  <div className="text-sm">{teacherDisplayName?.trim() || "共有先の先生"}</div>
                   <div className="text-[11px] text-[var(--muted)]">
-                    白鳥ピアノ教室 ・ 最終閲覧 2026/07/25 09:15
+                    {classroomName?.trim() || "教室未設定"} ・ 共有設定を確認してください
                   </div>
                 </div>
                 <Badge color="#22c55e">閲覧済み</Badge>
@@ -176,7 +183,7 @@ export default function ShareView({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-semibold">{c.author}</span>
+                      <span className="text-xs font-semibold">{c.role === "teacher" ? "先生" : viewerName}</span>
                       {c.measure !== null && (
                         <Badge color="#a78bfa">{c.measure} 小節</Badge>
                       )}
@@ -289,7 +296,7 @@ export default function ShareView({
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4">
                 <div className="text-xs font-semibold">{song.title}</div>
                 <div className="text-[10px] text-[var(--muted)]">
-                  {song.composer} ・ 野村 大樹さんの練習レポート
+                  {song.composer} ・ {viewerName}さんの練習レポート
                 </div>
                 <div className="mt-3 flex items-center gap-3">
                   <ScoreRing score={latest.overallScore} size={56} />

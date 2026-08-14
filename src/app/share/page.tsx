@@ -10,6 +10,7 @@ import {
 import ShareView from "@/components/ShareView";
 import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
 import { toHistorySong, toHistoryTake } from "@/lib/real-history";
+import { getAccountContextForLayout } from "@/lib/server/account";
 
 export default async function SharePage({
   searchParams,
@@ -18,6 +19,7 @@ export default async function SharePage({
 }) {
   const { song: songId } = await searchParams;
   const realSongs = await listRealSongs();
+  const account = await getAccountContextForLayout();
   const selectableSongs = [...realSongs.map(toHistorySong), ...songs];
   const selectedId = songId && selectableSongs.some((candidate) => candidate.id === songId)
     ? songId
@@ -38,6 +40,8 @@ export default async function SharePage({
           takes={takes}
           comments={[]}
           assignments={[]}
+          viewerDisplayName={account?.profile.displayName}
+          classroomName={account?.activeClassroom?.name}
         />
       </Suspense>
     );
@@ -55,6 +59,8 @@ export default async function SharePage({
         takes={takes}
         comments={getCommentsForSong(song.id)}
         assignments={getAssignmentsForSong(song.id)}
+        viewerDisplayName={account?.profile.displayName}
+        classroomName={account?.activeClassroom?.name}
       />
     </Suspense>
   );

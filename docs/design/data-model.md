@@ -1,5 +1,17 @@
 # データモデル設計 — Ledger Lines
 
+## 教室 UI のデータ境界
+
+`user` の `email` と `displayName` は認証プロバイダーから同期する。教室画面のメンバー
+レスポンスはロールに応じて安全な表示名だけを返し、メールアドレスはオーナーに限って返す。
+`classroom-member` は `owner` / `teacher` / `student` と世代付きの状態遷移
+(`provisioning` → `active` → `removing` → `removed`) を持つ。
+`billableStudentCount` と `teacherLimit` は請求・予約処理が確定した値であり、UI の表示用に
+再計算 API (`POST /classrooms/{id}/reconciliation`) を提供する。
+
+退出した生徒の個人 `song` / `take` / 音声は削除せず、教室参照だけを削除する。
+削除・保持期間はユーザーのデータ削除要求と Blob ライフサイクル規則に従う。
+
 | 項目 | 内容 |
 |---|---|
 | ドキュメントID | DESIGN-DATA |

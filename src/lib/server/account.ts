@@ -1,4 +1,6 @@
 import type { AuthenticatedUser } from "./auth";
+export { safeAccountDisplayName, getAvatarLabel } from "@/lib/account-view-model";
+import { safeAccountDisplayName } from "@/lib/account-view-model";
 import { AuthError, getAuthenticatedServerUser } from "./auth";
 import { classroomHasPaidEntitlement } from "./billing";
 import {
@@ -179,7 +181,7 @@ export function buildAccountContext(
     profile: {
       id: profile.id,
       email: profile.email,
-      displayName: profile.displayName,
+      displayName: safeAccountDisplayName(profile.displayName, profile.email),
       provider: profile.provider,
       settings: profile.settings,
     },

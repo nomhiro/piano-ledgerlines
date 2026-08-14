@@ -58,7 +58,7 @@ function userFromClaims(claims: JWTPayload): AuthenticatedUser {
     [claimFromJwt(claims, "given_name"), claimFromJwt(claims, "family_name")]
       .filter(Boolean)
       .join(" ");
-  if (!displayName) throw new AuthError("token display name claim is missing");
+  const resolvedDisplayName = displayName ?? email.split("@", 1)[0] ?? "Ledger Lines ユーザー";
   const roles = Array.isArray(claims.roles)
     ? claims.roles.filter((role): role is string => typeof role === "string")
     : [];
@@ -75,7 +75,7 @@ function userFromClaims(claims: JWTPayload): AuthenticatedUser {
     plan,
     provider: "entra",
     email,
-    displayName,
+    displayName: resolvedDisplayName,
     emailVerified: claims.email_verified === true,
     isDevelopmentFallback: false,
   };
@@ -163,7 +163,8 @@ function userFromEasyAuthHeader(
         )
       )
       .find(Boolean);
-  if (!displayName) throw new AuthError("Easy Auth display name claim is missing");
+  const resolvedDisplayName =
+    displayName ?? email.split("@", 1)[0] ?? "Ledger Lines ユーザー";
   const normalizedProvider = provider.toLowerCase();
   const authProvider =
     normalizedProvider === "google"
@@ -178,7 +179,7 @@ function userFromEasyAuthHeader(
     plan: "free",
     provider: authProvider,
     email,
-    displayName,
+    displayName: resolvedDisplayName,
     emailVerified: claims.some((value) =>
       booleanClaimValue(
         value,

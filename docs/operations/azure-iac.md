@@ -1,5 +1,24 @@
 # Azure リソース管理（Bicep + azd）
 
+## 教室運用チェックリスト
+
+- ロールは `owner`（請求・メンバー管理）、`teacher`（生徒の読み取りと生徒招待）、
+  `student`（自分のデータと先生一覧）に固定し、API でも再検証する。
+- 個人利用には教室データを表示せず、教室作成後は Stripe Checkout を HTTPS の
+  Stripe ホストに限定して遷移する。`past_due` は猶予期間、`canceled`/`inactive` は
+  請求復旧のみとする。
+- 招待と Stripe 操作は `Idempotency-Key`、Cosmos ETag CAS、定期 reconciliation で
+  冪等にする。失敗した招待・課金処理は再送/ポータルから回復し、秘密値や Stripe
+  セッション内部をログに出さない。
+- ユーザーが教室を退出しても曲・録音・楽譜は個人データとして保持し、削除要求時に
+  Cosmos と Blob のユーザープレフィックスを消去する。保持期間と監査ログは環境ごとに
+  定める。
+
+Stripe の webhook は Managed Identity で Key Vault の署名設定を参照する。ACS の送信元
+ドメイン、DNS SPF/DKIM、カスタムドメイン証明書を本番前に検証する。ローカルでは
+`npm run azure:up`、`npm run azure:health` と開発 Stripe/ACS のモック設定を使い、
+決済 URL は実際に遷移せずレスポンスのホスト検証までをテストする。
+
 `infra/main.bicep` はリソースグループスコープの宣言型デプロイです。環境ごとに
 Storage（Blob コンテナと Queue）、Cosmos DB Serverless、Log Analytics /
 Application Insights、Key Vault、ユーザー割り当て Managed Identity と RBAC を作成します。

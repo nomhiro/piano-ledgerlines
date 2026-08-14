@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AccountContext } from "@/lib/server/account";
+import { getAvatarLabel } from "@/lib/account-view-model";
 
 const NAV = [
   { href: "/", label: "ダッシュボード", icon: LayoutDashboard, exact: true },
@@ -23,6 +24,8 @@ const NAV = [
   { href: "/share", label: "先生と共有", icon: Users },
 ];
 
+const CLASSROOM_NAV = { href: "/classroom", label: "教室", icon: Users, exact: false };
+
 export default function AppShell({
   children,
   account,
@@ -31,9 +34,10 @@ export default function AppShell({
   account: AccountContext | null;
 }) {
   const pathname = usePathname();
-  const initials = account?.profile.displayName.trim().slice(0, 2) || "LL";
+  const initials = account ? getAvatarLabel(account.profile.displayName, account.profile.email) : "LL";
   const classroomName =
     account?.mode === "classroom" ? account.activeClassroom?.name : undefined;
+  const nav = account?.mode === "classroom" ? [...NAV, CLASSROOM_NAV] : NAV;
 
   return (
     <div className="flex min-h-screen">
@@ -49,7 +53,7 @@ export default function AppShell({
         </div>
 
         <nav className="flex-1 space-y-1 px-3">
-          {NAV.map((item) => {
+          {nav.map((item) => {
             const active = item.exact
               ? pathname === item.href
               : pathname.startsWith(item.href);
@@ -87,14 +91,14 @@ export default function AppShell({
               {account ? (
                 <>
                   <div className="text-xs">{account.profile.displayName}</div>
-                  <div className="text-[10px] text-[var(--muted)]">{account.profile.email}</div>
+                  <div className="max-w-[160px] truncate text-[10px] text-[var(--muted)]">{account.profile.email}</div>
                 </>
               ) : (
                 <div className="text-xs text-[var(--muted)]">ログインが必要です</div>
               )}
-              {classroomName && (
-                <div className="text-[10px] text-[var(--muted)]">{classroomName}</div>
-              )}
+              <div className="text-[10px] text-[var(--muted)]">
+                {classroomName ?? "個人利用"}
+              </div>
             </div>
           </div>
         </div>
@@ -106,7 +110,7 @@ export default function AppShell({
           <span className="text-sm font-bold">Ledger Lines</span>
         </header>
         <nav className="flex gap-1 overflow-x-auto border-b border-[var(--border)] bg-[var(--surface)] px-2 py-2 md:hidden">
-          {NAV.map((item) => (
+          {nav.map((item) => (
             <Link
               key={item.href}
               href={item.href}
@@ -116,6 +120,14 @@ export default function AppShell({
             </Link>
           ))}
         </nav>
+        {account?.mode !== "classroom" && (
+          <Link
+            href="/classroom"
+            className="mx-3 mb-3 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-center text-xs text-violet-200"
+          >
+            教室を作成・参加する
+          </Link>
+        )}
         <main className="mx-auto max-w-[1180px] px-5 py-7">{children}</main>
       </div>
     </div>

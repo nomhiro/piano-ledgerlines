@@ -263,8 +263,8 @@ export default function NewSongPage() {
               </Field>
               <Field label="先生と共有">
                 <select className="input">
-                  <option>白鳥 玲子 先生と共有する</option>
                   <option>共有しない</option>
+                  <option>教室の先生と共有する</option>
                 </select>
               </Field>
             </div>
