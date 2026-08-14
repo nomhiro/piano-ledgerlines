@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { buildLoginReturnUri, invitationStorageKey } from "./invitation-client";
 
 type State = "loading" | "login" | "success" | "error";
 
@@ -19,16 +20,24 @@ export default function AcceptInvitation() {
   const [message, setMessage] = useState("招待を確認しています…");
 
   useEffect(() => {
-    const values = new URLSearchParams(window.location.hash.slice(1));
-    const classroomId = values.get("classroomId");
-    const invitationId = values.get("invitationId");
-    const secret = values.get("secret");
+    const fragmentValues = new URLSearchParams(window.location.hash.slice(1));
+    const queryValues = new URLSearchParams(window.location.search);
+    const classroomId = fragmentValues.get("classroomId") ?? queryValues.get("classroomId");
+    const invitationId = fragmentValues.get("invitationId") ?? queryValues.get("invitationId");
+    const storageKey = classroomId && invitationId
+      ? invitationStorageKey(classroomId, invitationId)
+      : null;
+    const secret = fragmentValues.get("secret") ??
+      (storageKey ? window.sessionStorage.getItem(storageKey) : null);
     if (!classroomId || !invitationId || !secret) {
       queueMicrotask(() => {
         setState("error");
-        setMessage("招待リンクが不完全です。メールのリンクをそのまま開いてください。");
+        setMessage("招待情報が見つかりません。招待メールのリンクを同じタブで開き直してください。");
       });
       return;
+    }
+    if (fragmentValues.get("secret")) {
+      window.sessionStorage.setItem(storageKey!, secret);
     }
     window.history.replaceState(null, "", window.location.pathname);
     void fetch("/api/classroom-invitations/accept", {
@@ -39,7 +48,14 @@ export default function AcceptInvitation() {
     }).then(async (response) => {
       const body = await response.json() as { error?: { code?: string; message?: string } };
       if (response.status === 401) {
-        const returnUri = `${window.location.origin}${window.location.pathname}#classroomId=${encodeURIComponent(classroomId)}&invitationId=${encodeURIComponent(invitationId)}&secret=${encodeURIComponent(secret)}`;
+        setState("login");
+        setMessage("Googleアカウントでログインしています…");
+        const returnUri = buildLoginReturnUri(
+          window.location.origin,
+          window.location.pathname,
+          classroomId,
+          invitationId,
+        );
         window.location.assign(`/.auth/login/google?post_login_redirect_uri=${encodeURIComponent(returnUri)}`);
         return;
       }
@@ -48,6 +64,7 @@ export default function AcceptInvitation() {
         setMessage(errorMessage(body.error?.code, body.error?.message));
         return;
       }
+      if (storageKey) window.sessionStorage.removeItem(storageKey);
       setState("success");
       setMessage("教室への参加が完了しました。");
     }).catch(() => {

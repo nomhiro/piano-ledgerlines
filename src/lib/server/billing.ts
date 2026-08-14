@@ -725,6 +725,12 @@ export interface SetBillableStudentQuantityInput {
   classroomId: string;
   quantity: number;
   operationVersion: string;
+  /**
+   * Membership sagas use the lease as the serialization point. When enabled,
+   * the quantity is re-read from the authoritative member documents after the
+   * lease is acquired instead of trusting the caller's snapshot.
+   */
+  authoritativeMembershipCount?: boolean;
 }
 
 export interface BillingSagaContract {
@@ -804,6 +810,7 @@ async function finishStudentQuantityLease(
       if (!operation || operation.ownerToken !== ownerToken) {
         throw new BillingInProgressError("student quantity lease is no longer owned");
       }
+
       return {
         ...current,
         billing: {
@@ -820,6 +827,71 @@ async function finishStudentQuantityLease(
     },
     repository,
   );
+}
+
+async function retargetStudentQuantityLease(
+  classroomId: string,
+  ownerToken: string,
+  targetQuantity: number,
+  repository: Repository,
+): Promise<void> {
+  await updateClassroomWithCas(
+    classroomId,
+    (current) => {
+      const operation = current.billing.studentQuantityOperation;
+      if (!operation || operation.ownerToken !== ownerToken || operation.status !== "pending") {
+        throw new BillingInProgressError("student quantity lease is no longer owned");
+      }
+      return {
+        ...current,
+        billing: {
+          ...current.billing,
+          studentQuantityOperation: {
+            ...operation,
+            targetQuantity,
+          },
+        },
+        updatedAt: new Date().toISOString(),
+      };
+    },
+    repository,
+  );
+}
+
+function authoritativeStudentQuantity(
+  members: ClassroomMemberDoc[],
+): number {
+  return members.filter(
+    (member) =>
+      member.role === "student" &&
+      (member.status === "active" ||
+        (member.status === "provisioning" && member.billingDesiredStatus === "active")),
+  ).length;
+}
+
+async function acquireStudentQuantityLeaseForSaga(
+  input: SetBillableStudentQuantityInput,
+  repository: Repository,
+): Promise<{ ownerToken: string; operation: BillingOperationLeaseDoc }> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await acquireStudentQuantityLease(
+        input.classroomId,
+        input.operationVersion,
+        input.quantity,
+        repository,
+      );
+    } catch (error) {
+      if (
+        !input.authoritativeMembershipCount ||
+        !(error instanceof BillingInProgressError) ||
+        attempt >= 50
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }
 
 function studentSubscriptionItems(
@@ -871,18 +943,24 @@ export async function setBillableStudentQuantity(
   if (!classroom.billing.stripeSubscriptionId) throw new ValidationError("classroom has no Stripe subscription");
   const config = getStripeBillingConfig();
   const stripeClient = stripe ?? getStripeGateway();
-  const lease = await acquireStudentQuantityLease(
-    input.classroomId,
-    input.operationVersion,
-    input.quantity,
-    repository,
-  );
+  const lease = await acquireStudentQuantityLeaseForSaga(input, repository);
   let externalMutationSucceeded = false;
   try {
     const current = await repository.getClassroom(input.classroomId);
     if (!current) throw new NotFoundError("classroom not found");
     const subscriptionId = current.billing.stripeSubscriptionId;
     if (!subscriptionId) throw new ValidationError("classroom has no Stripe subscription");
+    let targetQuantity = input.quantity;
+    if (input.authoritativeMembershipCount) {
+      const members = await repository.listClassroomMembers(input.classroomId);
+      targetQuantity = authoritativeStudentQuantity(members);
+      await retargetStudentQuantityLease(
+        input.classroomId,
+        lease.ownerToken,
+        targetQuantity,
+        repository,
+      );
+    }
     const subscription = await stripeClient.retrieveSubscription(subscriptionId);
     const mapping = mapStripeSubscriptionStatus(subscription.status);
     if (mapping.access !== "available") {
@@ -905,7 +983,7 @@ export async function setBillableStudentQuantity(
         { idempotencyKey: `${mutationKey}:delete:${extra.id}` },
       );
     }
-    if (input.quantity === 0) {
+    if (targetQuantity === 0) {
       if (canonical) {
         externalMutationSucceeded = true;
         await stripeClient.deleteSubscriptionItem(
@@ -915,11 +993,11 @@ export async function setBillableStudentQuantity(
         );
       }
     } else if (canonical) {
-      if (canonical.quantity !== input.quantity) {
+      if (canonical.quantity !== targetQuantity) {
         externalMutationSucceeded = true;
         await stripeClient.updateSubscriptionItem(
           canonical.id,
-          { quantity: input.quantity, proration_behavior: "always_invoice" },
+          { quantity: targetQuantity, proration_behavior: "always_invoice" },
           { idempotencyKey: `${mutationKey}:update:${canonical.id}` },
         );
       }
@@ -929,7 +1007,7 @@ export async function setBillableStudentQuantity(
         {
           subscription: subscription.id,
           price: config.classroomStudentPriceId,
-          quantity: input.quantity,
+          quantity: targetQuantity,
           proration_behavior: "always_invoice",
         },
         { idempotencyKey: `${mutationKey}:create` },
@@ -939,9 +1017,9 @@ export async function setBillableStudentQuantity(
     const finalAnalysis = analyzeStudentItems(remote, config.classroomStudentPriceId);
     const exactStudentQuantity =
       finalAnalysis.duplicateItems.length === 0 &&
-      (input.quantity === 0
+      (targetQuantity === 0
         ? !finalAnalysis.canonicalItem || finalAnalysis.canonicalItem.quantity === 0
-        : finalAnalysis.canonicalItem?.quantity === input.quantity);
+        : finalAnalysis.canonicalItem?.quantity === targetQuantity);
     if (!exactStudentQuantity) {
       throw new BillingInProgressError("student quantity reconciliation is incomplete");
     }
@@ -970,9 +1048,11 @@ export async function reconcileBillableStudentQuantity(
   repository: Repository = getRepository(),
   stripe?: StripeGateway,
 ): Promise<ClassroomDoc> {
-  const members = await repository.listClassroomMembers(classroomId);
-  const quantity = members.filter((member) => member.role === "student" && member.status === "active").length;
-  return setBillableStudentQuantity({ classroomId, quantity, operationVersion }, repository, stripe);
+  return setBillableStudentQuantity(
+    { classroomId, quantity: 0, operationVersion, authoritativeMembershipCount: true },
+    repository,
+    stripe,
+  );
 }
 
 function hashPayload(rawBody: string): string {

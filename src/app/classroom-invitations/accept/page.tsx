@@ -7,5 +7,10 @@ export const metadata: Metadata = {
 };
 
 export default function AcceptInvitationPage() {
-  return <AcceptInvitation />;
+  return (
+    <>
+      <meta httpEquiv="Referrer-Policy" content="no-referrer" />
+      <AcceptInvitation />
+    </>
+  );
 }

@@ -213,7 +213,10 @@ ownerはteacher/student、teacherはstudentだけを招待できる。studentは
 teacherは複数教室、生徒は有効教室1つに限定する。
 
 招待URLは `classroomId`、`invitationId` と十分なentropyのsecretをfragmentに含め、
-accept APIへJSON POSTする。サーバーはnormalized Google email、期限、pending status、
+ページはfragment secretを同一tabのsessionStorageへ保存して直ちにhistoryから消し、
+未ログイン時のOAuth `post_login_redirect_uri` にはIDsだけを渡す。ログイン後に同じtabの
+sessionStorageからsecretを取得してaccept APIへJSON POSTする。secretが欠落した場合は
+メールリンクを開き直すよう案内する。サーバーはnormalized Google email、期限、pending status、
 version付きHMACをCASで再検証する。承諾は teacher では membership/profile CAS、
 student では `provisioning → Stripe quantity → active` の順で収束し、Stripe失敗時に
 招待をacceptedへ進めない。曲・テイク・Blobの所有者は常にstudent userIdのままである。

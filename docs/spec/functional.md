@@ -592,8 +592,14 @@ AC-14  測定ノイズ未満の差分が「横ばい」と表示され、改善�
   bounded expiry、一度限りのversion付きHMAC token、normalized email完全一致を要求する。
   Googleアカウントのない代理studentは作らない。
 - active studentだけをStripe quantityへ反映する。studentの承諾と除籍は同じ
-  `operationVersion` のquantity sagaを使い、外部失敗時はprovisioning/removingを残して
-  reconciliation可能にする。
+  `operationVersion` のquantity sagaを使う。billing leaseを取得した後に
+  `ClassroomMemberDoc` を再読し、active + 課金予約済みprovisioningだけをdesired state
+  として数量を確定するため、accept/removeの同時実行でcaller側のstale countを使わない。
+  外部失敗時はprovisioning/removingを残してreconciliation可能にする。
+- 招待承諾は副作用の前に invitation を `accepting` へdurable claimする。
+  `accepting` 中のrevoke/expire/resendは409とし、final accepted CASは同じ
+  operation/user/token fingerprintを要求する。teacher/student membershipとprofile参照には
+  generation fenceを持たせ、removing/removedや別generationをactiveへ戻さない。
 - 除籍・退会はmembership/profile参照だけを削除し、studentのsongs、takes、音声Blobは
   削除しない。teacherの生徒読み取りはclassroom-scoped routeで毎回active membership、
   contract、student membershipを検証し、teacherの書き込みは存在しない。

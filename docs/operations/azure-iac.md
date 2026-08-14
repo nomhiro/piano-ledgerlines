@@ -81,8 +81,12 @@ Cosmos のローカル認証無効が既定の安全策です。
 
 `infra/main.bicep` は既定では ACS Email を作成しません。環境ごとに
 `enableCommunicationEmail=true` を指定して What-if を確認してから Provision します。
-このオプションは Communication Service、Email Service、Azure-managed domain を作成し、
-Web の user-assigned identity に `Communication and Email Service Owner` RBAC を付与します。
+このオプションは Communication Service、Email Service、Azure-managed domain と専用の
+`email-sender` user-assigned managed identityを作成し、そのidentityだけに
+`Communication and Email Service Owner` RBACをACS resource scopeで付与します。既存の
+Web identityにはACS roleを付与しません。現行ACSには送信専用のcustom RBAC roleを安定運用
+できるサポートがないため、動かないcustom roleへ置換せず、専用identity + resource scope
+でblast radiusを限定します。
 
 ```json
 {
@@ -94,6 +98,10 @@ Web の user-assigned identity に `Communication and Email Service Owner` RBAC 
 Provision 後の `communicationEmailEndpoint` を
 `AZURE_COMMUNICATION_EMAIL_ENDPOINT` に設定し、Azure-managed domain または検証済み
 customer-managed domain の送信元を `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS` に設定します。
+output `emailSenderManagedIdentityClientId` を
+`AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID` に設定します。本番ではこの値が未設定なら
+アプリはfail closedし、ACS Email clientはこのclient IDを明示した
+`DefaultAzureCredential`を使います。
 アプリは接続文字列・アクセスキーを使わず `DefaultAzureCredential`（本番は Managed Identity）
 で認証します。`LEDGERLINES_EMAIL_BACKEND=azure` が本番の必須設定です。開発では
 `memory`（既定）または本文・宛先を出力しない `console` を明示的に選択できます。
@@ -107,6 +115,26 @@ customer-managed domainを使う場合、email domainの検証を先に完了し
 SPF、DKIM、DMARCレコードを登録してから `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS`
 を切り替えます。BicepのAzure-managed domain作成を、未検証domainの自動置換に使わない
 でください。prodではデプロイ後にACSの送信成功statusとbounce監視を確認します。
+
+### Container Appへのidentity割当
+
+Web Container Appを作成・更新した後、`emailSenderManagedIdentityResourceId`を
+user-assigned identityとして割り当てます。既存のWeb identityとは別に指定します。
+
+```powershell
+$emailIdentity = az deployment group show `
+  --resource-group ledgerlines-prod-rg `
+  --name prod `
+  --query properties.outputs.emailSenderManagedIdentityResourceId.value -o tsv
+az containerapp identity assign `
+  --name ledgerlines-prod-web `
+  --resource-group ledgerlines-prod-rg `
+  --user-assigned $emailIdentity
+```
+
+Container Appのsecret/envへendpoint、sender address、client ID、token signing secretを
+注入し、再起動後に招待送信の成功statusだけを監視します。Web identityからACS roleを
+削除したwhat-if結果に `emailSenderCommunicationEmailRole` だけが残ることを確認します。
 
 ## 環境の更新・削除
 

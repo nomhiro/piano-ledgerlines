@@ -142,6 +142,8 @@ export interface ClassroomReference {
   classroomId: string;
   role: ClassroomRole;
   status: ClassroomMemberStatus;
+  generation?: number;
+  operationVersion?: string | null;
 }
 
 export interface UserProfileDoc {
@@ -243,6 +245,8 @@ export interface ClassroomMemberDoc {
   role: ClassroomRole;
   status: ClassroomMemberStatus;
   operationVersion?: string | null;
+  billingDesiredStatus?: "active" | "removed" | null;
+  generation?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -254,12 +258,16 @@ export interface ClassroomInvitationDoc {
   email: string;
   normalizedEmail: string;
   role: Exclude<ClassroomRole, "owner">;
-  status: "pending" | "accepted" | "expired" | "revoked";
+  status: "pending" | "accepting" | "accepted" | "expired" | "revoked";
   tokenHash: string | null;
   tokenVersion?: number;
   expiresAt: string | null;
   createdByUserId: string;
   acceptedByUserId?: string | null;
+  acceptOperationVersion?: string | null;
+  claimedByUserId?: string | null;
+  claimedTokenFingerprint?: string | null;
+  claimedAt?: string | null;
   sentAt?: string | null;
   resentAt?: string | null;
   deliveryStatus?: "pending" | "sent" | "failed";

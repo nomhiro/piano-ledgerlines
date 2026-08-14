@@ -78,9 +78,15 @@ export class AzureEmailSender implements EmailSender {
     }
 
     const config = getConfig();
+    const managedIdentityClientId = config.nodeEnv === "production"
+      ? requiredEmailConfig(
+        "AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID",
+        config.azureEmailManagedIdentityClientId,
+      )
+      : config.azureEmailManagedIdentityClientId;
     this.client = new EmailClient(
       requiredEmailConfig("AZURE_COMMUNICATION_EMAIL_ENDPOINT", config.azureCommunicationEmailEndpoint),
-      createAzureCredential(),
+      createAzureCredential(managedIdentityClientId),
     );
     this.senderAddress = requiredEmailConfig(
       "AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS",

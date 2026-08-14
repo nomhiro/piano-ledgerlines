@@ -123,9 +123,15 @@ work/{takeId}/preprocessed.wav
 `ClassroomMemberDoc`、`ClassroomInvitationDoc`、`BillingEventDoc` が
 Cosmos/Local共通の永続化型である。`ClassroomInvitationDoc` は
 `role`、normalized email、version付きHMAC token hash、期限、inviter/accepted user、
-delivery status、送信・再送時刻を持ち、平文tokenは保存しない。教室の
+delivery status、送信・再送時刻を持ち、平文tokenは保存しない。承諾開始時は
+`pending → accepting → accepted` をCASでclaimし、accept operation、claimed user、
+token fingerprint、claim時刻をfenceとして保存する。`accepting` 中は再送・取消・期限切れ
+を許可せず、同じuser/tokenだけが再開できる。教室の
 `reservedTeacherSeatCount` と `pendingInvitationKeys` は active/provisioning teacher と
 pending teacher invitation を同一ETag更新で数えるための予約台帳である。
+studentの `ClassroomMemberDoc.billingDesiredStatus` は、まだmembershipが
+`provisioning`でも承諾sagaが課金対象として予約したか（`active`）を表す。
+`removing`/`removed` は `removed` として数量から除外する。
 招待送信は server-only の `EmailSender` 抽象を介し、本番では Azure Communication
 Services Email、開発では明示的な in-memory/console-safe 実装を使う。
 `RepositoryWriteOptions.ifMatch` と `RepositoryDocument.etag` により、更新競合を明示的に扱う。

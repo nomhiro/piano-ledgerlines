@@ -53,6 +53,7 @@ export interface AppConfig {
   emailBackend: EmailBackend;
   azureCommunicationEmailEndpoint?: string;
   azureCommunicationEmailSenderAddress?: string;
+  azureEmailManagedIdentityClientId?: string;
 }
 
 let cachedConfig: AppConfig | undefined;
@@ -152,6 +153,7 @@ export function getConfig(): AppConfig {
     emailBackend,
     azureCommunicationEmailEndpoint: process.env.AZURE_COMMUNICATION_EMAIL_ENDPOINT?.trim(),
     azureCommunicationEmailSenderAddress: process.env.AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS?.trim(),
+    azureEmailManagedIdentityClientId: process.env.AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID?.trim(),
   };
 
   if (config.azureEmulator && nodeEnv === "production") {

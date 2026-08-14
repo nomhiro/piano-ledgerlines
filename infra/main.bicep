@@ -71,6 +71,7 @@ var cosmosAccountName = take('${normalizedPrefix}-cosmos-${nameSuffix}', 44)
 var foundryAccountName = take('${normalizedPrefix}-ai-${nameSuffix}', 64)
 var webIdentityName = take('${resourceNamePrefix}-web', 128)
 var workerIdentityName = take('${resourceNamePrefix}-worker', 128)
+var emailSenderIdentityName = take('${resourceNamePrefix}-email-sender', 128)
 
 var blobContainers = [
   'scores'
@@ -139,6 +140,7 @@ module identity './modules/identity.bicep' = {
     location: location
     webIdentityName: webIdentityName
     workerIdentityName: workerIdentityName
+    emailSenderIdentityName: emailSenderIdentityName
     tags: {
       environment: environmentName
       component: 'identity'
@@ -253,6 +255,7 @@ module rbac './modules/rbac.bicep' = {
     workerPrincipalId: identity.outputs.workerPrincipalId
     communicationServiceName: communicationServiceName
     enableCommunicationEmail: enableCommunicationEmail
+    emailSenderPrincipalId: identity.outputs.emailSenderPrincipalId
   }
 }
 
@@ -304,6 +307,10 @@ output webManagedIdentityPrincipalId string = identity.outputs.webPrincipalId
 output workerManagedIdentityName string = identity.outputs.workerName
 output workerManagedIdentityPrincipalId string = identity.outputs.workerPrincipalId
 output workerManagedIdentityClientId string = identity.outputs.workerClientId
+output emailSenderManagedIdentityName string = identity.outputs.emailSenderName
+output emailSenderManagedIdentityPrincipalId string = identity.outputs.emailSenderPrincipalId
+output emailSenderManagedIdentityClientId string = identity.outputs.emailSenderClientId
+output emailSenderManagedIdentityResourceId string = identity.outputs.emailSenderResourceId
 output foundryEnabled bool = enableFoundry
 output foundryEndpoint string = foundry.outputs.endpoint
 output foundryDeploymentName string = foundry.outputs.deploymentName

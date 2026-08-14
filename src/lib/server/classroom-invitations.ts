@@ -1,4 +1,5 @@
 import {
+  createHash,
   createHmac,
   randomBytes,
   randomUUID,
@@ -103,6 +104,11 @@ function tokenMatches(invitation: ClassroomInvitationDoc, secret: string): boole
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+function tokenFingerprint(invitation: ClassroomInvitationDoc): string {
+  if (!invitation.tokenHash) throw new ValidationError("invitation token is invalid");
+  return createHash("sha256").update(invitation.tokenHash).digest("hex");
+}
+
 function invitationUrl(classroomId: string, invitationId: string, secret: string): string {
   const config = getConfig();
   const configuredBase = config.ledgerlinesAppBaseUrl;
@@ -149,8 +155,19 @@ async function consumeInvitationRateLimit(
 }
 
 function safeInvitation(invitation: ClassroomInvitationDoc): Record<string, unknown> {
-  const { tokenHash, ...publicInvitation } = invitation;
+  const {
+    tokenHash,
+    claimedTokenFingerprint,
+    acceptOperationVersion,
+    claimedByUserId,
+    claimedAt,
+    ...publicInvitation
+  } = invitation;
   void tokenHash;
+  void claimedTokenFingerprint;
+  void acceptOperationVersion;
+  void claimedByUserId;
+  void claimedAt;
   return publicInvitation;
 }
 
@@ -192,6 +209,65 @@ async function updateInvitationWithCas(
   throw new RepositoryConflictError("invitation update retries exhausted");
 }
 
+async function claimInvitation(
+  invitation: ClassroomInvitationDoc,
+  userId: string,
+  secret: string,
+  repository: Repository,
+): Promise<ClassroomInvitationDoc> {
+  const operationVersion = `accept:${invitation.id}:${userId}`;
+  if (!repository.getClassroomInvitationRecord) {
+    throw new ConfigurationError("repository does not support compare-and-swap");
+  }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const currentRecord = await repository.getClassroomInvitationRecord(
+      invitation.classroomId,
+      invitation.id,
+    );
+    if (!currentRecord) throw new NotFoundError("invitation not found");
+    if (!currentRecord.etag) throw new ConfigurationError("repository returned no invitation etag");
+    const current = currentRecord.document;
+    if (!current.expiresAt || current.expiresAt <= now().toISOString()) {
+      if (current.status === "pending") {
+        await expireInvitation(current, repository);
+      }
+      throw new ConflictError("invitation has expired");
+    }
+    if (!tokenMatches(current, secret)) throw new ValidationError("invitation token is invalid");
+    const fingerprint = tokenFingerprint(current);
+    if (current.status === "accepting") {
+      if (
+        current.acceptOperationVersion === operationVersion &&
+        current.claimedByUserId === userId &&
+        current.claimedTokenFingerprint === fingerprint
+      ) {
+        return current;
+      }
+      throw new ConflictError("invitation acceptance is already in progress");
+    }
+    if (current.status !== "pending") {
+      throw new ConflictError("invitation is no longer available");
+    }
+    try {
+      return await repository.upsertClassroomInvitation(
+        {
+          ...current,
+          status: "accepting",
+          acceptOperationVersion: operationVersion,
+          claimedByUserId: userId,
+          claimedTokenFingerprint: fingerprint,
+          claimedAt: now().toISOString(),
+          updatedAt: now().toISOString(),
+        },
+        { ifMatch: currentRecord.etag },
+      );
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
+    }
+  }
+  throw new RepositoryConflictError("invitation claim retries exhausted");
+}
+
 async function updateMemberWithCas(
   member: ClassroomMemberDoc,
   update: (current: ClassroomMemberDoc) => ClassroomMemberDoc,
@@ -229,9 +305,16 @@ async function updateProfileWithCas(
   throw new RepositoryConflictError("profile update retries exhausted");
 }
 
-function appendRef(profile: UserProfileDoc, classroomId: string, role: ClassroomRole, status: ClassroomReference["status"]): UserProfileDoc {
+function appendRef(
+  profile: UserProfileDoc,
+  classroomId: string,
+  role: ClassroomRole,
+  status: ClassroomReference["status"],
+  operationVersion: string,
+  generation: number,
+): UserProfileDoc {
   const refs = profile.classroomRefs.filter((ref) => ref.classroomId !== classroomId);
-  refs.push({ classroomId, role, status });
+  refs.push({ classroomId, role, status, operationVersion, generation });
   return { ...profile, classroomRefs: refs, updatedAt: now().toISOString() };
 }
 
@@ -421,6 +504,22 @@ async function releasePendingReservation(invitation: ClassroomInvitationDoc, rep
   }, repository);
 }
 
+async function fenceAcceptingInvitationsForMember(
+  classroomId: string,
+  userId: string,
+  repository: Repository,
+): Promise<void> {
+  const invitations = await repository.listClassroomInvitations(classroomId);
+  for (const invitation of invitations) {
+    if (invitation.status !== "accepting" || invitation.claimedByUserId !== userId) continue;
+    const revoked = await updateInvitationWithCas(invitation, (current) => {
+      if (current.status !== "accepting" || current.claimedByUserId !== userId) return current;
+      return { ...current, status: "revoked", updatedAt: now().toISOString() };
+    }, repository);
+    if (revoked.status === "revoked") await releasePendingReservation(revoked, repository);
+  }
+}
+
 async function acceptPendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
   const key = invitationKey(invitation.normalizedEmail, invitation.role);
   await updateClassroomWithCas(invitation.classroomId, (current) => {
@@ -462,16 +561,21 @@ export async function resendClassroomInvitation(
   const secret = randomBytes(32).toString("base64url");
   const url = invitationUrl(classroomId, invitationId, secret);
   await consumeInvitationRateLimit(classroomId, userId, repository);
-  const refreshed = await updateInvitationWithCas(existing, (current) => ({
-    ...current,
-    tokenHash: tokenHash(classroomId, invitationId, secret),
-    tokenVersion: TOKEN_VERSION,
-    expiresAt: new Date(now().getTime() + invitationTtlMs()).toISOString(),
-    resentAt: now().toISOString(),
-    deliveryStatus: "pending",
-    deliveryError: null,
-    updatedAt: now().toISOString(),
-  }), repository);
+  const refreshed = await updateInvitationWithCas(existing, (current) => {
+    if (current.status !== "pending") {
+      throw new ConflictError("invitation acceptance is already in progress");
+    }
+    return {
+      ...current,
+      tokenHash: tokenHash(classroomId, invitationId, secret),
+      tokenVersion: TOKEN_VERSION,
+      expiresAt: new Date(now().getTime() + invitationTtlMs()).toISOString(),
+      resentAt: now().toISOString(),
+      deliveryStatus: "pending",
+      deliveryError: null,
+      updatedAt: now().toISOString(),
+    };
+  }, repository);
   const delivered = await sendInvitation(refreshed, secret, repository, sender);
   return { invitation: safeInvitation(delivered), invitationUrl: url };
 }
@@ -496,12 +600,12 @@ export async function revokeClassroomInvitation(
   if (!existing) throw new NotFoundError("invitation not found");
   if (access.member.role === "teacher" && existing.role !== "student") throw new ForbiddenError();
   if (existing.status !== "pending") throw new ConflictError("invitation is no longer pending");
-  const revoked = await updateInvitationWithCas(existing, (current) =>
-    current.status === "pending"
-      ? { ...current, status: "revoked", updatedAt: now().toISOString() }
-      : current,
-    repository,
-  );
+  const revoked = await updateInvitationWithCas(existing, (current) => {
+    if (current.status !== "pending") {
+      throw new ConflictError("invitation acceptance is already in progress");
+    }
+    return { ...current, status: "revoked", updatedAt: now().toISOString() };
+  }, repository);
   if (revoked.status === "revoked") await releasePendingReservation(revoked, repository);
 }
 
@@ -523,6 +627,8 @@ async function ensureMemberProvisioning(
       role,
       status: "provisioning",
       operationVersion,
+      billingDesiredStatus: role === "student" ? "active" : null,
+      generation: 1,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -537,19 +643,38 @@ async function ensureMemberProvisioning(
   }
   if (existing.role !== role) throw new ConflictError("user already has a different classroom role");
   if (existing.status === "removing") throw new ConflictError("membership removal is in progress");
-  if (existing.status === "active") return existing;
-  if (existing.status === "provisioning") return existing;
-  return updateMemberWithCas(existing, (current) => ({
-    ...current,
-    status: "provisioning",
-    operationVersion,
-    updatedAt: timestamp,
-  }), repository);
+  if (existing.status === "active") {
+    if (existing.operationVersion && existing.operationVersion !== operationVersion) {
+      throw new ConflictError("membership belongs to another invitation generation");
+    }
+    return existing;
+  }
+  if (existing.status === "provisioning") {
+    if (existing.operationVersion && existing.operationVersion !== operationVersion) {
+      throw new ConflictError("membership provisioning belongs to another invitation generation");
+    }
+    return existing;
+  }
+  return updateMemberWithCas(existing, (current) => {
+    if (current.status !== "removed") {
+      throw new ConflictError("membership changed while starting a new generation");
+    }
+    return {
+      ...current,
+      status: "provisioning",
+      operationVersion,
+      billingDesiredStatus: role === "student" ? "active" : null,
+      generation: (current.generation ?? 0) + 1,
+      updatedAt: timestamp,
+    };
+  }, repository);
 }
 
 async function reserveStudentProfile(
   profile: UserProfileDoc,
   classroomId: string,
+  operationVersion: string,
+  generation: number,
   repository: Repository,
 ): Promise<UserProfileDoc> {
   const existing = profile.classroomRefs.find((ref) => ref.role === "student" && ref.status !== "removed");
@@ -557,14 +682,62 @@ async function reserveStudentProfile(
     throw new ConflictError("student already belongs to another classroom");
   }
   const current = profile.classroomRefs.find((ref) => ref.classroomId === classroomId);
-  if (current?.role === "student" && current.status === "active") return profile;
+  if (
+    current?.role === "student" &&
+    current.status === "active" &&
+    current.operationVersion === operationVersion &&
+    current.generation === generation
+  ) return profile;
+  if (
+    current?.role === "student" &&
+    current.status === "provisioning" &&
+    current.operationVersion === operationVersion &&
+    current.generation === generation
+  ) return profile;
   if (current?.role === "student" && current.status === "removing") {
     throw new ConflictError("student membership removal is in progress");
   }
   return updateProfileWithCas(profile.id, (latest) => {
     const conflictRef = latest.classroomRefs.find((ref) => ref.role === "student" && ref.status !== "removed" && ref.classroomId !== classroomId);
     if (conflictRef) throw new ConflictError("student already belongs to another classroom");
-    return appendRef(latest, classroomId, "student", "provisioning");
+    const latestRef = latest.classroomRefs.find((ref) => ref.classroomId === classroomId);
+    if (
+      latestRef &&
+      latestRef.status !== "removed" &&
+      (latestRef.operationVersion !== operationVersion || latestRef.generation !== generation)
+    ) {
+      throw new ConflictError("student profile belongs to another membership generation");
+    }
+    return appendRef(latest, classroomId, "student", "provisioning", operationVersion, generation);
+  }, repository);
+}
+
+async function ensureProfileRefProvisioning(
+  userId: string,
+  classroomId: string,
+  role: Exclude<ClassroomRole, "owner">,
+  operationVersion: string,
+  generation: number,
+  repository: Repository,
+): Promise<void> {
+  await updateProfileWithCas(userId, (profile) => {
+    const current = profile.classroomRefs.find((ref) => ref.classroomId === classroomId);
+    if (
+      current?.role === role &&
+      current.status === "provisioning" &&
+      current.operationVersion === operationVersion &&
+      current.generation === generation
+    ) return profile;
+    if (
+      current?.role === role &&
+      current.status === "active" &&
+      current.operationVersion === operationVersion &&
+      current.generation === generation
+    ) return profile;
+    if (current && current.status !== "removed") {
+      throw new ConflictError("profile membership generation changed while provisioning");
+    }
+    return appendRef(profile, classroomId, role, "provisioning", operationVersion, generation);
   }, repository);
 }
 
@@ -572,26 +745,94 @@ async function activateProfileRef(
   userId: string,
   classroomId: string,
   role: Exclude<ClassroomRole, "owner">,
+  operationVersion: string,
+  generation: number,
   repository: Repository,
 ): Promise<void> {
   await updateProfileWithCas(userId, (profile) => {
     const current = profile.classroomRefs.find((ref) => ref.classroomId === classroomId);
-    if (current?.role === role && current.status === "active") return profile;
-    return appendRef(profile, classroomId, role, "active");
+    if (
+      current?.role === role &&
+      current.status === "active" &&
+      current.operationVersion === operationVersion &&
+      current.generation === generation
+    ) return profile;
+    if (
+      !current ||
+      current.role !== role ||
+      current.status !== "provisioning" ||
+      current.operationVersion !== operationVersion ||
+      current.generation !== generation
+    ) {
+      throw new ConflictError("profile membership generation changed while activating");
+    }
+    return {
+      ...profile,
+      classroomRefs: profile.classroomRefs.map((ref) =>
+        ref.classroomId === classroomId
+          ? { ...ref, status: "active", operationVersion, generation }
+          : ref,
+      ),
+      updatedAt: now().toISOString(),
+    };
   }, repository);
 }
 
-async function removeProfileRef(userId: string, classroomId: string, repository: Repository): Promise<void> {
-  await updateProfileWithCas(userId, (profile) => ({
-    ...profile,
-    classroomRefs: profile.classroomRefs.filter((ref) => ref.classroomId !== classroomId),
-    updatedAt: now().toISOString(),
-  }), repository);
+async function markProfileRefRemoving(
+  userId: string,
+  classroomId: string,
+  operationVersion: string,
+  generation: number,
+  repository: Repository,
+): Promise<void> {
+  await updateProfileWithCas(userId, (profile) => {
+    const current = profile.classroomRefs.find((ref) => ref.classroomId === classroomId);
+    if (!current || current.status === "removed") return profile;
+    if (current.operationVersion && current.generation !== generation) {
+      throw new ConflictError("profile membership generation changed while removing");
+    }
+    return {
+      ...profile,
+      classroomRefs: profile.classroomRefs.map((ref) =>
+        ref.classroomId === classroomId
+          ? { ...ref, status: "removing", operationVersion, generation }
+          : ref,
+      ),
+      updatedAt: now().toISOString(),
+    };
+  }, repository);
+}
+
+async function removeProfileRef(
+  userId: string,
+  classroomId: string,
+  operationVersion: string,
+  generation: number,
+  repository: Repository,
+): Promise<void> {
+  await updateProfileWithCas(userId, (profile) => {
+    const current = profile.classroomRefs.find((ref) => ref.classroomId === classroomId);
+    if (!current || current.status === "removed") return profile;
+    if (
+      current.status !== "removing" ||
+      current.operationVersion !== operationVersion ||
+      current.generation !== generation
+    ) {
+      throw new ConflictError("profile removal generation changed");
+    }
+    return {
+      ...profile,
+      classroomRefs: profile.classroomRefs.filter((ref) => ref.classroomId !== classroomId),
+      updatedAt: now().toISOString(),
+    };
+  }, repository);
 }
 
 async function markInvitationAccepted(
   invitation: ClassroomInvitationDoc,
   userId: string,
+  operationVersion: string,
+  tokenFingerprintValue: string,
   repository: Repository,
 ): Promise<void> {
   const accepted = await updateInvitationWithCas(invitation, (current) => {
@@ -599,7 +840,15 @@ async function markInvitationAccepted(
       if (current.acceptedByUserId === userId) return current;
       throw new ConflictError("invitation has already been used");
     }
-    if (current.status !== "pending") throw new ConflictError("invitation is no longer available");
+    if (
+      current.status !== "accepting" ||
+      current.acceptOperationVersion !== operationVersion ||
+      current.claimedByUserId !== userId ||
+      current.claimedTokenFingerprint !== tokenFingerprintValue ||
+      tokenFingerprint(current) !== tokenFingerprintValue
+    ) {
+      throw new ConflictError("invitation acceptance fence changed");
+    }
     if (!current.expiresAt || current.expiresAt <= now().toISOString()) throw new ConflictError("invitation has expired");
     return {
       ...current,
@@ -620,61 +869,113 @@ export async function acceptClassroomInvitation(
 ): Promise<{ classroomId: string; role: Exclude<ClassroomRole, "owner">; status: ClassroomMemberStatus }> {
   assertAuthenticatedGoogleUser(user);
   if (!input.secret || input.secret.length < 32 || input.secret.length > 128) throw new ValidationError("invitation token is invalid");
-  const invitation = await repository.getClassroomInvitation(input.classroomId, input.invitationId);
-  if (!invitation || !tokenMatches(invitation, input.secret)) throw new ValidationError("invitation token is invalid");
-  if (invitation.status === "accepted" && invitation.acceptedByUserId === user.id) {
+  const loadedInvitation = await repository.getClassroomInvitation(input.classroomId, input.invitationId);
+  if (!loadedInvitation || !tokenMatches(loadedInvitation, input.secret)) throw new ValidationError("invitation token is invalid");
+  if (loadedInvitation.status === "accepted" && loadedInvitation.acceptedByUserId === user.id) {
     const member = await repository.getClassroomMember(input.classroomId, user.id);
     if (member?.status === "active" && member.role !== "owner") {
       return { classroomId: input.classroomId, role: member.role, status: member.status };
     }
   }
-  if (invitation.status !== "pending") throw new ConflictError("invitation is no longer available");
-  if (!invitation.expiresAt || invitation.expiresAt <= now().toISOString()) {
-    await expireInvitation(invitation, repository);
+  if (loadedInvitation.status !== "pending" && loadedInvitation.status !== "accepting") {
+    throw new ConflictError("invitation is no longer available");
+  }
+  if (!loadedInvitation.expiresAt || loadedInvitation.expiresAt <= now().toISOString()) {
+    if (loadedInvitation.status === "pending") await expireInvitation(loadedInvitation, repository);
     throw new ConflictError("invitation has expired");
   }
-  if (normalizeEmail(user.email) !== invitation.normalizedEmail) throw new ForbiddenError("Google account email does not match the invitation");
+  if (normalizeEmail(user.email) !== loadedInvitation.normalizedEmail) {
+    throw new ForbiddenError("Google account email does not match the invitation");
+  }
+  const invitation = await claimInvitation(loadedInvitation, user.id, input.secret, repository);
+  if (invitation.status !== "accepting" || !invitation.acceptOperationVersion || !invitation.claimedTokenFingerprint) {
+    throw new ConflictError("invitation acceptance claim is incomplete");
+  }
+  const operationVersion = invitation.acceptOperationVersion;
+  const claimedTokenFingerprint = invitation.claimedTokenFingerprint;
   const classroom = await repository.getClassroom(input.classroomId);
   if (!classroom) throw new NotFoundError("classroom not found");
   if (classroom.appStatus !== "active" || !classroomHasPaidEntitlement(classroom.billing.status)) {
     throw new ForbiddenError("classroom subscription is not active");
   }
   const profile = await ensureUserProfile(user, repository);
-  const operationVersion = `invitation:${invitation.id}`;
+  const existingMember = await repository.getClassroomMember(input.classroomId, user.id);
+  const generation = existingMember?.status === "removed"
+    ? (existingMember.generation ?? 0) + 1
+    : existingMember?.generation ?? 1;
   if (invitation.role === "student") {
-    await reserveStudentProfile(profile, input.classroomId, repository);
+    await reserveStudentProfile(profile, input.classroomId, operationVersion, generation, repository);
     const member = await ensureMemberProvisioning(input.classroomId, user.id, "student", operationVersion, repository);
+    if (member.generation !== generation) throw new ConflictError("membership generation changed while accepting");
     if (member.status !== "active") {
-      const activeStudents = (await repository.listClassroomMembers(input.classroomId))
-        .filter((candidate) => candidate.role === "student" && candidate.status === "active" && candidate.userId !== user.id).length;
+      const desiredMember = await updateMemberWithCas(member, (current) => ({
+        ...current,
+        billingDesiredStatus: "active",
+        updatedAt: now().toISOString(),
+      }), repository);
       await setBillableStudentQuantity(
-        { classroomId: input.classroomId, quantity: activeStudents + 1, operationVersion },
+        {
+          classroomId: input.classroomId,
+          quantity: 0,
+          operationVersion,
+          authoritativeMembershipCount: true,
+        },
         repository,
         stripe,
       );
-      await updateMemberWithCas(member, (current) => ({
-        ...current,
-        status: "active",
-        operationVersion,
-        updatedAt: now().toISOString(),
-      }), repository);
+      await updateMemberWithCas(desiredMember, (current) => {
+        if (
+          current.status === "active" &&
+          current.operationVersion === operationVersion &&
+          current.generation === generation
+        ) return current;
+        if (current.status === "active") {
+          throw new ConflictError("membership generation changed while billing was in progress");
+        }
+        if (
+          current.status !== "provisioning" ||
+          current.operationVersion !== operationVersion ||
+          current.generation !== generation
+        ) {
+          throw new ConflictError("membership changed while billing was in progress");
+        }
+        return {
+          ...current,
+          status: "active",
+          operationVersion,
+          updatedAt: now().toISOString(),
+        };
+      }, repository);
     }
-    await activateProfileRef(user.id, input.classroomId, "student", repository);
-    await markInvitationAccepted(invitation, user.id, repository);
+    await activateProfileRef(user.id, input.classroomId, "student", operationVersion, generation, repository);
+    await markInvitationAccepted(invitation, user.id, operationVersion, claimedTokenFingerprint, repository);
     return { classroomId: input.classroomId, role: "student", status: "active" };
   }
   const member = await ensureMemberProvisioning(input.classroomId, user.id, "teacher", operationVersion, repository);
+  if (member.generation !== generation) throw new ConflictError("membership generation changed while accepting");
+  await ensureProfileRefProvisioning(user.id, input.classroomId, "teacher", operationVersion, generation, repository);
   if (member.status !== "active") {
-    await updateProfileWithCas(user.id, (latest) => appendRef(latest, input.classroomId, "teacher", "provisioning"), repository);
-    await updateMemberWithCas(member, (current) => ({
-      ...current,
-      status: "active",
-      operationVersion,
-      updatedAt: now().toISOString(),
-    }), repository);
+    await updateMemberWithCas(member, (current) => {
+      if (
+        current.status === "active" &&
+        current.operationVersion === operationVersion &&
+        current.generation === generation
+      ) return current;
+      if (current.status === "active") {
+        throw new ConflictError("membership generation changed while accepting");
+      }
+      if (
+        current.status !== "provisioning" ||
+        current.operationVersion !== operationVersion ||
+        current.generation !== generation
+      ) {
+        throw new ConflictError("membership changed while accepting");
+      }
+      return { ...current, status: "active", operationVersion, generation, updatedAt: now().toISOString() };
+    }, repository);
   }
-  await activateProfileRef(user.id, input.classroomId, "teacher", repository);
-  await markInvitationAccepted(invitation, user.id, repository);
+  await activateProfileRef(user.id, input.classroomId, "teacher", operationVersion, generation, repository);
+  await markInvitationAccepted(invitation, user.id, operationVersion, claimedTokenFingerprint, repository);
   return { classroomId: input.classroomId, role: "teacher", status: "active" };
 }
 
@@ -695,7 +996,10 @@ export async function removeClassroomMember(
     throw new ForbiddenError();
   }
   if (target.status === "removed") {
-    await removeProfileRef(targetUserId, classroomId, repository);
+    if (target.operationVersion && target.generation) {
+      await removeProfileRef(targetUserId, classroomId, target.operationVersion, target.generation, repository);
+    }
+    await fenceAcceptingInvitationsForMember(classroomId, targetUserId, repository);
     if (target.role === "teacher") await reconcileTeacherSeatReservations(classroomId, repository);
     return { status: "removed" };
   }
@@ -704,19 +1008,48 @@ export async function removeClassroomMember(
   }
   const removing = target.status === "removing"
     ? target
-    : await updateMemberWithCas(target, (current) => ({ ...current, status: "removing", operationVersion: `remove:${randomUUID()}`, updatedAt: now().toISOString() }), repository);
+    : await updateMemberWithCas(target, (current) => ({
+      ...current,
+      status: "removing",
+      operationVersion: `remove:${randomUUID()}`,
+      billingDesiredStatus: current.role === "student" ? "removed" : current.billingDesiredStatus,
+      generation: current.generation ?? 1,
+      updatedAt: now().toISOString(),
+    }), repository);
+  const removalOperationVersion = removing.operationVersion;
+  const removalGeneration = removing.generation ?? 1;
+  if (!removalOperationVersion) throw new ConfigurationError("removal operation is missing");
+  await markProfileRefRemoving(
+    targetUserId,
+    classroomId,
+    removalOperationVersion,
+    removalGeneration,
+    repository,
+  );
   if (removing.role === "student") {
-    if (removing.operationVersion === null || !removing.operationVersion) throw new ConfigurationError("removal operation is missing");
-    const remaining = (await repository.listClassroomMembers(classroomId))
-      .filter((member) => member.role === "student" && member.status === "active" && member.userId !== targetUserId).length;
     await setBillableStudentQuantity(
-      { classroomId, quantity: remaining, operationVersion: removing.operationVersion },
+      {
+        classroomId,
+        quantity: 0,
+        operationVersion: removalOperationVersion,
+        authoritativeMembershipCount: true,
+      },
       repository,
       stripe,
     );
   }
-  await updateMemberWithCas(removing, (current) => ({ ...current, status: "removed", updatedAt: now().toISOString() }), repository);
-  await removeProfileRef(targetUserId, classroomId, repository);
+  await updateMemberWithCas(removing, (current) => {
+    if (
+      current.status !== "removing" ||
+      current.operationVersion !== removalOperationVersion ||
+      (current.generation ?? 1) !== removalGeneration
+    ) {
+      throw new ConflictError("membership removal generation changed");
+    }
+    return { ...current, status: "removed", updatedAt: now().toISOString() };
+  }, repository);
+  await removeProfileRef(targetUserId, classroomId, removalOperationVersion, removalGeneration, repository);
+  await fenceAcceptingInvitationsForMember(classroomId, targetUserId, repository);
   if (removing.role === "teacher") await reconcileTeacherSeatReservations(classroomId, repository);
   return { status: "removed" };
 }

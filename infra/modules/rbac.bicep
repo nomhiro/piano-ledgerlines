@@ -11,8 +11,10 @@ param webPrincipalId string
 param workerPrincipalId string
 @description('Existing ACS Communication Service name when email is enabled.')
 param communicationServiceName string = ''
-@description('Whether to assign ACS email permissions to the web identity.')
+@description('Whether to assign ACS email permissions to the dedicated email sender identity.')
 param enableCommunicationEmail bool = false
+@description('Dedicated ACS email sender identity principal ID.')
+param emailSenderPrincipalId string
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
@@ -117,11 +119,11 @@ resource workerCosmosRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignme
   }
 }
 
-resource webCommunicationEmailRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableCommunicationEmail) {
-  name: guid(communicationService.id, webPrincipalId, communicationEmailOwnerRoleId)
+resource emailSenderCommunicationEmailRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableCommunicationEmail) {
+  name: guid(communicationService.id, emailSenderPrincipalId, communicationEmailOwnerRoleId)
   scope: communicationService
   properties: {
-    principalId: webPrincipalId
+    principalId: emailSenderPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', communicationEmailOwnerRoleId)
   }
