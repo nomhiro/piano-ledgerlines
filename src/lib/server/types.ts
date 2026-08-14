@@ -183,7 +183,9 @@ export interface ClassroomDoc {
     windowStartedAt: string;
     count: number;
   }>;
+  /** @deprecated Legacy documents are migrated and this field is deleted by reconciliation. */
   pendingInvitationKeys?: Record<string, string>;
+  invitationReservations?: Record<string, ClassroomInvitationReservationDoc>;
   billableStudentCount: number;
   billing: {
     stripeCustomerId: string | null;
@@ -205,6 +207,15 @@ export interface ClassroomDoc {
   appStatus: ClassroomAppStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ClassroomInvitationReservationDoc {
+  invitationId: string;
+  role: Exclude<ClassroomRole, "owner">;
+  emailRoleFingerprint: string;
+  state: "creating" | "pending" | "accepting";
+  createdAt: string;
+  leaseExpiresAt: string;
 }
 
 export interface CheckoutAttemptDoc {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import Stripe from "stripe";
 import { LocalRepository } from "./repository";
 import { createDraftClassroom, setBillableStudentQuantity } from "./billing";
@@ -33,6 +34,10 @@ function googleUser(id: string, email: string): AuthenticatedUser {
     emailVerified: true,
     isDevelopmentFallback: false,
   };
+}
+
+function reservationKey(email: string, role: "teacher" | "student"): string {
+  return createHash("sha256").update(`${role}:${email}`).digest("hex");
 }
 
 class QuantityGateway implements StripeGateway {
@@ -260,6 +265,7 @@ test("acceptance requires exact Google email and accepts a teacher token once", 
   assert.equal((await repository.getClassroomInvitation(classroom.id, input.invitationId))?.status, "accepted");
   assert.equal((await repository.getClassroomMember(classroom.id, teacher.id))?.status, "active");
   assert.deepEqual(await acceptClassroomInvitation(input, teacher, repository), accepted);
+  assert.deepEqual((await repository.getClassroom(classroom.id))?.invitationReservations, {});
 });
 
 test("membership billing lease re-reads accepted provisioning and converges concurrent operations", async () => {
@@ -446,4 +452,53 @@ test("same claimed token resumes after a crash without a false accepted state", 
   const resumed = await acceptClassroomInvitation(input, teacher, repository);
   assert.equal(resumed.status, "active");
   assert.equal((await repository.getClassroomInvitation(classroom.id, input.invitationId))?.status, "accepted");
+});
+
+test("creating reservation protects a missing invitation until its lease expires", async () => {
+  const repository = new LocalRepository();
+  const owner = googleUser(`owner-${Date.now()}`, `owner-${Date.now()}@example.com`);
+  const classroom = await activeClassroom(repository, owner);
+  const email = `missing-${Date.now()}@example.com`;
+  const key = reservationKey(email, "teacher");
+  const record = await repository.getClassroomRecord(classroom.id);
+  assert.ok(record?.etag);
+  const nowValue = Date.now();
+  await repository.upsertClassroom({
+    ...classroom,
+    invitationReservations: {
+      [key]: {
+        invitationId: "missing-invitation",
+        role: "teacher",
+        emailRoleFingerprint: key,
+        state: "creating",
+        createdAt: new Date(nowValue).toISOString(),
+        leaseExpiresAt: new Date(nowValue + 60_000).toISOString(),
+      },
+    },
+    reservedTeacherSeatCount: 1,
+  }, { ifMatch: record.etag });
+  await assert.rejects(
+    createClassroomInvitation(classroom.id, owner, { email, role: "teacher" }, repository, new InMemoryEmailSender()),
+    /pending invitation already exists/,
+  );
+  const current = await repository.getClassroomRecord(classroom.id);
+  assert.ok(current?.etag);
+  await repository.upsertClassroom({
+    ...current.document,
+    invitationReservations: {
+      [key]: {
+        ...current.document.invitationReservations![key],
+        leaseExpiresAt: new Date(nowValue - 1).toISOString(),
+      },
+    },
+  }, { ifMatch: current.etag });
+  const created = await createClassroomInvitation(
+    classroom.id,
+    owner,
+    { email, role: "teacher" },
+    repository,
+    new InMemoryEmailSender(),
+  );
+  assert.ok(created.invitationUrl);
+  assert.equal(Object.keys((await repository.getClassroom(classroom.id))?.invitationReservations ?? {}).length, 1);
 });

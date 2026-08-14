@@ -127,8 +127,11 @@ delivery status、送信・再送時刻を持ち、平文tokenは保存しない
 `pending → accepting → accepted` をCASでclaimし、accept operation、claimed user、
 token fingerprint、claim時刻をfenceとして保存する。`accepting` 中は再送・取消・期限切れ
 を許可せず、同じuser/tokenだけが再開できる。教室の
-`reservedTeacherSeatCount` と `pendingInvitationKeys` は active/provisioning teacher と
-pending teacher invitation を同一ETag更新で数えるための予約台帳である。
+`invitationReservations` は email/role fingerprintをkeyにしたstructured reservation ledgerで、
+creating/pending/acceptingの状態、invitationId、作成時刻、短いcreation lease期限を持つ。
+`reservedTeacherSeatCount` は active/provisioning teacher と有効なteacher reservationを
+reconciliationで再計算する。旧 `pendingInvitationKeys` は読み取りせず、migration時に安全に
+削除する。
 studentの `ClassroomMemberDoc.billingDesiredStatus` は、まだmembershipが
 `provisioning`でも承諾sagaが課金対象として予約したか（`active`）を表す。
 `removing`/`removed` は `removed` として数量から除外する。

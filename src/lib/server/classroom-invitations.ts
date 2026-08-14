@@ -21,6 +21,7 @@ import type {
   ClassroomInvitationDoc,
   ClassroomMemberDoc,
   ClassroomMemberStatus,
+  ClassroomInvitationReservationDoc,
   ClassroomReference,
   ClassroomRole,
   UserProfileDoc,
@@ -32,6 +33,7 @@ import type { StripeGateway } from "./stripe";
 const TOKEN_VERSION = 1;
 const DEFAULT_INVITATION_TTL_DAYS = 7;
 const DEFAULT_INVITE_RATE_LIMIT = 20;
+const INVITATION_CREATION_LEASE_MS = 2 * 60 * 1000;
 
 function now(): Date {
   return new Date();
@@ -41,27 +43,77 @@ async function reconcileTeacherSeatReservations(
   classroomId: string,
   repository: Repository,
 ): Promise<void> {
-  const [members, invitations] = await Promise.all([
+  const [members, classroom, invitationList] = await Promise.all([
     repository.listClassroomMembers(classroomId),
+    repository.getClassroom(classroomId),
     repository.listClassroomInvitations(classroomId),
   ]);
-  const count = members.filter(
-    (member) => member.role === "teacher" && ["active", "provisioning"].includes(member.status),
-  ).length + invitations.filter(
-    (invitation) => invitation.role === "teacher" && invitation.status === "pending",
-  ).length;
+  if (!classroom) throw new NotFoundError("classroom not found");
+  const reservationEntries = Object.entries(classroom.invitationReservations ?? {});
+  const linkedInvitations = await Promise.all(
+    invitationList.map((invitation) =>
+      repository.getClassroomInvitation(classroomId, invitation.id),
+    ),
+  );
   await updateClassroomWithCas(classroomId, (current) => {
-    const nextCount = Math.max(
-    count,
-    Object.keys(current.pendingInvitationKeys ?? {}).filter((key) => key.startsWith("teacher:")).length,
+    const invitationById = new Map(
+      linkedInvitations
+        .filter((invitation): invitation is ClassroomInvitationDoc => invitation !== null)
+        .map((invitation) => [invitation.id, invitation]),
     );
-    return {
-    ...current,
-    reservedTeacherSeatCount: nextCount,
-    teacherSeatVersion:
-      (current.teacherSeatVersion ?? 0) + (current.reservedTeacherSeatCount === nextCount ? 0 : 1),
-    updatedAt: now().toISOString(),
+    const currentInvitationIds = new Set(
+      reservationEntries.map(([, reservation]) => reservation.invitationId),
+    );
+    const timestamp = now();
+    const reservations: Record<string, ClassroomInvitationReservationDoc> = {};
+    for (const [key, reservation] of Object.entries(current.invitationReservations ?? {})) {
+      const invitation = invitationById.get(reservation.invitationId);
+      const liveDocument = invitation &&
+        ["pending", "accepting"].includes(invitation.status);
+      const missingLeaseActive = !invitation && reservation.leaseExpiresAt > timestamp.toISOString();
+      if (!liveDocument && !missingLeaseActive) continue;
+      reservations[key] = {
+        ...reservation,
+        state: invitation?.status === "accepting"
+          ? "accepting"
+          : invitation?.status === "pending"
+            ? "pending"
+            : reservation.state,
+      };
+    }
+    for (const invitation of linkedInvitations) {
+      if (
+        !invitation ||
+        !["pending", "accepting"].includes(invitation.status) ||
+        currentInvitationIds.has(invitation.id)
+      ) continue;
+      const key = invitationReservationKey(invitation.normalizedEmail, invitation.role);
+      if (reservations[key]) continue;
+      reservations[key] = {
+        invitationId: invitation.id,
+        role: invitation.role,
+        emailRoleFingerprint: key,
+        state: invitation.status === "accepting" ? "accepting" : "pending",
+        createdAt: invitation.createdAt,
+        leaseExpiresAt: invitation.expiresAt ?? timestamp.toISOString(),
+      };
+    }
+    const teacherReservationCount = Object.values(reservations)
+      .filter((reservation) => reservation.role === "teacher").length;
+    const activeTeacherCount = members.filter(
+      (member) => member.role === "teacher" && ["active", "provisioning"].includes(member.status),
+    ).length;
+    const nextCount = activeTeacherCount + teacherReservationCount;
+    const next = {
+      ...current,
+      reservedTeacherSeatCount: nextCount,
+      teacherSeatVersion:
+        (current.teacherSeatVersion ?? 0) + (current.reservedTeacherSeatCount === nextCount ? 0 : 1),
+      invitationReservations: reservations,
+      updatedAt: timestamp.toISOString(),
     };
+    delete next.pendingInvitationKeys;
+    return next;
   }, repository);
 }
 
@@ -120,8 +172,13 @@ function invitationUrl(classroomId: string, invitationId: string, secret: string
   return `${root}/classroom-invitations/accept#classroomId=${encodeURIComponent(classroomId)}&invitationId=${encodeURIComponent(invitationId)}&secret=${encodeURIComponent(secret)}`;
 }
 
-function invitationKey(normalizedEmail: string, role: Exclude<ClassroomRole, "owner">): string {
-  return `${role}:${normalizedEmail}`;
+function invitationReservationKey(
+  normalizedEmail: string,
+  role: Exclude<ClassroomRole, "owner">,
+): string {
+  return createHash("sha256")
+    .update(`${role}:${normalizedEmail}`)
+    .digest("hex");
 }
 
 async function consumeInvitationRateLimit(
@@ -241,6 +298,7 @@ async function claimInvitation(
         current.claimedByUserId === userId &&
         current.claimedTokenFingerprint === fingerprint
       ) {
+        await markInvitationReservationState(current, "accepting", repository);
         return current;
       }
       throw new ConflictError("invitation acceptance is already in progress");
@@ -249,7 +307,7 @@ async function claimInvitation(
       throw new ConflictError("invitation is no longer available");
     }
     try {
-      return await repository.upsertClassroomInvitation(
+      const claimed = await repository.upsertClassroomInvitation(
         {
           ...current,
           status: "accepting",
@@ -261,6 +319,8 @@ async function claimInvitation(
         },
         { ifMatch: currentRecord.etag },
       );
+      await markInvitationReservationState(claimed, "accepting", repository);
+      return claimed;
     } catch (error) {
       if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
     }
@@ -423,28 +483,35 @@ export async function createClassroomInvitation(
     if (profile?.normalizedEmail === normalizedEmail) throw new ConflictError("user is already a classroom member");
   }
   const limits = rateLimitConfig();
-  const key = invitationKey(normalizedEmail, input.role);
+  const key = invitationReservationKey(normalizedEmail, input.role);
   const invitationId = `invitation_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
   const secret = randomBytes(32).toString("base64url");
   const url = invitationUrl(classroomId, invitationId, secret);
   const createdAt = now();
   const expiresAt = new Date(createdAt.getTime() + invitationTtlMs()).toISOString();
   await updateClassroomWithCas(classroomId, (current) => {
-    const pendingKeys = { ...(current.pendingInvitationKeys ?? {}) };
-    if (pendingKeys[key]) throw new ConflictError("a pending invitation already exists for this address and role");
-    const reservedTeacherSeats = Math.max(current.reservedTeacherSeatCount ?? 0, existingTeacherSeats);
+    const reservations = { ...(current.invitationReservations ?? {}) };
+    if (reservations[key]) throw new ConflictError("a pending invitation already exists for this address and role");
+    const reservedTeacherSeats = current.reservedTeacherSeatCount ?? existingTeacherSeats;
     if (input.role === "teacher" && reservedTeacherSeats >= Math.max(0, current.teacherLimit - 1)) {
       throw new ConflictError("teacher seat limit reached");
     }
     const rate = current.invitationRateLimits?.[inviter.id];
     const withinWindow = rate && createdAt.getTime() - new Date(rate.windowStartedAt).getTime() < limits.windowMs;
     if (withinWindow && rate.count >= limits.max) throw new RateLimitError("invitation rate limit exceeded", Math.ceil((limits.windowMs - (createdAt.getTime() - new Date(rate.windowStartedAt).getTime())) / 1000));
-    pendingKeys[key] = invitationId;
+    reservations[key] = {
+      invitationId,
+      role: input.role,
+      emailRoleFingerprint: key,
+      state: "creating",
+      createdAt: createdAt.toISOString(),
+      leaseExpiresAt: new Date(createdAt.getTime() + INVITATION_CREATION_LEASE_MS).toISOString(),
+    };
     return {
       ...current,
       reservedTeacherSeatCount: reservedTeacherSeats + (input.role === "teacher" ? 1 : 0),
       teacherSeatVersion: (current.teacherSeatVersion ?? 0) + (input.role === "teacher" ? 1 : 0),
-      pendingInvitationKeys: pendingKeys,
+      invitationReservations: reservations,
       invitationRateLimits: {
         ...(current.invitationRateLimits ?? {}),
         [inviter.id]: {
@@ -477,6 +544,13 @@ export async function createClassroomInvitation(
   };
   try {
     await repository.createClassroomInvitation(invitation, { ifNoneMatch: true });
+    await updateClassroomWithCas(classroomId, (current) => {
+      const reservations = { ...(current.invitationReservations ?? {}) };
+      const reservation = reservations[key];
+      if (!reservation || reservation.invitationId !== invitationId) return current;
+      reservations[key] = { ...reservation, state: "pending" };
+      return { ...current, invitationReservations: reservations, updatedAt: now().toISOString() };
+    }, repository);
   } catch (error) {
     await releasePendingReservation(invitation, repository);
     throw error;
@@ -488,20 +562,43 @@ export async function createClassroomInvitation(
   };
 }
 
-async function releasePendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
-  const key = invitationKey(invitation.normalizedEmail, invitation.role);
+async function markInvitationReservationState(
+  invitation: ClassroomInvitationDoc,
+  state: "pending" | "accepting",
+  repository: Repository,
+): Promise<void> {
+  const key = invitationReservationKey(invitation.normalizedEmail, invitation.role);
   await updateClassroomWithCas(invitation.classroomId, (current) => {
-    const pending = { ...(current.pendingInvitationKeys ?? {}) };
-    if (pending[key] !== invitation.id) return current;
-    delete pending[key];
+    const reservations = { ...(current.invitationReservations ?? {}) };
+    const existing = reservations[key];
+    if (!existing || existing.invitationId !== invitation.id) return current;
+    reservations[key] = {
+      invitationId: invitation.id,
+      role: invitation.role,
+      emailRoleFingerprint: key,
+      state,
+      createdAt: existing?.createdAt ?? invitation.createdAt,
+      leaseExpiresAt: existing?.leaseExpiresAt ?? invitation.expiresAt ?? new Date().toISOString(),
+    };
+    return { ...current, invitationReservations: reservations, updatedAt: now().toISOString() };
+  }, repository);
+}
+
+async function releasePendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
+  await updateClassroomWithCas(invitation.classroomId, (current) => {
+    const reservations = { ...(current.invitationReservations ?? {}) };
+    const key = Object.keys(reservations).find(
+      (candidate) => reservations[candidate].invitationId === invitation.id,
+    );
+    if (!key) return current;
+    delete reservations[key];
     return {
       ...current,
-      reservedTeacherSeatCount: Math.max(0, (current.reservedTeacherSeatCount ?? 0) - (invitation.role === "teacher" ? 1 : 0)),
-      teacherSeatVersion: (current.teacherSeatVersion ?? 0) + (invitation.role === "teacher" ? 1 : 0),
-      pendingInvitationKeys: pending,
+      invitationReservations: reservations,
       updatedAt: now().toISOString(),
     };
   }, repository);
+  await reconcileTeacherSeatReservations(invitation.classroomId, repository);
 }
 
 async function fenceAcceptingInvitationsForMember(
@@ -521,12 +618,7 @@ async function fenceAcceptingInvitationsForMember(
 }
 
 async function acceptPendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
-  const key = invitationKey(invitation.normalizedEmail, invitation.role);
-  await updateClassroomWithCas(invitation.classroomId, (current) => {
-    const pending = { ...(current.pendingInvitationKeys ?? {}) };
-    if (pending[key] === invitation.id) delete pending[key];
-    return { ...current, pendingInvitationKeys: pending, updatedAt: now().toISOString() };
-  }, repository);
+  await releasePendingReservation(invitation, repository);
 }
 
 export async function listClassroomInvitations(
@@ -872,6 +964,7 @@ export async function acceptClassroomInvitation(
   const loadedInvitation = await repository.getClassroomInvitation(input.classroomId, input.invitationId);
   if (!loadedInvitation || !tokenMatches(loadedInvitation, input.secret)) throw new ValidationError("invitation token is invalid");
   if (loadedInvitation.status === "accepted" && loadedInvitation.acceptedByUserId === user.id) {
+    await reconcileTeacherSeatReservations(input.classroomId, repository);
     const member = await repository.getClassroomMember(input.classroomId, user.id);
     if (member?.status === "active" && member.role !== "owner") {
       return { classroomId: input.classroomId, role: member.role, status: member.status };
@@ -887,6 +980,7 @@ export async function acceptClassroomInvitation(
   if (normalizeEmail(user.email) !== loadedInvitation.normalizedEmail) {
     throw new ForbiddenError("Google account email does not match the invitation");
   }
+  await reconcileTeacherSeatReservations(input.classroomId, repository);
   const invitation = await claimInvitation(loadedInvitation, user.id, input.secret, repository);
   if (invitation.status !== "accepting" || !invitation.acceptOperationVersion || !invitation.claimedTokenFingerprint) {
     throw new ConflictError("invitation acceptance claim is incomplete");
@@ -1061,6 +1155,7 @@ export async function reconcileClassroomBilling(
   stripe?: StripeGateway,
 ): Promise<ClassroomDoc> {
   await requireClassroomRole(classroomId, ownerUserId, ["owner"], repository);
+  await reconcileTeacherSeatReservations(classroomId, repository);
   const operation = (await repository.getClassroom(classroomId))?.billing.studentQuantityOperation;
   return reconcileBillableStudentQuantity(
     classroomId,
