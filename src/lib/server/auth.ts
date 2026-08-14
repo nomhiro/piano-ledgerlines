@@ -43,21 +43,52 @@ function userFromClaims(claims: JWTPayload): AuthenticatedUser {
 interface EasyAuthPrincipal {
   userId?: unknown;
   identityProvider?: unknown;
+  auth_typ?: unknown;
   claims?: unknown;
 }
 
-function userFromEasyAuthHeader(encodedPrincipal: string): AuthenticatedUser {
+function claimValue(claims: unknown, ...types: string[]): string | undefined {
+  if (!Array.isArray(claims)) return undefined;
+  const claimTypes = new Set(types);
+  const claim = claims.find(
+    (item): item is { typ?: unknown; val?: unknown } =>
+      typeof item === "object" &&
+      item !== null &&
+      "typ" in item &&
+      claimTypes.has(String(item.typ)),
+  );
+  return claim && typeof claim.val === "string" && claim.val ? claim.val : undefined;
+}
+
+function userFromEasyAuthHeader(
+  encodedPrincipal: string,
+  principalId: string | null,
+): AuthenticatedUser {
   let principal: EasyAuthPrincipal;
   try {
     principal = JSON.parse(Buffer.from(encodedPrincipal, "base64").toString("utf8")) as EasyAuthPrincipal;
   } catch {
     throw new AuthError("invalid Easy Auth principal");
   }
-  if (typeof principal.userId !== "string" || !principal.userId) {
+  const provider =
+    typeof principal.identityProvider === "string"
+      ? principal.identityProvider
+      : typeof principal.auth_typ === "string"
+        ? principal.auth_typ.toLowerCase()
+        : "google";
+  const userId =
+    (typeof principal.userId === "string" && principal.userId) ||
+    principalId ||
+    claimValue(
+      principal.claims,
+      "sub",
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier",
+      "http://schemas.microsoft.com/identity/claims/objectidentifier",
+    );
+  if (!userId) {
     throw new AuthError("Easy Auth user id is missing");
   }
-  const provider = typeof principal.identityProvider === "string" ? principal.identityProvider : "google";
-  const id = principal.userId.includes(":") ? principal.userId : `${provider}:${principal.userId}`;
+  const id = userId.includes(":") ? userId : `${provider}:${userId}`;
   return { id, roles: [], plan: "free", isDevelopmentFallback: false };
 }
 
@@ -71,7 +102,7 @@ export async function getAuthenticatedUser(request: Request): Promise<Authentica
   if (config.authMode === "google") {
     const principal = request.headers.get("x-ms-client-principal");
     if (!principal) throw new AuthError();
-    return userFromEasyAuthHeader(principal);
+    return userFromEasyAuthHeader(principal, request.headers.get("x-ms-client-principal-id"));
   }
   if (!header) {
     if (config.authMode === "development") {

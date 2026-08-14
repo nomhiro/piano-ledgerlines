@@ -134,3 +134,30 @@ test("Google Easy Auth principal resolves to the storage user id", async () => {
   else env.NODE_ENV = previous.nodeEnv;
   resetConfigForTests();
 });
+
+test("Google Easy Auth claims resolve when the principal omits userId", async () => {
+  const env = process.env as Record<string, string | undefined>;
+  const previous = {
+    auth: process.env.LEDGERLINES_AUTH_MODE,
+    nodeEnv: process.env.NODE_ENV,
+  };
+  env.NODE_ENV = "production";
+  process.env.LEDGERLINES_AUTH_MODE = "google";
+  resetConfigForTests();
+  const principal = Buffer.from(JSON.stringify({
+    auth_typ: "Google",
+    claims: [{ typ: "sub", val: "100007109722337889200" }],
+  })).toString("base64");
+  const user = await getAuthenticatedUser(new Request("http://localhost", {
+    headers: {
+      "x-ms-client-principal": principal,
+      "x-ms-client-principal-id": "100007109722337889200",
+    },
+  }));
+  assert.equal(user.id, "google:100007109722337889200");
+  if (previous.auth === undefined) delete process.env.LEDGERLINES_AUTH_MODE;
+  else process.env.LEDGERLINES_AUTH_MODE = previous.auth;
+  if (previous.nodeEnv === undefined) delete env.NODE_ENV;
+  else env.NODE_ENV = previous.nodeEnv;
+  resetConfigForTests();
+});
