@@ -41,6 +41,50 @@ export function takesDir(): string {
   return path.join(DATA_DIR, "takes");
 }
 
+export function userDocPath(userId: string): string {
+  return path.join(DATA_DIR, "users", `${userId}.json`);
+}
+
+export function usersDir(): string {
+  return path.join(DATA_DIR, "users");
+}
+
+export function classroomDocPath(classroomId: string): string {
+  return path.join(DATA_DIR, "classrooms", `${classroomId}.json`);
+}
+
+export function classroomsDir(): string {
+  return path.join(DATA_DIR, "classrooms");
+}
+
+export function classroomMemberDocPath(classroomId: string, memberId: string): string {
+  return path.join(DATA_DIR, "classroom-members", classroomId, `${memberId}.json`);
+}
+
+export function classroomMembersDir(classroomId?: string): string {
+  return classroomId
+    ? path.join(DATA_DIR, "classroom-members", classroomId)
+    : path.join(DATA_DIR, "classroom-members");
+}
+
+export function classroomInvitationDocPath(classroomId: string, invitationId: string): string {
+  return path.join(DATA_DIR, "classroom-invitations", classroomId, `${invitationId}.json`);
+}
+
+export function classroomInvitationsDir(classroomId?: string): string {
+  return classroomId
+    ? path.join(DATA_DIR, "classroom-invitations", classroomId)
+    : path.join(DATA_DIR, "classroom-invitations");
+}
+
+export function billingEventDocPath(eventId: string): string {
+  return path.join(DATA_DIR, "billing-events", `${eventId}.json`);
+}
+
+export function billingEventsDir(): string {
+  return path.join(DATA_DIR, "billing-events");
+}
+
 export function audioDir(takeId: string): string {
   return path.join(DATA_DIR, "audio", takeId);
 }

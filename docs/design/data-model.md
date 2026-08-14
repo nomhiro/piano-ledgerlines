@@ -3,8 +3,8 @@
 | 項目 | 内容 |
 |---|---|
 | ドキュメントID | DESIGN-DATA |
-| バージョン | 0.1（M3 ドラフト） |
-| 最終更新 | 2026-07-25 |
+| バージョン | 0.2（教室基盤層） |
+| 最終更新 | 2026-08-14 |
 | ストア | Azure Cosmos DB for NoSQL + Azure Blob Storage |
 
 ---
@@ -101,6 +101,28 @@ work/{takeId}/preprocessed.wav
 >
 > **トレードオフ**: 「ユーザーの全テイクを横断」するクエリ（ダッシュボードの練習ログ等）が
 > クロスパーティションになる。→ 集計値を `songs` コンテナの `practiceLog` に非正規化して解決する。
+
+### 3.3 教室サブスク基盤コンテナ
+
+第1層では既存の `users`（PK `/id`）を再利用し、以下のコンテナを追加する。
+
+| コンテナ | パーティションキー | 用途 |
+|---|---|---|
+| `classrooms` | `/id` | 教室設定、契約状態、先生上限、課金集計 |
+| `classroom-members` | `/classroomId` | owner/teacher/student のmembership |
+| `classroom-invitations` | `/classroomId` | 招待状態。tokenはハッシュのみ保存 |
+| `billing-events` | `/id` | Stripe webhookのイベントIDによる冪等性 |
+
+`classroom-members.id` は `classroomId` と `userId` から決定的に生成する。
+生徒の曲・テイクは引き続き本人の `userId` を所有者とし、membership はアクセス権だけを表す。
+先生は複数教室を持てるが、生徒は有効membershipを同時に1教室までとする制約をサービス層で検証する。
+
+## 4. 教室ドメインの確定型
+
+`src/lib/server/types.ts` の `UserProfileDoc`、`ClassroomDoc`、
+`ClassroomMemberDoc`、`ClassroomInvitationDoc`、`BillingEventDoc` が
+Cosmos/Local共通の永続化型である。契約・招待送信・Stripe webhook処理は後続層が実装する。
+`RepositoryWriteOptions.ifMatch` と `RepositoryDocument.etag` により、更新競合を明示的に扱う。
 
 ---
 

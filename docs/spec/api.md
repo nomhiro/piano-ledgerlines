@@ -3,8 +3,8 @@
 | 項目 | 内容 |
 |---|---|
 | ドキュメントID | SPEC-API |
-| バージョン | 0.1（M3 ドラフト） |
-| 最終更新 | 2026-07-25 |
+| バージョン | 0.2（教室基盤層） |
+| 最終更新 | 2026-08-14 |
 | ベースURL | `https://api.ledgerlines.app/api` |
 
 ---
@@ -109,6 +109,12 @@ API へは `Authorization: Bearer` で送る。
 本番では `LEDGERLINES_AUTH_MODE=entra`、issuer・audience・JWKS URL の設定が必須であり、
 署名、issuer、audience、期限を検証する。API はリソース所有者のIDを必ずクエリ条件に含める。
 
+Google Easy Auth は `x-ms-client-principal` をサーバー側で検証済みのprincipalとして読み、
+`sub`/nameidentifier/objectidentifier、`email`/emailaddress、`name` の許可済みclaimから
+ユーザーID・確認可能なメール・表示名を取得する。必須claimが欠落または不正なprincipalは
+401で明示的に拒否する。初回ログインとprovider情報の変更時には `users` をupsertし、
+`normalizedEmail` と同期時刻を更新する。PIIやprincipalの内容はログへ出力しない。
+
 ### 3.2 無料プランの利用上限
 
 無料プランは、UTC基準の暦月ごとにテイク作成を5件まで許可する。6件目の
@@ -132,6 +138,13 @@ POST /api/shares/{token}/comments
 | スコープ | 共有対象のテイク（または曲配下の全テイク）に限定 |
 | 書き込み | コメントの投稿のみ許可。他は全て 403 |
 | 投稿者名 | 共有リンクの初回アクセス時に名前を入力させ、Cookie に保持 |
+
+### 3.4 Account context
+
+`GET /api/account` は認証ユーザー自身のprofileと教室membership要約を返す。
+教室membershipがない場合は `mode: "individual"` とし、教室名や教室権限を表示しない。
+レスポンスの `permissions` と `entitlement` は後続UI/APIが共通利用するサーバー導出値であり、
+クライアント入力を権限判定に使わない。契約未作成の教室は `contractStatus: "none"` とする。
 
 ---
 

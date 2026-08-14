@@ -6,6 +6,10 @@ export interface AuthenticatedUser {
   id: string;
   roles: string[];
   plan: "free" | "paid";
+  provider: "google" | "entra" | "development";
+  email: string;
+  displayName: string;
+  emailVerified: boolean;
   isDevelopmentFallback: boolean;
 }
 
@@ -19,6 +23,24 @@ export class AuthError extends Error {
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 
+function validEmail(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const email = value.trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function claimFromJwt(claims: JWTPayload, ...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = nonEmptyString(claims[name]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
 function userFromClaims(claims: JWTPayload): AuthenticatedUser {
   const id =
     typeof claims.oid === "string"
@@ -27,6 +49,16 @@ function userFromClaims(claims: JWTPayload): AuthenticatedUser {
         ? claims.sub
         : "";
   if (!id) throw new AuthError("token subject is missing");
+  const email = validEmail(
+    claimFromJwt(claims, "email", "preferred_username", "upn")
+  );
+  if (!email) throw new AuthError("token email claim is missing or invalid");
+  const displayName =
+    claimFromJwt(claims, "name", "displayName") ??
+    [claimFromJwt(claims, "given_name"), claimFromJwt(claims, "family_name")]
+      .filter(Boolean)
+      .join(" ");
+  if (!displayName) throw new AuthError("token display name claim is missing");
   const roles = Array.isArray(claims.roles)
     ? claims.roles.filter((role): role is string => typeof role === "string")
     : [];
@@ -37,14 +69,25 @@ function userFromClaims(claims: JWTPayload): AuthenticatedUser {
     roles.some((role) => role === "paid" || role === "premium")
       ? "paid"
       : "free";
-  return { id, roles, plan, isDevelopmentFallback: false };
+  return {
+    id,
+    roles,
+    plan,
+    provider: "entra",
+    email,
+    displayName,
+    emailVerified: claims.email_verified === true,
+    isDevelopmentFallback: false,
+  };
 }
 
 interface EasyAuthPrincipal {
   userId?: unknown;
   identityProvider?: unknown;
   auth_typ?: unknown;
+  userDetails?: unknown;
   claims?: unknown;
+  userClaims?: unknown;
 }
 
 function claimValue(claims: unknown, ...types: string[]): string | undefined {
@@ -60,13 +103,19 @@ function claimValue(claims: unknown, ...types: string[]): string | undefined {
   return claim && typeof claim.val === "string" && claim.val ? claim.val : undefined;
 }
 
+function booleanClaimValue(claims: unknown, ...types: string[]): boolean {
+  const value = claimValue(claims, ...types);
+  return value === "true";
+}
+
 function userFromEasyAuthHeader(
   encodedPrincipal: string,
   principalId: string | null,
 ): AuthenticatedUser {
   let principal: EasyAuthPrincipal;
   try {
-    principal = JSON.parse(Buffer.from(encodedPrincipal, "base64").toString("utf8")) as EasyAuthPrincipal;
+    const base64 = encodedPrincipal.replace(/-/g, "+").replace(/_/g, "/");
+    principal = JSON.parse(Buffer.from(base64, "base64").toString("utf8")) as EasyAuthPrincipal;
   } catch {
     throw new AuthError("invalid Easy Auth principal");
   }
@@ -88,8 +137,57 @@ function userFromEasyAuthHeader(
   if (!userId) {
     throw new AuthError("Easy Auth user id is missing");
   }
-  const id = userId.includes(":") ? userId : `${provider}:${userId}`;
-  return { id, roles: [], plan: "free", isDevelopmentFallback: false };
+  const claims = [principal.claims, principal.userClaims];
+  const email = validEmail(
+    claims.map((value) =>
+      claimValue(
+        value,
+        "email",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+        "http://schemas.microsoft.com/identity/claims/emailaddress",
+        "preferred_username",
+        "upn",
+      )
+    ).find(Boolean)
+  );
+  if (!email) throw new AuthError("Easy Auth email claim is missing or invalid");
+  const displayName =
+    nonEmptyString(principal.userDetails) ??
+    claims
+      .map((value) =>
+        claimValue(
+          value,
+          "name",
+          "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name",
+          "http://schemas.microsoft.com/identity/claims/displayname",
+        )
+      )
+      .find(Boolean);
+  if (!displayName) throw new AuthError("Easy Auth display name claim is missing");
+  const normalizedProvider = provider.toLowerCase();
+  const authProvider =
+    normalizedProvider === "google"
+      ? "google"
+      : normalizedProvider === "entra" || normalizedProvider === "aad"
+        ? "entra"
+        : "google";
+  const id = userId.includes(":") ? userId : `${authProvider}:${userId}`;
+  return {
+    id,
+    roles: [],
+    plan: "free",
+    provider: authProvider,
+    email,
+    displayName,
+    emailVerified: claims.some((value) =>
+      booleanClaimValue(
+        value,
+        "email_verified",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/email_verified",
+      )
+    ),
+    isDevelopmentFallback: false,
+  };
 }
 
 /**
@@ -106,7 +204,16 @@ export async function getAuthenticatedUser(request: Request): Promise<Authentica
   }
   if (!header) {
     if (config.authMode === "development") {
-      return { id: config.devUserId, roles: ["developer"], plan: "free", isDevelopmentFallback: true };
+      return {
+        id: config.devUserId,
+        roles: ["developer"],
+        plan: "free",
+        provider: "development",
+        email: `${config.devUserId}@local.invalid`,
+        displayName: "Local developer",
+        emailVerified: true,
+        isDevelopmentFallback: true,
+      };
     }
     throw new AuthError();
   }

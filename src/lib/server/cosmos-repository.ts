@@ -1,9 +1,27 @@
 import { CosmosClient, type Container, type SqlQuerySpec } from "@azure/cosmos";
 import https from "node:https";
 import path from "node:path";
-import type { Repository, SongTakeSummary } from "./repository";
-import type { CreateSongInput, CreateTakeInput, SongDoc, TakeDoc } from "./types";
-import { newSongId, newTakeId } from "./ids";
+import type {
+  Repository,
+  RepositoryDocument,
+  RepositoryWriteOptions,
+  SongTakeSummary,
+} from "./repository";
+import {
+  RepositoryConflictError as RepositoryConflictErrorClass,
+} from "./repository";
+import type {
+  BillingEventDoc,
+  ClassroomDoc,
+  ClassroomInvitationDoc,
+  ClassroomMemberDoc,
+  CreateSongInput,
+  CreateTakeInput,
+  SongDoc,
+  TakeDoc,
+  UserProfileDoc,
+} from "./types";
+import { classroomMemberId, newSongId, newTakeId } from "./ids";
 import { getConfig } from "./config";
 import { getBlobStore } from "./blob-storage";
 import { assertTakeTransition } from "./take-state";
@@ -17,9 +35,19 @@ function notFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: number }).code === 404;
 }
 
+function conflict(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    ((error as { code?: number }).code === 409 || (error as { code?: number }).code === 412);
+}
+
 export class CosmosRepository implements Repository {
   private readonly songs: Container;
   private readonly takes: Container;
+  private readonly users: Container;
+  private readonly classrooms: Container;
+  private readonly classroomMembers: Container;
+  private readonly classroomInvitations: Container;
+  private readonly billingEvents: Container;
 
   constructor() {
     const config = getConfig();
@@ -34,8 +62,186 @@ export class CosmosRepository implements Repository {
           aadCredentials: createAzureCredential(),
         });
     const database = client.database(config.cosmosDatabase);
+    this.users = database.container(config.cosmosUsersContainer);
+    this.classrooms = database.container(config.cosmosClassroomsContainer);
+    this.classroomMembers = database.container(config.cosmosClassroomMembersContainer);
+    this.classroomInvitations = database.container(config.cosmosClassroomInvitationsContainer);
+    this.billingEvents = database.container(config.cosmosBillingEventsContainer);
     this.songs = database.container(config.cosmosSongsContainer);
     this.takes = database.container(config.cosmosTakesContainer);
+  }
+
+  async getUser(userId: string): Promise<UserProfileDoc | null> {
+    return (await this.getUserRecord(userId))?.document ?? null;
+  }
+
+  async getUserRecord(userId: string): Promise<RepositoryDocument<UserProfileDoc> | null> {
+    return this.readRecord(this.users, userId, userId);
+  }
+
+  async upsertUser(user: UserProfileDoc, options?: RepositoryWriteOptions): Promise<UserProfileDoc> {
+    return (await this.upsertRecord(this.users, user, user.id, options)).document;
+  }
+
+  async upsertUserRecord(user: UserProfileDoc, options?: RepositoryWriteOptions): Promise<RepositoryDocument<UserProfileDoc>> {
+    return this.upsertRecord(this.users, user, user.id, options);
+  }
+
+  async createClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc> {
+    return (await this.createRecord(this.classrooms, classroom, classroom.id, options)).document;
+  }
+
+  async getClassroom(classroomId: string): Promise<ClassroomDoc | null> {
+    return (await this.readRecord<ClassroomDoc>(this.classrooms, classroomId, classroomId))?.document ?? null;
+  }
+
+  async upsertClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc> {
+    return (await this.upsertRecord(this.classrooms, classroom, classroom.id, options)).document;
+  }
+
+  async listClassroomsByOwner(ownerUserId: string): Promise<ClassroomDoc[]> {
+    const query: SqlQuerySpec = {
+      query: "SELECT * FROM c WHERE c.ownerUserId = @ownerUserId",
+      parameters: [{ name: "@ownerUserId", value: ownerUserId }],
+    };
+    return (await this.classrooms.items.query<ClassroomDoc>(query).fetchAll()).resources;
+  }
+
+  async createClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
+    return (await this.createRecord(this.classroomMembers, member, member.classroomId, options)).document;
+  }
+
+  async getClassroomMember(classroomId: string, userId: string): Promise<ClassroomMemberDoc | null> {
+    return (
+      await this.readRecord<ClassroomMemberDoc>(
+        this.classroomMembers,
+        classroomMemberId(classroomId, userId),
+        classroomId,
+      )
+    )?.document ?? null;
+  }
+
+  async upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
+    return (await this.upsertRecord(this.classroomMembers, member, member.classroomId, options)).document;
+  }
+
+  async listClassroomMembers(classroomId: string): Promise<ClassroomMemberDoc[]> {
+    const query: SqlQuerySpec = {
+      query: "SELECT * FROM c WHERE c.classroomId = @classroomId ORDER BY c.createdAt ASC",
+      parameters: [{ name: "@classroomId", value: classroomId }],
+    };
+    return (await this.classroomMembers.items.query<ClassroomMemberDoc>(query, { partitionKey: classroomId }).fetchAll()).resources;
+  }
+
+  async createClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc> {
+    return (await this.createRecord(this.classroomInvitations, invitation, invitation.classroomId, options)).document;
+  }
+
+  async getClassroomInvitation(classroomId: string, invitationId: string): Promise<ClassroomInvitationDoc | null> {
+    return (await this.readRecord<ClassroomInvitationDoc>(this.classroomInvitations, invitationId, classroomId))?.document ?? null;
+  }
+
+  async upsertClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc> {
+    return (await this.upsertRecord(this.classroomInvitations, invitation, invitation.classroomId, options)).document;
+  }
+
+  async listClassroomInvitations(classroomId: string): Promise<ClassroomInvitationDoc[]> {
+    const query: SqlQuerySpec = {
+      query: "SELECT * FROM c WHERE c.classroomId = @classroomId ORDER BY c.createdAt DESC",
+      parameters: [{ name: "@classroomId", value: classroomId }],
+    };
+    return (await this.classroomInvitations.items.query<ClassroomInvitationDoc>(query, { partitionKey: classroomId }).fetchAll()).resources;
+  }
+
+  async deleteClassroomInvitation(classroomId: string, invitationId: string, options?: RepositoryWriteOptions): Promise<void> {
+    const item = this.classroomInvitations.item(invitationId, classroomId);
+    try {
+      await item.delete({
+        accessCondition: options?.ifMatch
+          ? { type: "IfMatch", condition: options.ifMatch }
+          : undefined,
+      });
+    } catch (error) {
+      if (notFound(error)) return;
+      if (conflict(error)) throw new RepositoryConflictErrorClass("etag does not match");
+      throw error;
+    }
+  }
+
+  async createBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc> {
+    return (await this.createRecord(this.billingEvents, event, event.id, options)).document;
+  }
+
+  async getBillingEvent(eventId: string): Promise<BillingEventDoc | null> {
+    return (await this.readRecord<BillingEventDoc>(this.billingEvents, eventId, eventId))?.document ?? null;
+  }
+
+  async upsertBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc> {
+    return (await this.upsertRecord(this.billingEvents, event, event.id, options)).document;
+  }
+
+  async listBillingEvents(): Promise<BillingEventDoc[]> {
+    const query: SqlQuerySpec = {
+      query: "SELECT * FROM c ORDER BY c.createdAt DESC",
+      parameters: [],
+    };
+    return (await this.billingEvents.items.query<BillingEventDoc>(query).fetchAll()).resources;
+  }
+
+  private async readRecord<T extends { id: string }>(
+    container: Container,
+    id: string,
+    partitionKey: string,
+  ): Promise<RepositoryDocument<T> | null> {
+    try {
+      const response = await container.item(id, partitionKey).read<T>();
+      return response.resource ? { document: response.resource, etag: response.etag ?? null } : null;
+    } catch (error) {
+      if (notFound(error)) return null;
+      throw error;
+    }
+  }
+
+  private async createRecord<T extends { id: string }>(
+    container: Container,
+    document: T,
+    partitionKey: string,
+    options?: RepositoryWriteOptions,
+  ): Promise<RepositoryDocument<T>> {
+    try {
+      const response = await container.items.create<T>(document, {
+        accessCondition: options?.ifMatch
+          ? { type: "IfMatch", condition: options.ifMatch }
+          : undefined,
+      });
+      return { document: response.resource ?? document, etag: response.etag ?? null };
+    } catch (error) {
+      if (conflict(error)) throw new RepositoryConflictErrorClass("document already exists");
+      throw error;
+    }
+  }
+
+  private async upsertRecord<T extends { id: string }>(
+    container: Container,
+    document: T,
+    partitionKey: string,
+    options?: RepositoryWriteOptions,
+  ): Promise<RepositoryDocument<T>> {
+    if (options?.ifNoneMatch) {
+      const current = await this.readRecord<T>(container, document.id, partitionKey);
+      if (current) throw new RepositoryConflictErrorClass("document already exists");
+    }
+    try {
+      const response = options?.ifMatch
+        ? await container.item(document.id, partitionKey).replace(document, {
+            accessCondition: { type: "IfMatch", condition: options.ifMatch },
+          })
+        : await container.items.upsert<T>(document);
+      return { document: response.resource ?? document, etag: response.etag ?? null };
+    } catch (error) {
+      if (conflict(error)) throw new RepositoryConflictErrorClass("etag does not match");
+      throw error;
+    }
   }
 
   async createSong(userId: string, input: CreateSongInput): Promise<SongDoc> {

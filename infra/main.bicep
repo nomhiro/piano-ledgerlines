@@ -74,6 +74,22 @@ var cosmosContainers = [
     partitionKey: '/id'
   }
   {
+    name: 'classrooms'
+    partitionKey: '/id'
+  }
+  {
+    name: 'classroom-members'
+    partitionKey: '/classroomId'
+  }
+  {
+    name: 'classroom-invitations'
+    partitionKey: '/classroomId'
+  }
+  {
+    name: 'billing-events'
+    partitionKey: '/id'
+  }
+  {
     name: 'songs'
     partitionKey: '/userId'
   }
