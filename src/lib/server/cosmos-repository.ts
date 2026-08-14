@@ -158,7 +158,7 @@ export class CosmosRepository implements Repository {
 
   async listTakesBySong(userId: string, songId: string): Promise<TakeDoc[]> {
     const query: SqlQuerySpec = {
-      query: "SELECT * FROM c WHERE c.userId = @userId AND c.songId = @songId ORDER BY c.recordedAt DESC",
+      query: "SELECT * FROM c WHERE c.userId = @userId AND c.songId = @songId ORDER BY c.recordedAt ASC",
       parameters: [{ name: "@userId", value: userId }, { name: "@songId", value: songId }],
     };
     return (await this.takes.items.query<TakeDoc>(query, { partitionKey: userId }).fetchAll()).resources;
