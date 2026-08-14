@@ -121,7 +121,10 @@ work/{takeId}/preprocessed.wav
 
 `src/lib/server/types.ts` の `UserProfileDoc`、`ClassroomDoc`、
 `ClassroomMemberDoc`、`ClassroomInvitationDoc`、`BillingEventDoc` が
-Cosmos/Local共通の永続化型である。契約・招待送信・Stripe webhook処理は後続層が実装する。
+Cosmos/Local共通の永続化型である。招待送信は server-only の `EmailSender` 抽象を介し、
+本番では Azure Communication Services Email、開発では明示的な in-memory/console-safe
+実装を使う。招待URL・token・メール本文は永続化せず、`ClassroomInvitationDoc` には
+token hash のみを保存する。契約・招待ドメイン処理・Stripe webhook処理は後続層が実装する。
 `RepositoryWriteOptions.ifMatch` と `RepositoryDocument.etag` により、更新競合を明示的に扱う。
 Localのdomain record更新は `proper-lockfile` のWindows対応atomic lock directory、
 mtime lease、stale recovery、bounded retry/release契約を使い、独自のlockPath

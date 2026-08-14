@@ -801,7 +801,19 @@ PoVモックは `src/lib/mock/generate.ts` でデータを生成しているが�
 
 ---
 
-## 9. 教室Stripe課金
+## 9. 教室招待メールとStripe課金
+
+教室招待のメール配信は API route から直接 SDK を呼ばず、server-only の `EmailSender`
+インターフェースへ依存する。`AzureEmailSender` は Azure Communication Services Email
+の `EmailClient.beginSend()` を開始し、`pollUntilDone()` で完了を確認する。宛先・本文・
+招待URL/token はレスポンス、ログ、telemetry に含めない。
+
+本番は `LEDGERLINES_EMAIL_BACKEND=azure` と
+`AZURE_COMMUNICATION_EMAIL_ENDPOINT`、`AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS` を
+必須とし、未設定または `memory`/`console` のままでは配信経路の初期化時に fail-closed する。
+開発の既定は in-memory sender で、外部送信を行わない。
+
+### 9.1 教室Stripe課金
 
 課金routeは Node.js runtime のserver-only処理です。Stripeのsecret、Customer ID、
 Subscription ID、Webhook payloadはクライアントへ返さず、ログにも出しません。

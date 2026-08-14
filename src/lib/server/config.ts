@@ -2,6 +2,7 @@ import path from "node:path";
 
 export type BackendKind = "local" | "azure";
 export type AuthMode = "development" | "entra" | "google";
+export type EmailBackend = "memory" | "console" | "azure";
 
 export interface AppConfig {
   nodeEnv: string;
@@ -49,6 +50,9 @@ export interface AppConfig {
   stripeClassroomBasePriceId?: string;
   stripeClassroomStudentPriceId?: string;
   ledgerlinesAppBaseUrl?: string;
+  emailBackend: EmailBackend;
+  azureCommunicationEmailEndpoint?: string;
+  azureCommunicationEmailSenderAddress?: string;
 }
 
 let cachedConfig: AppConfig | undefined;
@@ -89,6 +93,12 @@ export function getConfig(): AppConfig {
   const queueBackend = backend("LEDGERLINES_QUEUE", "local");
   const azureRequired = repositoryBackend === "azure" || storageBackend === "azure" || queueBackend === "azure";
   const foundryEnabled = process.env.LEDGERLINES_FOUNDRY_ENABLED === "true";
+  const defaultEmailBackend: EmailBackend =
+    nodeEnv === "production" && process.env.NEXT_PHASE !== "phase-production-build" ? "azure" : "memory";
+  const emailBackend = process.env.LEDGERLINES_EMAIL_BACKEND ?? defaultEmailBackend;
+  if (emailBackend !== "memory" && emailBackend !== "console" && emailBackend !== "azure") {
+    throw new Error('LEDGERLINES_EMAIL_BACKEND must be "memory", "console", or "azure"');
+  }
 
   const config: AppConfig = {
     nodeEnv,
@@ -139,6 +149,9 @@ export function getConfig(): AppConfig {
     stripeClassroomBasePriceId: process.env.STRIPE_CLASSROOM_BASE_PRICE_ID?.trim(),
     stripeClassroomStudentPriceId: process.env.STRIPE_CLASSROOM_STUDENT_PRICE_ID?.trim(),
     ledgerlinesAppBaseUrl: process.env.LEDGERLINES_APP_BASE_URL?.trim(),
+    emailBackend,
+    azureCommunicationEmailEndpoint: process.env.AZURE_COMMUNICATION_EMAIL_ENDPOINT?.trim(),
+    azureCommunicationEmailSenderAddress: process.env.AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS?.trim(),
   };
 
   if (config.azureEmulator && nodeEnv === "production") {
@@ -191,6 +204,9 @@ export function getConfig(): AppConfig {
   if (foundryEnabled) {
     required("AZURE_FOUNDRY_ENDPOINT", config.foundryEndpoint);
     required("AZURE_FOUNDRY_DEPLOYMENT", config.foundryDeployment);
+  }
+  if (nodeEnv === "production" && process.env.NEXT_PHASE !== "phase-production-build" && emailBackend !== "azure") {
+    throw new Error("Production email delivery must use Azure Communication Services");
   }
   if (!Number.isInteger(config.sasLifetimeSeconds) || config.sasLifetimeSeconds < 60 || config.sasLifetimeSeconds > 3600) {
     throw new Error("AZURE_SAS_LIFETIME_SECONDS must be an integer between 60 and 3600");

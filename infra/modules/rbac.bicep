@@ -9,6 +9,10 @@ param keyVaultName string
 
 param webPrincipalId string
 param workerPrincipalId string
+@description('Existing ACS Communication Service name when email is enabled.')
+param communicationServiceName string = ''
+@description('Whether to assign ACS email permissions to the web identity.')
+param enableCommunicationEmail bool = false
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: storageAccountName
@@ -22,11 +26,16 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
+resource communicationService 'Microsoft.Communication/communicationServices@2023-04-01' existing = if (enableCommunicationEmail) {
+  name: communicationServiceName
+}
+
 var blobContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var queueSenderRoleId = 'c6a89b2d-59bc-44d0-9896-0f6e12d7b80a'
 var queueProcessorRoleId = '8a0f0c08-91a1-4084-bc3d-661d67233fed'
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
+var communicationEmailOwnerRoleId = '09976791-48a7-449e-bb21-39d1a415f350'
 
 resource webBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storageAccount.id, webPrincipalId, blobContributorRoleId)
@@ -105,5 +114,15 @@ resource workerCosmosRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignme
     principalId: workerPrincipalId
     roleDefinitionId: '${cosmosAccount.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
     scope: cosmosAccount.id
+  }
+}
+
+resource webCommunicationEmailRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (enableCommunicationEmail) {
+  name: guid(communicationService.id, webPrincipalId, communicationEmailOwnerRoleId)
+  scope: communicationService
+  properties: {
+    principalId: webPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', communicationEmailOwnerRoleId)
   }
 }

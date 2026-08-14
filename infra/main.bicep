@@ -48,6 +48,21 @@ param workerImage string = ''
 @description('Worker Container App name.')
 param workerContainerAppName string = '${resourceNamePrefix}-analysis-worker'
 
+@description('Deploy Azure Communication Services Email resources for classroom invitations.')
+param enableCommunicationEmail bool = false
+
+@description('Azure Communication Services resource name.')
+param communicationServiceName string = '${resourceNamePrefix}-comm'
+
+@description('Azure Communication Services Email resource name.')
+param emailServiceName string = '${resourceNamePrefix}-email'
+
+@description('Email domain resource name. AzureManagedDomain is provisioned by Azure.')
+param emailDomainName string = 'AzureManagedDomain'
+
+@description('Data residency location for ACS Email.')
+param emailDataLocation string = 'Japan'
+
 var normalizedPrefix = toLower(replace(replace(resourceNamePrefix, '-', ''), '_', ''))
 var nameSuffix = uniqueString(subscription().id, resourceGroup().id)
 var storageAccountName = take('${normalizedPrefix}${nameSuffix}', 24)
@@ -212,6 +227,22 @@ module foundry './modules/foundry.bicep' = {
   }
 }
 
+module communicationEmail './modules/communication-email.bicep' = {
+  name: '${environmentName}-communication-email'
+  params: {
+    communicationServiceName: communicationServiceName
+    emailServiceName: emailServiceName
+    emailDomainName: emailDomainName
+    dataLocation: emailDataLocation
+    enabled: enableCommunicationEmail
+    tags: {
+      environment: environmentName
+      component: 'email'
+      managedBy: 'bicep'
+    }
+  }
+}
+
 module rbac './modules/rbac.bicep' = {
   name: '${environmentName}-rbac'
   params: {
@@ -220,6 +251,8 @@ module rbac './modules/rbac.bicep' = {
     keyVaultName: keyVault.outputs.name
     webPrincipalId: identity.outputs.webPrincipalId
     workerPrincipalId: identity.outputs.workerPrincipalId
+    communicationServiceName: communicationServiceName
+    enableCommunicationEmail: enableCommunicationEmail
   }
 }
 
@@ -274,5 +307,9 @@ output workerManagedIdentityClientId string = identity.outputs.workerClientId
 output foundryEnabled bool = enableFoundry
 output foundryEndpoint string = foundry.outputs.endpoint
 output foundryDeploymentName string = foundry.outputs.deploymentName
+output communicationEmailEnabled bool = enableCommunicationEmail
+output communicationServiceName string = communicationEmail.outputs.communicationServiceName
+output communicationEmailEndpoint string = communicationEmail.outputs.endpoint
+output communicationEmailDomainName string = communicationEmail.outputs.emailDomainName
 output appImageConfiguration string = 'Hosting is intentionally not provisioned: publish an app image, then add a web service to azure.yaml.'
 output workerImageConfiguration string = enableWorkerHosting ? workerImage : 'Worker hosting disabled. Set enableWorkerHosting=true and provide workerImage.'

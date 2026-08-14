@@ -77,6 +77,28 @@ Private Endpoint と VNet 統合は、本番ネットワーク設計が確定し
 `allowSharedKeyAccess=false`、Blob の匿名公開無効、TLS 1.2、Key Vault RBAC、
 Cosmos のローカル認証無効が既定の安全策です。
 
+## Classroom invitation email
+
+`infra/main.bicep` は既定では ACS Email を作成しません。環境ごとに
+`enableCommunicationEmail=true` を指定して What-if を確認してから Provision します。
+このオプションは Communication Service、Email Service、Azure-managed domain を作成し、
+Web の user-assigned identity に `Communication and Email Service Owner` RBAC を付与します。
+
+```json
+{
+  "enableCommunicationEmail": { "value": true },
+  "emailDataLocation": { "value": "Japan" }
+}
+```
+
+Provision 後の `communicationEmailEndpoint` を
+`AZURE_COMMUNICATION_EMAIL_ENDPOINT` に設定し、Azure-managed domain または検証済み
+customer-managed domain の送信元を `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS` に設定します。
+アプリは接続文字列・アクセスキーを使わず `DefaultAzureCredential`（本番は Managed Identity）
+で認証します。`LEDGERLINES_EMAIL_BACKEND=azure` が本番の必須設定です。開発では
+`memory`（既定）または本文・宛先を出力しない `console` を明示的に選択できます。
+招待URL、トークン、宛先アドレス、本文をログや telemetry に出力しないでください。
+
 ## 環境の更新・削除
 
 ```powershell
