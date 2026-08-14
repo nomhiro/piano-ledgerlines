@@ -12,6 +12,7 @@ import {
   Plus,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import type { AccountContext } from "@/lib/server/account";
 
 const NAV = [
   { href: "/", label: "ダッシュボード", icon: LayoutDashboard, exact: true },
@@ -22,8 +23,17 @@ const NAV = [
   { href: "/share", label: "先生と共有", icon: Users },
 ];
 
-export default function AppShell({ children }: { children: ReactNode }) {
+export default function AppShell({
+  children,
+  account,
+}: {
+  children: ReactNode;
+  account: AccountContext | null;
+}) {
   const pathname = usePathname();
+  const initials = account?.profile.displayName.trim().slice(0, 2) || "LL";
+  const classroomName =
+    account?.mode === "classroom" ? account.activeClassroom?.name : undefined;
 
   return (
     <div className="flex min-h-screen">
@@ -71,11 +81,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
           </Link>
           <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface-2)] text-xs font-semibold">
-              野村
+              {initials}
             </div>
             <div className="leading-tight">
-              <div className="text-xs">野村 大樹</div>
-              <div className="text-[10px] text-[var(--muted)]">白鳥ピアノ教室</div>
+              {account ? (
+                <>
+                  <div className="text-xs">{account.profile.displayName}</div>
+                  <div className="text-[10px] text-[var(--muted)]">{account.profile.email}</div>
+                </>
+              ) : (
+                <div className="text-xs text-[var(--muted)]">ログインが必要です</div>
+              )}
+              {classroomName && (
+                <div className="text-[10px] text-[var(--muted)]">{classroomName}</div>
+              )}
             </div>
           </div>
         </div>

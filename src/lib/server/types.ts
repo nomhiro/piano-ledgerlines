@@ -131,6 +131,97 @@ export interface TakeDoc {
   updatedAt: string;
 }
 
+export interface UserSettings {
+  dailyPracticeMinutes: number;
+  locale: string;
+  allowTrainingUse: boolean;
+  notifyOnAnalysisComplete: boolean;
+}
+
+export interface ClassroomReference {
+  classroomId: string;
+  role: ClassroomRole;
+  status: ClassroomMemberStatus;
+}
+
+export interface UserProfileDoc {
+  id: string;
+  type: "user";
+  email: string;
+  normalizedEmail: string;
+  displayName: string;
+  provider: "google" | "entra" | "development";
+  providerSyncedAt: string;
+  settings: UserSettings;
+  classroomRefs: ClassroomReference[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ClassroomRole = "owner" | "teacher" | "student";
+export type ClassroomMemberStatus = "provisioning" | "active" | "removing" | "removed";
+export type ClassroomAppStatus = "provisioning" | "active" | "suspended" | "archived";
+export type ClassroomContractStatus =
+  | "none"
+  | "incomplete"
+  | "active"
+  | "past_due"
+  | "canceled";
+
+export interface ClassroomDoc {
+  id: string;
+  type: "classroom";
+  name: string;
+  ownerUserId: string;
+  teacherLimit: number;
+  billableStudentCount: number;
+  billing: {
+    stripeCustomerId: string | null;
+    stripeSubscriptionId: string | null;
+    status: ClassroomContractStatus;
+  };
+  appStatus: ClassroomAppStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClassroomMemberDoc {
+  id: string;
+  type: "classroom-member";
+  classroomId: string;
+  userId: string;
+  role: ClassroomRole;
+  status: ClassroomMemberStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClassroomInvitationDoc {
+  id: string;
+  type: "classroom-invitation";
+  classroomId: string;
+  email: string;
+  normalizedEmail: string;
+  role: Exclude<ClassroomRole, "owner">;
+  status: "pending" | "accepted" | "expired" | "revoked";
+  tokenHash: string | null;
+  expiresAt: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BillingEventDoc {
+  id: string;
+  type: "billing-event";
+  provider: "stripe";
+  eventType: string;
+  livemode: boolean;
+  payloadHash: string;
+  processedAt: string | null;
+  createdAt: string;
+}
+
 // api.md 5.1 `POST /songs` 相当（ローカル簡略版: SASなしの直接multipartアップロード）
 export interface CreateSongInput {
   title: string;

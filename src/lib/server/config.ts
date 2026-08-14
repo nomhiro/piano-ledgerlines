@@ -17,6 +17,11 @@ export interface AppConfig {
   cosmosEndpoint?: string;
   cosmosKey?: string;
   cosmosDatabase: string;
+  cosmosUsersContainer: string;
+  cosmosClassroomsContainer: string;
+  cosmosClassroomMembersContainer: string;
+  cosmosClassroomInvitationsContainer: string;
+  cosmosBillingEventsContainer: string;
   cosmosSongsContainer: string;
   cosmosTakesContainer: string;
   storageAccountUrl?: string;
@@ -94,6 +99,14 @@ export function getConfig(): AppConfig {
     cosmosEndpoint: process.env.AZURE_COSMOS_ENDPOINT?.trim(),
     cosmosKey: process.env.AZURE_COSMOS_KEY?.trim(),
     cosmosDatabase: process.env.AZURE_COSMOS_DATABASE ?? "ledgerlines",
+    cosmosUsersContainer: process.env.AZURE_COSMOS_USERS_CONTAINER ?? "users",
+    cosmosClassroomsContainer: process.env.AZURE_COSMOS_CLASSROOMS_CONTAINER ?? "classrooms",
+    cosmosClassroomMembersContainer:
+      process.env.AZURE_COSMOS_CLASSROOM_MEMBERS_CONTAINER ?? "classroom-members",
+    cosmosClassroomInvitationsContainer:
+      process.env.AZURE_COSMOS_CLASSROOM_INVITATIONS_CONTAINER ?? "classroom-invitations",
+    cosmosBillingEventsContainer:
+      process.env.AZURE_COSMOS_BILLING_EVENTS_CONTAINER ?? "billing-events",
     cosmosSongsContainer: process.env.AZURE_COSMOS_SONGS_CONTAINER ?? "songs",
     cosmosTakesContainer: process.env.AZURE_COSMOS_TAKES_CONTAINER ?? "takes",
     storageAccountUrl: process.env.AZURE_STORAGE_ACCOUNT_URL?.trim(),

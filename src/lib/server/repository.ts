@@ -1,23 +1,69 @@
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import lockfile from "proper-lockfile";
 import {
   DATA_DIR,
   audioDir,
   audioFilePath,
+  billingEventDocPath,
+  billingEventsDir,
+  classroomDocPath,
+  classroomInvitationDocPath,
+  classroomInvitationsDir,
+  classroomMemberDocPath,
+  classroomMembersDir,
+  classroomsDir,
   scoreFilePath,
   songDocPath,
   songsDir,
   takeDocPath,
   takesDir,
+  userDocPath,
 } from "./paths";
-import type { CreateSongInput, CreateTakeInput, SongDoc, TakeDoc } from "./types";
-import { newSongId, newTakeId } from "./ids";
+import type {
+  BillingEventDoc,
+  ClassroomDoc,
+  ClassroomInvitationDoc,
+  ClassroomMemberDoc,
+  CreateSongInput,
+  CreateTakeInput,
+  SongDoc,
+  TakeDoc,
+  UserProfileDoc,
+} from "./types";
+import { classroomMemberId, newSongId, newTakeId } from "./ids";
 import { getConfig } from "./config";
 import { getAuthenticatedServerUser } from "./auth";
 import { CosmosRepository } from "./cosmos-repository";
 import { assertTakeTransition } from "./take-state";
 
 export interface Repository {
+  getUser(userId: string): Promise<UserProfileDoc | null>;
+  getUserRecord(userId: string): Promise<RepositoryDocument<UserProfileDoc> | null>;
+  upsertUser(user: UserProfileDoc, options?: RepositoryWriteOptions): Promise<UserProfileDoc>;
+  upsertUserRecord(user: UserProfileDoc, options?: RepositoryWriteOptions): Promise<RepositoryDocument<UserProfileDoc>>;
+  createClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc>;
+  getClassroom(classroomId: string): Promise<ClassroomDoc | null>;
+  upsertClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc>;
+  listClassroomsByOwner(ownerUserId: string): Promise<ClassroomDoc[]>;
+  createClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc>;
+  getClassroomMember(classroomId: string, userId: string): Promise<ClassroomMemberDoc | null>;
+  upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc>;
+  listClassroomMembers(classroomId: string): Promise<ClassroomMemberDoc[]>;
+  createClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc>;
+  getClassroomInvitation(classroomId: string, invitationId: string): Promise<ClassroomInvitationDoc | null>;
+  upsertClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc>;
+  listClassroomInvitations(classroomId: string): Promise<ClassroomInvitationDoc[]>;
+  getClassroomInvitationRecord(
+    classroomId: string,
+    invitationId: string,
+  ): Promise<RepositoryDocument<ClassroomInvitationDoc> | null>;
+  deleteClassroomInvitation(classroomId: string, invitationId: string, options?: RepositoryWriteOptions): Promise<void>;
+  createBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc>;
+  getBillingEvent(eventId: string): Promise<BillingEventDoc | null>;
+  upsertBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc>;
+  listBillingEvents(): Promise<BillingEventDoc[]>;
   createSong(userId: string, input: CreateSongInput): Promise<SongDoc>;
   getSong(userId: string, songId: string): Promise<SongDoc | null>;
   listSongs(userId: string): Promise<SongDoc[]>;
@@ -33,6 +79,23 @@ export interface Repository {
   saveAudioFile(userId: string, takeId: string, fileName: string, bytes: Buffer): Promise<string>;
 }
 
+export interface RepositoryWriteOptions {
+  ifMatch?: string;
+  ifNoneMatch?: boolean;
+}
+
+export interface RepositoryDocument<T> {
+  document: T;
+  etag: string | null;
+}
+
+export class RepositoryConflictError extends Error {
+  constructor(message = "repository write conflict") {
+    super(message);
+    this.name = "RepositoryConflictError";
+  }
+}
+
 export interface SongTakeSummary {
   count: number;
   latest: {
@@ -43,6 +106,13 @@ export interface SongTakeSummary {
     overallScore: number | null;
   } | null;
 }
+
+type DomainDocument =
+  | UserProfileDoc
+  | ClassroomDoc
+  | ClassroomMemberDoc
+  | ClassroomInvitationDoc
+  | BillingEventDoc;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -61,6 +131,19 @@ async function writeJson(filePath: string, data: unknown): Promise<void> {
   await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
 }
 
+async function writeJsonAtomically(filePath: string, data: unknown): Promise<void> {
+  await ensureDir(path.dirname(filePath));
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  let renamed = false;
+  try {
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
+    await fs.rename(tempPath, filePath);
+    renamed = true;
+  } finally {
+    if (!renamed) await fs.rm(tempPath, { force: true });
+  }
+}
+
 async function listJsonFiles<T>(dir: string): Promise<T[]> {
   await ensureDir(dir);
   const entries = await fs.readdir(dir);
@@ -70,6 +153,158 @@ async function listJsonFiles<T>(dir: string): Promise<T[]> {
 }
 
 export class LocalRepository implements Repository {
+  async getUser(userId: string): Promise<UserProfileDoc | null> {
+    return (await this.getUserRecord(userId))?.document ?? null;
+  }
+
+  async getUserRecord(userId: string): Promise<RepositoryDocument<UserProfileDoc> | null> {
+    return this.readDomainRecord(userDocPath(userId));
+  }
+
+  async upsertUser(user: UserProfileDoc, options?: RepositoryWriteOptions): Promise<UserProfileDoc> {
+    return (await this.upsertUserRecord(user, options)).document;
+  }
+
+  async upsertUserRecord(user: UserProfileDoc, options?: RepositoryWriteOptions): Promise<RepositoryDocument<UserProfileDoc>> {
+    return this.writeDomainRecord(userDocPath(user.id), user, options);
+  }
+
+  async createClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc> {
+    return (await this.writeDomainRecord(classroomDocPath(classroom.id), classroom, { ...options, ifNoneMatch: true })).document;
+  }
+
+  async getClassroom(classroomId: string): Promise<ClassroomDoc | null> {
+    return (await this.readDomainRecord<ClassroomDoc>(classroomDocPath(classroomId)))?.document ?? null;
+  }
+
+  async upsertClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc> {
+    return (await this.writeDomainRecord(classroomDocPath(classroom.id), classroom, options)).document;
+  }
+
+  async listClassroomsByOwner(ownerUserId: string): Promise<ClassroomDoc[]> {
+    const docs = await listJsonFiles<ClassroomDoc>(classroomsDir());
+    return docs.filter((doc) => doc.ownerUserId === ownerUserId);
+  }
+
+  async createClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
+    return (await this.writeDomainRecord(
+      classroomMemberDocPath(member.classroomId, member.id),
+      member,
+      { ...options, ifNoneMatch: true },
+    )).document;
+  }
+
+  async getClassroomMember(classroomId: string, userId: string): Promise<ClassroomMemberDoc | null> {
+    const id = classroomMemberId(classroomId, userId);
+    return (await this.readDomainRecord<ClassroomMemberDoc>(classroomMemberDocPath(classroomId, id)))?.document ?? null;
+  }
+
+  async upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
+    return (await this.writeDomainRecord(
+      classroomMemberDocPath(member.classroomId, member.id),
+      member,
+      options,
+    )).document;
+  }
+
+  async listClassroomMembers(classroomId: string): Promise<ClassroomMemberDoc[]> {
+    return listJsonFiles<ClassroomMemberDoc>(classroomMembersDir(classroomId));
+  }
+
+  async createClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc> {
+    return (await this.writeDomainRecord(
+      classroomInvitationDocPath(invitation.classroomId, invitation.id),
+      invitation,
+      { ...options, ifNoneMatch: true },
+    )).document;
+  }
+
+  async getClassroomInvitation(classroomId: string, invitationId: string): Promise<ClassroomInvitationDoc | null> {
+    return (await this.readDomainRecord<ClassroomInvitationDoc>(
+      classroomInvitationDocPath(classroomId, invitationId),
+    ))?.document ?? null;
+  }
+
+  async upsertClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc> {
+    return (await this.writeDomainRecord(
+      classroomInvitationDocPath(invitation.classroomId, invitation.id),
+      invitation,
+      options,
+    )).document;
+  }
+
+  async listClassroomInvitations(classroomId: string): Promise<ClassroomInvitationDoc[]> {
+    return listJsonFiles<ClassroomInvitationDoc>(classroomInvitationsDir(classroomId));
+  }
+
+  async getClassroomInvitationRecord(
+    classroomId: string,
+    invitationId: string,
+  ): Promise<RepositoryDocument<ClassroomInvitationDoc> | null> {
+    return this.readDomainRecord<ClassroomInvitationDoc>(
+      classroomInvitationDocPath(classroomId, invitationId),
+    );
+  }
+
+  async deleteClassroomInvitation(classroomId: string, invitationId: string, options?: RepositoryWriteOptions): Promise<void> {
+    const filePath = classroomInvitationDocPath(classroomId, invitationId);
+    await withDomainLock(filePath, async () => {
+      const current = await this.readDomainRecord<ClassroomInvitationDoc>(filePath);
+      if (!current) {
+        this.assertWriteCondition(current, options);
+        return;
+      }
+      this.assertWriteCondition(current, options);
+      await fs.rm(filePath);
+    });
+  }
+
+  async createBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc> {
+    return (await this.writeDomainRecord(billingEventDocPath(event.id), event, { ...options, ifNoneMatch: true })).document;
+  }
+
+  async getBillingEvent(eventId: string): Promise<BillingEventDoc | null> {
+    return (await this.readDomainRecord<BillingEventDoc>(billingEventDocPath(eventId)))?.document ?? null;
+  }
+
+  async upsertBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc> {
+    return (await this.writeDomainRecord(billingEventDocPath(event.id), event, options)).document;
+  }
+
+  async listBillingEvents(): Promise<BillingEventDoc[]> {
+    return listJsonFiles<BillingEventDoc>(billingEventsDir());
+  }
+
+  private async readDomainRecord<T extends DomainDocument>(filePath: string): Promise<RepositoryDocument<T> | null> {
+    try {
+      const document = await readJson<T>(filePath);
+      return { document, etag: domainEtag(document) };
+    } catch (error) {
+      if (isEnoent(error)) return null;
+      throw error;
+    }
+  }
+
+  private async writeDomainRecord<T extends DomainDocument>(
+    filePath: string,
+    document: T,
+    options?: RepositoryWriteOptions,
+  ): Promise<RepositoryDocument<T>> {
+    return withDomainLock(filePath, async () => {
+      const current = await this.readDomainRecord<T>(filePath);
+      if (options?.ifNoneMatch && current) throw new RepositoryConflictError("document already exists");
+      this.assertWriteCondition(current, options);
+      await writeJsonAtomically(filePath, document);
+      return { document, etag: domainEtag(document) };
+    });
+  }
+
+  private assertWriteCondition<T>(current: RepositoryDocument<T> | null, options?: RepositoryWriteOptions): void {
+    if (options?.ifMatch && (!current || options.ifMatch !== current.etag)) {
+      throw new RepositoryConflictError("etag does not match");
+    }
+  }
+
   async createSong(userId: string, input: CreateSongInput): Promise<SongDoc> {
     const id = newSongId();
     const timestamp = nowIso();
@@ -273,6 +508,27 @@ function safeTakePatch(patch: Partial<TakeDoc>): Partial<TakeDoc> {
 
 function isEnoent(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ENOENT";
+}
+
+function domainEtag(document: unknown): string {
+  return createHash("sha256").update(JSON.stringify(document)).digest("hex");
+}
+
+async function withDomainLock<T>(filePath: string, action: () => Promise<T>): Promise<T> {
+  await ensureDir(path.dirname(filePath));
+  // proper-lockfile uses atomic mkdir ownership, mtime leases, and cross-process
+  // retry/release handling on Windows; domain writes remain short critical sections.
+  const release = await lockfile.lock(filePath, {
+    realpath: false,
+    stale: 30_000,
+    update: 10_000,
+    retries: { retries: 200, factor: 1, minTimeout: 25, maxTimeout: 25 },
+  });
+  try {
+    return await action();
+  } finally {
+    await release();
+  }
 }
 
 let repository: Repository | undefined;

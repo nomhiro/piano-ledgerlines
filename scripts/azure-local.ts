@@ -57,14 +57,17 @@ async function init(): Promise<void> {
     agent: new https.Agent({ rejectUnauthorized: false }),
   });
   const database = (await cosmos.databases.createIfNotExists({ id: process.env.AZURE_COSMOS_DATABASE ?? "ledgerlines" })).database;
-  await database.containers.createIfNotExists({
-    id: process.env.AZURE_COSMOS_SONGS_CONTAINER ?? "songs",
-    partitionKey: { paths: ["/userId"] },
-  });
-  await database.containers.createIfNotExists({
-    id: process.env.AZURE_COSMOS_TAKES_CONTAINER ?? "takes",
-    partitionKey: { paths: ["/userId"] },
-  });
+  for (const [id, partitionKey] of [
+    [process.env.AZURE_COSMOS_USERS_CONTAINER ?? "users", "/id"],
+    [process.env.AZURE_COSMOS_CLASSROOMS_CONTAINER ?? "classrooms", "/id"],
+    [process.env.AZURE_COSMOS_CLASSROOM_MEMBERS_CONTAINER ?? "classroom-members", "/classroomId"],
+    [process.env.AZURE_COSMOS_CLASSROOM_INVITATIONS_CONTAINER ?? "classroom-invitations", "/classroomId"],
+    [process.env.AZURE_COSMOS_BILLING_EVENTS_CONTAINER ?? "billing-events", "/id"],
+    [process.env.AZURE_COSMOS_SONGS_CONTAINER ?? "songs", "/userId"],
+    [process.env.AZURE_COSMOS_TAKES_CONTAINER ?? "takes", "/userId"],
+  ] as const) {
+    await database.containers.createIfNotExists({ id, partitionKey: { paths: [partitionKey] } });
+  }
   const connection = process.env.AZURE_STORAGE_CONNECTION_STRING!;
   const blobs = BlobServiceClient.fromConnectionString(connection);
   for (const name of [

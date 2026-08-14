@@ -17,8 +17,12 @@ export const DATA_DIR = process.env.LEDGERLINES_DATA_DIR
 export const WORKER_DIR = path.join(REPO_ROOT, "worker");
 export const WORKER_MAIN = path.join(WORKER_DIR, "worker_main.py");
 
+function fileSegment(value: string): string {
+  return encodeURIComponent(value);
+}
+
 export function songDocPath(songId: string): string {
-  return path.join(DATA_DIR, "songs", `${songId}.json`);
+  return path.join(DATA_DIR, "songs", `${fileSegment(songId)}.json`);
 }
 
 export function songsDir(): string {
@@ -26,7 +30,7 @@ export function songsDir(): string {
 }
 
 export function scoreFilePath(songId: string, fileName: string): string {
-  return path.join(DATA_DIR, "scores", songId, fileName);
+  return path.join(DATA_DIR, "scores", fileSegment(songId), fileName);
 }
 
 export function referenceJsonPath(songId: string): string {
@@ -34,15 +38,64 @@ export function referenceJsonPath(songId: string): string {
 }
 
 export function takeDocPath(takeId: string): string {
-  return path.join(DATA_DIR, "takes", `${takeId}.json`);
+  return path.join(DATA_DIR, "takes", `${fileSegment(takeId)}.json`);
 }
 
 export function takesDir(): string {
   return path.join(DATA_DIR, "takes");
 }
 
+export function userDocPath(userId: string): string {
+  return path.join(DATA_DIR, "users", `${fileSegment(userId)}.json`);
+}
+
+export function usersDir(): string {
+  return path.join(DATA_DIR, "users");
+}
+
+export function classroomDocPath(classroomId: string): string {
+  return path.join(DATA_DIR, "classrooms", `${fileSegment(classroomId)}.json`);
+}
+
+export function classroomsDir(): string {
+  return path.join(DATA_DIR, "classrooms");
+}
+
+export function classroomMemberDocPath(classroomId: string, memberId: string): string {
+  return path.join(DATA_DIR, "classroom-members", fileSegment(classroomId), `${fileSegment(memberId)}.json`);
+}
+
+export function classroomMembersDir(classroomId?: string): string {
+  return classroomId
+    ? path.join(DATA_DIR, "classroom-members", fileSegment(classroomId))
+    : path.join(DATA_DIR, "classroom-members");
+}
+
+export function classroomInvitationDocPath(classroomId: string, invitationId: string): string {
+  return path.join(
+    DATA_DIR,
+    "classroom-invitations",
+    fileSegment(classroomId),
+    `${fileSegment(invitationId)}.json`,
+  );
+}
+
+export function classroomInvitationsDir(classroomId?: string): string {
+  return classroomId
+    ? path.join(DATA_DIR, "classroom-invitations", fileSegment(classroomId))
+    : path.join(DATA_DIR, "classroom-invitations");
+}
+
+export function billingEventDocPath(eventId: string): string {
+  return path.join(DATA_DIR, "billing-events", `${fileSegment(eventId)}.json`);
+}
+
+export function billingEventsDir(): string {
+  return path.join(DATA_DIR, "billing-events");
+}
+
 export function audioDir(takeId: string): string {
-  return path.join(DATA_DIR, "audio", takeId);
+  return path.join(DATA_DIR, "audio", fileSegment(takeId));
 }
 
 export function audioFilePath(takeId: string, fileName: string): string {

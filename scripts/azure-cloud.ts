@@ -201,7 +201,15 @@ async function checkDataPlane(config: ReturnType<typeof getConfig>, credential: 
   const cosmos = new CosmosClient({ endpoint: config.cosmosEndpoint!, aadCredentials: credential });
   const database = cosmos.database(config.cosmosDatabase);
   await check(`Cosmos database ${config.cosmosDatabase}`, async () => { await database.read(); });
-  for (const containerName of [config.cosmosSongsContainer, config.cosmosTakesContainer]) {
+  for (const containerName of [
+    config.cosmosUsersContainer,
+    config.cosmosClassroomsContainer,
+    config.cosmosClassroomMembersContainer,
+    config.cosmosClassroomInvitationsContainer,
+    config.cosmosBillingEventsContainer,
+    config.cosmosSongsContainer,
+    config.cosmosTakesContainer,
+  ]) {
     await check(`Cosmos container ${containerName}`, async () => { await database.container(containerName).read(); });
   }
 
@@ -239,8 +247,16 @@ async function initializeResources(config: ReturnType<typeof getConfig>, credent
   console.log("Initializing missing data-plane resources only (no deletes or resets).");
   const cosmos = new CosmosClient({ endpoint: config.cosmosEndpoint!, aadCredentials: credential });
   const database = (await cosmos.databases.createIfNotExists({ id: config.cosmosDatabase })).database;
-  for (const id of [config.cosmosSongsContainer, config.cosmosTakesContainer]) {
-    await database.containers.createIfNotExists({ id, partitionKey: { paths: ["/userId"] } });
+  for (const [id, partitionKey] of [
+    [config.cosmosUsersContainer, "/id"],
+    [config.cosmosClassroomsContainer, "/id"],
+    [config.cosmosClassroomMembersContainer, "/classroomId"],
+    [config.cosmosClassroomInvitationsContainer, "/classroomId"],
+    [config.cosmosBillingEventsContainer, "/id"],
+    [config.cosmosSongsContainer, "/userId"],
+    [config.cosmosTakesContainer, "/userId"],
+  ] as const) {
+    await database.containers.createIfNotExists({ id, partitionKey: { paths: [partitionKey] } });
   }
   const blobs = new BlobServiceClient(config.storageAccountUrl!, credential);
   for (const id of [config.scoresContainer, config.audioContainer, config.derivedContainer]) {
