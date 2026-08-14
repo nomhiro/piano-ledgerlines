@@ -735,9 +735,18 @@ subscription itemです。quantity=0のitemは作らず、0への削除も
 `billableStudentCount`、periodを同じCAS更新で収束させます。
 
 `billing-events` はevent IDをidempotency keyとして使い、payload本文ではなくSHA-256
-hashだけを保存します。状態は `processing`、`processed`、`failed` で、失敗イベントは
-再送時に再処理できます。Stripe外部APIとCosmosはtransactionではないため、membership
-更新は外部操作後にETag/CASで反映し、失敗時はreconciliationで補償します。
+hashだけを保存します。状態は `processing`、`processed`、`failed` で、processingには
+owner token、開始時刻、expiryを持つleaseを保存します。active lease中はdeliveryを503にし、
+stale leaseだけをCAS reclaimします。失敗イベントは再送時に再処理できます。
+
+Checkout attemptもoperation key hash、session ID/URL、expiryを保持し、同じHTTP retryだけを
+再利用します。Portal attemptもfingerprint、session ID/URL、created/expiryを保持し、consumed
+状態をStripeから取得できないため30秒のtransport retry window後は必ず新attemptを作ります。
+Stripe外部APIとCosmosはtransactionではないため、membership更新は教室単位の
+operation leaseをETag/CASで取得して直列化し、外部操作後にSubscriptionを再取得します。
+同一student Price itemが複数存在する場合はcanonical itemを選び、余剰itemを削除してから
+local count/item IDをCAS反映します。失敗・クラッシュ時はlease expiry後にreconciliationで
+remote/localを補償します。
 
 ---
 

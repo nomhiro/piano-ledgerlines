@@ -72,6 +72,10 @@ export interface StripeGateway {
     subscriptionId: string,
     options?: Stripe.RequestOptions,
   ): Promise<Stripe.Subscription>;
+  listCustomerSubscriptions(
+    customerId: string,
+    options?: Stripe.RequestOptions,
+  ): Promise<Stripe.Subscription[]>;
   createSubscriptionItem(
     params: Stripe.SubscriptionItemCreateParams,
     options?: Stripe.RequestOptions,
@@ -123,6 +127,17 @@ export class StripeGatewayClient implements StripeGateway {
     options?: Stripe.RequestOptions,
   ): Promise<Stripe.Subscription> {
     return this.stripe.subscriptions.retrieve(subscriptionId, undefined, options);
+  }
+
+  async listCustomerSubscriptions(
+    customerId: string,
+    options?: Stripe.RequestOptions,
+  ): Promise<Stripe.Subscription[]> {
+    const response = await this.stripe.subscriptions.list(
+      { customer: customerId, status: "all", limit: 100 },
+      options,
+    );
+    return response.data;
   }
 
   async createSubscriptionItem(

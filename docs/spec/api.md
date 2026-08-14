@@ -818,11 +818,22 @@ Checkoutは `STRIPE_CLASSROOM_BASE_PRICE_ID` のitemだけで開始します。S
 Subscription item quantity=0は採用せず、学生が最初に有効化されたときに
 `STRIPE_CLASSROOM_STUDENT_PRICE_ID` のitemをquantity付きで作成します。増減・削除は
 `proration_behavior=always_invoice` を明示し、月途中の差額を即時invoiceにします。
+Checkout/Portalは検証済みの `Idempotency-Key`（未指定時はrequest ID）をnamespace/hash化して
+Stripeへ渡します。Checkout attempt/session ID、session URL、expiryを教室へCAS保存し、
+有効sessionは同じHTTP retryで再利用、処理中の別操作は503、完了または期限切れ後だけ新attempt
+へ進みます。
+Portalもsession URLとrequest fingerprintをCAS保存しますが、Stripe Portal URLのconsumed状態は
+取得できないため、transport retry windowは30秒に限定します。同じkeyの即時retryだけ再利用し、
+window後はサーバー生成の新attempt keyで新URLを発行します。
 
 Webhookは重複・順序逆転を前提にしています。event IDを `billing-events` にCAS保存し、
-`processing → processed` または `processing → failed` を記録します。Subscription
+owner token・開始時刻・expiry付きleaseで `processing → processed` または
+`processing → failed` を記録します。active lease中のdeliveryは503、stale leaseはCAS reclaim
+します。Subscription
 eventではpayloadのstatusを盲信せず、StripeからSubscriptionを再取得して最新items、
-customer、periodを反映します。`active`/`trialing`/`past_due` は利用可能、
+customer、periodを反映します。customer/classroom metadataと固定base Priceを検証し、
+customerの全Subscriptionからcreated時刻が最も新しい対象契約だけを反映します。
+`active`/`trialing`/`past_due` は利用可能、
 `unpaid`/`canceled`/`incomplete_expired` と未知statusは停止です。
 
 ローカルではStripe CLIを次のように起動し、表示された `whsec_...` を環境変数へ設定します。
@@ -835,7 +846,8 @@ stripe trigger checkout.session.completed
 失敗イベントはStripe Dashboardから再送し、必要なら運用者がreconciliation service
 （`reconcileBillableStudentQuantity`）を実行します。学生membership変更は
 `provisioning`/`removing` とStripe外部操作を分離するsaga契約で扱い、外部呼び出し失敗時は
-membershipを確定せず同じoperation versionで再照合します。
+membershipを確定せず同じoperation versionで再照合します。学生数量leaseは教室単位で外部
+mutationを直列化し、同じstudent Price itemが複数ならcanonical itemへ集約して余剰を削除します。
 
 ---
 

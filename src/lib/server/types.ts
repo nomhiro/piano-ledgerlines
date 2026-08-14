@@ -184,11 +184,45 @@ export interface ClassroomDoc {
     stripeStudentSubscriptionItemId?: string | null;
     stripeCurrentPeriodStart?: string | null;
     stripeCurrentPeriodEnd?: string | null;
+    stripeSubscriptionCreatedAt?: number | null;
     billingVersion?: number;
+    checkoutAttempt?: CheckoutAttemptDoc | null;
+    portalAttempt?: PortalAttemptDoc | null;
+    studentQuantityOperation?: BillingOperationLeaseDoc | null;
   };
   appStatus: ClassroomAppStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CheckoutAttemptDoc {
+  operationKeyHash: string;
+  attemptId: string;
+  sessionId: string | null;
+  sessionUrl: string | null;
+  status: "pending" | "completed" | "expired";
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface PortalAttemptDoc {
+  operationKeyHash: string;
+  attemptId: string;
+  sessionId: string | null;
+  sessionUrl: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface BillingOperationLeaseDoc {
+  operationVersion: string;
+  ownerToken: string;
+  targetQuantity: number;
+  status: "pending" | "pending_reconciliation" | "completed" | "failed";
+  startedAt: string;
+  expiresAt: string;
+  completedAt?: string | null;
+  lastError?: string | null;
 }
 
 export interface ClassroomMemberDoc {
@@ -230,6 +264,9 @@ export interface BillingEventDoc {
   attemptCount?: number;
   lastError?: string | null;
   stripeCreatedAt?: number;
+  processingOwnerToken?: string | null;
+  processingStartedAt?: string | null;
+  processingExpiresAt?: string | null;
 }
 
 // api.md 5.1 `POST /songs` 相当（ローカル簡略版: SASなしの直接multipartアップロード）
