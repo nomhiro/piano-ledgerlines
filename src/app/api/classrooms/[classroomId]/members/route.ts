@@ -1,5 +1,5 @@
 import { getAuthenticatedUser } from "@/lib/server/auth";
-import { requireActiveClassroomAccess, safeMemberView } from "@/lib/server/classroom-access";
+import { requireActiveClassroomAccess, safeClassroomRosterMemberView } from "@/lib/server/classroom-access";
 import { errorResponse, jsonResponse } from "@/lib/server/http";
 import { getRepository } from "@/lib/server/repository";
 
@@ -15,9 +15,12 @@ export async function GET(
     const repository = getRepository();
     const access = await requireActiveClassroomAccess(classroomId, user.id, ["owner", "teacher"], repository);
     const members = await repository.listClassroomMembers(classroomId);
-    const includeEmail = access.member.role === "owner";
     const views = await Promise.all(members.map(async (member) =>
-      safeMemberView(member, await repository.getUser(member.userId), includeEmail),
+      safeClassroomRosterMemberView(
+        member,
+        await repository.getUser(member.userId),
+        access.member.role,
+      ),
     ));
     return jsonResponse({ members: views }, request);
   } catch (error) {

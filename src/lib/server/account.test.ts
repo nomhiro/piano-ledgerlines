@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAccountContext, type AccountContext } from "./account";
+import { safeClassroomRosterMemberView } from "./classroom-access";
 import { getAvatarLabel } from "@/lib/account-view-model";
 import type { AuthenticatedUser } from "./auth";
 import type { ClassroomDoc, ClassroomMemberDoc, UserProfileDoc } from "./types";
@@ -71,4 +72,16 @@ test("inactive classroom remains visible for owner billing recovery", () => {
   assert.equal(context.mode, "classroom");
   assert.equal(context.activeClassroom?.role, "owner");
   assert.equal(context.permissions.canManageBilling, true);
+});
+
+test("classroom roster view minimizes identifiers by requester role", () => {
+  const member: ClassroomMemberDoc = {
+    id: "classroom_1:student", type: "classroom-member", classroomId: "classroom_1",
+    userId: "google:student", role: "student", status: "active",
+    createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const studentView = safeClassroomRosterMemberView(member, profile("生徒"), "student");
+  assert.deepEqual(studentView, { displayName: "生徒", role: "student" });
+  const teacherView = safeClassroomRosterMemberView(member, profile("生徒"), "teacher");
+  assert.deepEqual(teacherView, { userId: "google:student", role: "student", status: "active", displayName: "生徒" });
 });

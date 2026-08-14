@@ -64,21 +64,21 @@ export async function assertTeacherCanAccessStudent(
   return { classroom: access.classroom, teacher: access.member, student };
 }
 
-export function safeMemberView(
+export function safeClassroomRosterMemberView(
   member: ClassroomMemberDoc,
   profile: UserProfileDoc | null,
-  includeEmail: boolean,
+  viewerRole: ClassroomRole,
 ): Record<string, unknown> {
+  const displayName = profile?.displayName ?? null;
+  if (viewerRole === "student") {
+    return { displayName, role: member.role };
+  }
   return {
-    id: member.id,
-    classroomId: member.classroomId,
     userId: member.userId,
     role: member.role,
     status: member.status,
-    displayName: profile?.displayName ?? null,
-    ...(includeEmail ? { email: profile?.email ?? null } : {}),
-    createdAt: member.createdAt,
-    updatedAt: member.updatedAt,
+    displayName,
+    ...(viewerRole === "owner" ? { email: profile?.email ?? null } : {}),
   };
 }
 

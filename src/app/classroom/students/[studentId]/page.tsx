@@ -18,6 +18,7 @@ async function loadStudent(studentId: string, requestedClassroomId?: string) {
   const songs = await listSongs(studentId);
   const profile = await getRepository().getUser(studentId);
   return {
+    classroomId: access.classroom.id,
     classroomName: access.classroom.name,
     studentDisplayName: profile?.displayName?.trim() || "生徒",
     songs,
@@ -50,16 +51,18 @@ export default async function ClassroomStudentPage({
         <p className="mt-1 text-sm text-[var(--muted)]">この画面は読み取り専用です。</p>
       </header>
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">
-        <div className="border-b border-[var(--border)] p-4 font-semibold">曲</div>
-        <div className="divide-y divide-[var(--border)]">
+        <h2 className="border-b border-[var(--border)] p-4 font-semibold">曲</h2>
+        <ul className="divide-y divide-[var(--border)]">
           {data.songs.map((song) => (
-            <Link key={song.id} href={`/classroom/students/${encodeURIComponent(studentId)}/songs/${encodeURIComponent(song.id)}`} className="flex items-center justify-between p-4 hover:bg-[var(--surface-2)]">
-              <span><span className="text-sm">{song.title}</span><span className="ml-2 text-xs text-[var(--muted)]">{song.composer}</span></span>
-              <span className="text-xs text-[var(--muted)]">{data.summaries[song.id]?.count ?? 0}テイクを見る →</span>
-            </Link>
+            <li key={song.id}>
+              <Link href={`/classroom/students/${encodeURIComponent(studentId)}/songs/${encodeURIComponent(song.id)}?classroomId=${encodeURIComponent(data.classroomId)}`} className="flex items-center justify-between p-4 hover:bg-[var(--surface-2)]">
+                <span><span className="text-sm">{song.title}</span><span className="ml-2 text-xs text-[var(--muted)]">{song.composer}</span></span>
+                <span className="text-xs text-[var(--muted)]">{data.summaries[song.id]?.count ?? 0}テイクを見る →</span>
+              </Link>
+            </li>
           ))}
-          {data.songs.length === 0 && <p className="p-4 text-sm text-[var(--muted)]">登録された曲はありません。</p>}
-        </div>
+          {data.songs.length === 0 && <li className="p-4 text-sm text-[var(--muted)]">登録された曲はありません。</li>}
+        </ul>
       </section>
     </div>
   );

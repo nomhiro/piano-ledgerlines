@@ -107,7 +107,7 @@ export default function NewSongPage() {
               {phase === "idle" ? (
                 <>
                   <label className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-[#3b4560] bg-[var(--surface-2)] px-6 py-12 text-center transition-colors hover:border-violet-500">
-                    <Upload size={30} className="text-violet-400" />
+                    <Upload size={30} className="text-violet-400" aria-hidden="true" />
                     <div>
                       <div className="text-sm font-medium">
                         MusicXML / MXL / MIDI / PDF ファイルをドロップ
@@ -128,6 +128,7 @@ export default function NewSongPage() {
                   </label>
                   <div className="mt-3 text-center">
                     <button
+                      type="button"
                       onClick={async () => {
                         const res = await fetch("/scores/etude-in-a-minor.musicxml");
                         const blob = await res.blob();
@@ -143,9 +144,14 @@ export default function NewSongPage() {
                   </div>
                 </>
               ) : (
-                <div className="space-y-3">
+                <div
+                  className="space-y-3"
+                  role={phase === "error" ? "alert" : "status"}
+                  aria-live={phase === "error" ? "assertive" : "polite"}
+                  aria-busy={phase === "uploading" || phase === "parsing" || phase === "converting"}
+                >
                   <div className="flex items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
-                    <FileMusic size={18} className="text-violet-400" />
+                    <FileMusic size={18} className="text-violet-400" aria-hidden="true" />
                     <span className="text-sm">{fileName}</span>
                     {phase === "done" && <Badge color="#22c55e">解析完了</Badge>}
                     {phase === "error" && <Badge color="#ef4444">失敗</Badge>}
@@ -171,9 +177,9 @@ export default function NewSongPage() {
                     STEPS.map((s, i) => (
                       <div key={s} className="flex items-center gap-2.5 px-1 text-xs">
                         {i < step ? (
-                          <Check size={15} className="text-green-400" />
+                          <Check size={15} className="text-green-400" aria-hidden="true" />
                         ) : i === step ? (
-                          <Loader2 size={15} className="animate-spin text-violet-400" />
+                          <Loader2 size={15} className="animate-spin text-violet-400" aria-hidden="true" />
                         ) : (
                           <span className="inline-block h-[15px] w-[15px] rounded-full border border-[#3b4560]" />
                         )}
@@ -193,7 +199,7 @@ export default function NewSongPage() {
                         <ul className="mt-2 space-y-1 text-amber-300">
                           {scoreInfo.warnings.map((w, i) => (
                             <li key={i} className="flex items-start gap-1.5">
-                              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                              <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
                               <span>{w.message}</span>
                             </li>
                           ))}
@@ -296,7 +302,7 @@ export default function NewSongPage() {
             <CardTitle title="PDF・紙の楽譜から取り込む" />
             <div className="p-5">
               <div className="flex items-start gap-3 rounded-lg border border-dashed border-[#3b4560] bg-[var(--surface-2)] p-4">
-                <ScanLine size={20} className="mt-0.5 shrink-0 text-[var(--muted)]" />
+                <ScanLine size={20} className="mt-0.5 shrink-0 text-[var(--muted)]" aria-hidden="true" />
                 <div>
                   <div className="flex items-center gap-2 text-sm">
                     OMR（光学楽譜認識）
@@ -315,7 +321,7 @@ export default function NewSongPage() {
             <CardTitle title="なぜ楽譜データが必要？" />
             <div className="space-y-3 p-5 text-xs leading-relaxed text-[var(--muted)]">
               <div className="flex gap-2">
-                <Info size={14} className="mt-0.5 shrink-0 text-violet-400" />
+                <Info size={14} className="mt-0.5 shrink-0 text-violet-400" aria-hidden="true" />
                 <p>
                   録音した音声はAIで採譜され、<strong className="text-[var(--foreground)]">楽譜データと1音ずつ照合</strong>されます。
                   これにより「どの小節のどの音がどう違ったか」を特定できます。

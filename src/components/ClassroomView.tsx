@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { AccountContext, AccountClassroomSummary } from "@/lib/server/account";
 
 type Member = {
-  id: string;
-  userId: string;
+  id?: string;
+  userId?: string;
   role: "owner" | "teacher" | "student";
   status: string;
   displayName: string | null;
@@ -105,15 +106,25 @@ export default function ClassroomView({
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
+  const [pendingRevoke, setPendingRevoke] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [invitationError, setInvitationError] = useState("");
   const loadedClassroomId = useRef<string | null>(null);
+  const loadVersion = useRef(0);
+  const removalConfirmRef = useRef<HTMLButtonElement>(null);
+  const removalTriggerRef = useRef<HTMLButtonElement>(null);
+  const revokeConfirmRef = useRef<HTMLButtonElement>(null);
+  const revokeTriggerRef = useRef<HTMLButtonElement>(null);
+  const previousRemoval = useRef<string | null>(null);
+  const previousRevoke = useRef<string | null>(null);
   const [leftClassroom, setLeftClassroom] = useState(false);
+  const router = useRouter();
 
-  const loadClassroom = useCallback(async (id: string) => {
+  const loadClassroom = useCallback(async (id: string, version = loadVersion.current) => {
     const data = await apiJson<ClassroomData>(`/api/classrooms/${encodeURIComponent(id)}`);
+    if (version !== loadVersion.current) return;
     setClassroom(data);
     setMembers(data.members);
     setInvitationError("");
@@ -122,8 +133,10 @@ export default function ClassroomView({
         const invitationData = await apiJson<{ invitations: Invitation[] }>(
           `/api/classrooms/${encodeURIComponent(id)}/invitations`,
         );
+        if (version !== loadVersion.current) return;
         setInvitations(invitationData.invitations);
       } catch (caught) {
+        if (version !== loadVersion.current) return;
         setInvitations([]);
         setInvitationError(
           caught instanceof Error ? caught.message : "招待状況を読み込めませんでした。",
@@ -136,10 +149,25 @@ export default function ClassroomView({
 
   useEffect(() => {
     const id = initialClassroom?.id;
-    if (!id || classroom || leftClassroom || loadedClassroomId.current === id) return;
+    if (!id || loadedClassroomId.current === id) return;
     loadedClassroomId.current = id;
+    const version = ++loadVersion.current;
+    setClassroom(null);
+    setMembers([]);
+    setInvitations([]);
+    setPendingRemoval(null);
+    setPendingRevoke(null);
+    setConfirmLeave(false);
+    setBusy(null);
+    setName("");
+    setEmail("");
+    setInviteRole("student");
+    setMessage("");
+    setError("");
+    setInvitationError("");
+    setLeftClassroom(false);
     let cancelled = false;
-    void loadClassroom(id).catch((caught) => {
+    void loadClassroom(id, version).catch((caught) => {
       if (!cancelled) {
         setError(caught instanceof Error ? caught.message : "教室情報を読み込めませんでした。");
       }
@@ -147,7 +175,25 @@ export default function ClassroomView({
     return () => {
       cancelled = true;
     };
-  }, [classroom, initialClassroom?.id, leftClassroom, loadClassroom]);
+  }, [initialClassroom?.id, loadClassroom]);
+
+  useEffect(() => {
+    if (pendingRemoval) {
+      removalConfirmRef.current?.focus();
+    } else if (previousRemoval.current && removalTriggerRef.current?.isConnected) {
+      removalTriggerRef.current.focus();
+    }
+    previousRemoval.current = pendingRemoval;
+  }, [pendingRemoval]);
+
+  useEffect(() => {
+    if (pendingRevoke) {
+      revokeConfirmRef.current?.focus();
+    } else if (previousRevoke.current && revokeTriggerRef.current?.isConnected) {
+      revokeTriggerRef.current.focus();
+    }
+    previousRevoke.current = pendingRevoke;
+  }, [pendingRevoke]);
 
   async function runBilling(action: "checkout" | "billing-portal") {
     if (!classroom) return;
@@ -265,6 +311,7 @@ export default function ClassroomView({
       setLeftClassroom(true);
       setConfirmLeave(false);
       setMessage("教室から退出しました。練習データは個人利用として保持されます。");
+      router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "退出できませんでした。");
     } finally {
@@ -301,6 +348,20 @@ export default function ClassroomView({
     return <p className="text-sm text-[var(--muted)]">教室機能を利用するにはログインしてください。</p>;
   }
 
+  if (leftClassroom) {
+    return (
+      <section className="space-y-4" role="status" aria-live="polite">
+        <h1 className="text-2xl font-bold">教室から退会しました</h1>
+        <p className="text-sm text-[var(--muted)]">
+          曲・録音・テイクは個人利用のデータとして残っています。
+        </p>
+        <Link href="/" className="button-primary inline-block">
+          個人ダッシュボードへ戻る
+        </Link>
+      </section>
+    );
+  }
+
   if (!classroom && !initialClassroom) {
     return (
       <div className="max-w-xl space-y-5">
@@ -321,7 +382,10 @@ export default function ClassroomView({
             maxLength={120}
             className="input mt-2"
             placeholder="〇〇ピアノ教室"
+            aria-describedby="classroom-create-help"
+            aria-invalid={Boolean(error)}
           />
+          <p id="classroom-create-help" className="mt-1 text-xs text-[var(--muted)]">1文字以上120文字以内で入力してください。</p>
           <button disabled={busy !== null || !name.trim()} className="mt-4 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50">
             {busy === "create" ? "作成中…" : "教室を作成"}
           </button>
@@ -350,7 +414,7 @@ export default function ClassroomView({
         </div>
       );
     }
-    return <p className="text-sm text-[var(--muted)]" aria-live="polite">教室情報を読み込んでいます…</p>;
+    return <p className="text-sm text-[var(--muted)]" aria-live="polite" aria-busy="true">教室情報を読み込んでいます…</p>;
   }
   if (!classroom) return null;
 
@@ -427,6 +491,7 @@ export default function ClassroomView({
                   maxLength={120}
                   required
                   aria-describedby="classroom-name-help"
+                  aria-invalid={Boolean(error)}
                 />
               </label>
               <span id="classroom-name-help" className="sr-only">
@@ -454,7 +519,21 @@ export default function ClassroomView({
             ) : null}
             <button type="button" disabled={busy !== null} onClick={async () => {
               setBusy("reconcile");
-              try { await apiJson(`/api/classrooms/${classroom.classroom.id}/reconciliation`, { method: "POST" }); setMessage("請求数を再計算しました。"); } catch (caught) { setError(caught instanceof Error ? caught.message : "再計算できませんでした。"); } finally { setBusy(null); }
+              setError("");
+              try {
+                const result = await apiJson<{ classroom: ClassroomData["classroom"] }>(
+                  `/api/classrooms/${classroom.classroom.id}/reconciliation`,
+                  { method: "POST" },
+                );
+                setClassroom((current) =>
+                  current ? { ...current, classroom: { ...current.classroom, ...result.classroom } } : current,
+                );
+                setMessage("請求数を再計算しました。");
+              } catch (caught) {
+                setError(caught instanceof Error ? caught.message : "再計算できませんでした。");
+              } finally {
+                setBusy(null);
+              }
             }} className="button-secondary">請求数を再計算</button>
           </section>
         </>
@@ -465,29 +544,34 @@ export default function ClassroomView({
           <h2 className="font-semibold">{isStudent ? "先生" : "メンバー"}</h2>
         </div>
         <ul className="divide-y divide-[var(--border)]">
-          {(isStudent ? teachers : visibleMembers).map((member) => (
-            <li key={member.id} className="flex flex-wrap items-center gap-3 p-4">
+          {(isStudent ? teachers : visibleMembers).map((member, index) => (
+            <li key={member.userId ?? `${member.role}:${member.displayName ?? "member"}:${index}`} className="flex flex-wrap items-center gap-3 p-4">
               <div className="min-w-0 flex-1">
                 <div className="text-sm">{member.displayName || "名前未設定"}</div>
                 <div className="text-xs text-[var(--muted)]">
-                  {member.role === "owner" ? "オーナー" : member.role === "teacher" ? "先生" : "生徒"} ・{" "}
-                  {MEMBER_STATUS_LABEL[member.status] ?? member.status}
+                  {member.role === "owner" ? "オーナー" : member.role === "teacher" ? "先生" : "生徒"}
+                  {member.status ? ` ・ ${MEMBER_STATUS_LABEL[member.status] ?? member.status}` : ""}
                 </div>
                 {member.email && <div className="text-xs text-[var(--muted)]">{member.email}</div>}
               </div>
-              {!isStudent && member.role === "student" && canViewStudentData && (
+              {!isStudent && member.role === "student" && member.userId && canViewStudentData && (
                 <Link href={`/classroom/students/${encodeURIComponent(member.userId)}?classroomId=${encodeURIComponent(classroom.classroom.id)}`} className="button-secondary">詳細を見る</Link>
               )}
-              {classroom.role === "owner" && member.role !== "owner" && (
+              {classroom.role === "owner" && member.role !== "owner" && member.userId && (
                 pendingRemoval === member.userId ? (
-                  <span className="flex items-center gap-2 text-xs">
+                  <span className="flex items-center gap-2 text-xs" role="alert" aria-live="assertive">
                     <span>除籍しますか？</span>
                     <button
                       type="button"
+                      ref={removalConfirmRef}
+                      aria-describedby={`remove-description-${member.userId}`}
                       disabled={busy !== null}
-                      onClick={() => void removeMember(member.userId)}
+                      onClick={() => {
+                        if (member.userId) void removeMember(member.userId);
+                      }}
                       className="text-red-300 hover:underline"
                     >
+                      <span id={`remove-description-${member.userId}`} className="sr-only">このメンバーを教室から除籍します。</span>
                       確定
                     </button>
                     <button type="button" onClick={() => setPendingRemoval(null)} className="hover:underline">
@@ -495,7 +579,9 @@ export default function ClassroomView({
                     </button>
                   </span>
                 ) : (
-                  <button type="button" disabled={busy !== null} onClick={() => setPendingRemoval(member.userId)} className="text-xs text-red-300 hover:underline">除籍</button>
+                  <button type="button" ref={removalTriggerRef} disabled={busy !== null} onClick={() => {
+                    if (member.userId) setPendingRemoval(member.userId);
+                  }} className="text-xs text-red-300 hover:underline">除籍</button>
                 )
               )}
             </li>
@@ -521,8 +607,9 @@ export default function ClassroomView({
                 </select>
               </label>
             )}
-            <button type="button" disabled={busy !== null || !email.trim() || !canViewStudentData} onClick={() => void invite()} className="button-primary">{busy === "invite" ? "送信中…" : "招待を送る"}</button>
+            <button type="button" disabled={busy !== null || !email.trim() || !canViewStudentData} aria-describedby={!canViewStudentData ? "invite-disabled-help" : undefined} onClick={() => void invite()} className="button-primary">{busy === "invite" ? "送信中…" : "招待を送る"}</button>
           </div>
+          {!canViewStudentData && <p id="invite-disabled-help" className="mt-2 text-sm text-amber-200" role="status">契約が停止中のため、招待と生徒閲覧は請求復旧後に利用できます。</p>}
           {invitationError && <p className="mt-2 text-sm text-amber-200" role="status">{invitationError}</p>}
           <ul className="mt-3 space-y-2 text-xs text-[var(--muted)]">
             {invitations.map((invitation) => (
@@ -534,7 +621,29 @@ export default function ClassroomView({
                 </span>
                 <span className="flex gap-2">
                   {(invitation.status === "pending" || invitation.deliveryStatus === "failed") && <button type="button" disabled={busy !== null} onClick={() => void updateInvitation(invitation.id, "resend")} className="text-violet-300 hover:underline">再送</button>}
-                  {classroom.role === "owner" && invitation.status !== "revoked" && <button type="button" disabled={busy !== null} onClick={() => void updateInvitation(invitation.id, "revoke")} className="text-red-300 hover:underline">取消</button>}
+                  {classroom.role === "owner" && invitation.status !== "revoked" && (
+                    pendingRevoke === invitation.id ? (
+                      <span className="flex items-center gap-2" role="alert" aria-live="assertive">
+                        <button
+                          type="button"
+                          ref={revokeConfirmRef}
+                          aria-describedby={`revoke-description-${invitation.id}`}
+                          disabled={busy !== null}
+                          onClick={() => {
+                            setPendingRevoke(null);
+                            void updateInvitation(invitation.id, "revoke");
+                          }}
+                          className="text-red-300 hover:underline"
+                        >
+                          <span id={`revoke-description-${invitation.id}`} className="sr-only">この招待を取り消します。</span>
+                          確定
+                        </button>
+                        <button type="button" onClick={() => setPendingRevoke(null)} className="hover:underline">戻る</button>
+                      </span>
+                    ) : (
+                      <button type="button" ref={revokeTriggerRef} disabled={busy !== null} onClick={() => setPendingRevoke(invitation.id)} className="text-red-300 hover:underline">取消</button>
+                    )
+                  )}
                 </span>
               </li>
             ))}
@@ -565,5 +674,5 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"><div className="text-xs text-[var(--muted)]">{label}</div><div className="mt-1 text-xl font-semibold">{value}</div></div>;
 }
 function StatusMessage({ error, message }: { error: string; message: string }) {
-  return <div aria-live="polite">{error && <p className="text-sm text-red-300" role="alert">{error}</p>}{message && <p className="text-sm text-green-300">{message}</p>}</div>;
+  return <div aria-live="polite" aria-atomic="true">{error && <p className="text-sm text-red-300" role="alert">{error}</p>}{message && <p className="text-sm text-green-300" role="status">{message}</p>}</div>;
 }

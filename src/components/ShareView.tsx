@@ -23,6 +23,14 @@ const STATUS_META = {
   done: { label: "完了", color: "#22c55e" },
 } as const;
 
+function scoreBand(score: number): { label: string; color: string } {
+  if (score >= 85) return { label: "85点以上", color: "#22c55e" };
+  if (score >= 70) return { label: "70〜84点", color: "#84cc16" };
+  if (score >= 55) return { label: "55〜69点", color: "#eab308" };
+  if (score >= 40) return { label: "40〜54点", color: "#f97316" };
+  return { label: "40点未満", color: "#ef4444" };
+}
+
 export default function ShareView({
   songs,
   song,
@@ -209,7 +217,7 @@ export default function ShareView({
             </div>
             <div className="border-t border-[var(--border)] p-4">
               <div className="mb-2 flex items-center gap-2">
-                <MessageSquare size={13} className="text-[var(--muted)]" />
+                <MessageSquare size={13} className="text-[var(--muted)]" aria-hidden="true" />
                 <label className="text-[11px] text-[var(--muted)]">
                   コメントの小節
                   <select
@@ -259,7 +267,7 @@ export default function ShareView({
               title="先生からの課題"
               subtitle="次回レッスンまでの宿題"
               right={
-                <ClipboardList size={15} className="text-[var(--muted)]" />
+                <ClipboardList size={15} className="text-[var(--muted)]" aria-hidden="true" />
               }
             />
             <div className="space-y-2.5 p-5">
@@ -317,25 +325,33 @@ export default function ShareView({
                     <div>指摘 {latest.issues.length} 件</div>
                   </div>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-1">
+                <div className="mt-3 flex flex-wrap gap-1" aria-label="小節スコアの分布">
                   {latest.measureScores.slice(0, 16).map((m) => (
-                    <span
-                      key={m.measure}
-                      className="h-3 w-3 rounded-sm"
-                      style={{
-                        backgroundColor:
-                          m.score >= 85
-                            ? "#22c55e"
-                            : m.score >= 70
-                              ? "#84cc16"
-                              : m.score >= 55
-                                ? "#eab308"
-                                : m.score >= 40
-                                  ? "#f97316"
-                                  : "#ef4444",
-                      }}
-                    />
+                    (() => {
+                      const band = scoreBand(m.score);
+                      return (
+                        <span
+                          key={m.measure}
+                          role="img"
+                          aria-label={`${m.measure}小節: ${m.score}点、${band.label}`}
+                          title={`${m.measure}小節: ${m.score}点`}
+                          className="h-3 w-3 rounded-sm"
+                          style={{ backgroundColor: band.color }}
+                        />
+                      );
+                    })()
                   ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-[var(--muted)]" aria-label="スコア区分">
+                  {[85, 70, 55, 40, 0].map((score) => {
+                    const band = scoreBand(score);
+                    return (
+                      <span key={band.label} className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: band.color }} aria-hidden="true" />
+                        {band.label}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
               <p className="mt-3 text-[11px] leading-relaxed text-[var(--muted)]">

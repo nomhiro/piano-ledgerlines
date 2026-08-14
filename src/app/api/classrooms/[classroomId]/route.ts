@@ -1,5 +1,5 @@
 import { getAuthenticatedUser } from "@/lib/server/auth";
-import { requireClassroomRole, safeMemberView } from "@/lib/server/classroom-access";
+import { requireClassroomRole, safeClassroomRosterMemberView } from "@/lib/server/classroom-access";
 import { errorResponse, ConflictError, ConfigurationError, jsonResponse, readJson, ValidationError } from "@/lib/server/http";
 import { getRepository, RepositoryConflictError } from "@/lib/server/repository";
 import { classroomHasPaidEntitlement } from "@/lib/server/billing";
@@ -51,7 +51,6 @@ export async function GET(
       repository,
     );
     const members = await repository.listClassroomMembers(classroomId);
-    const includeEmail = access.member.role === "owner";
     const canViewRoster =
       access.member.role === "owner" ||
       (access.classroom.appStatus === "active" &&
@@ -61,7 +60,11 @@ export async function GET(
           members
             .filter((member) => member.status === "active")
             .map(async (member) =>
-              safeMemberView(member, await repository.getUser(member.userId), includeEmail),
+              safeClassroomRosterMemberView(
+                member,
+                await repository.getUser(member.userId),
+                access.member.role,
+              ),
             ),
         )
       : [];
