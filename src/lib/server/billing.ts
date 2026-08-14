@@ -296,7 +296,7 @@ async function updateCheckoutAttemptStatus(
   );
 }
 
-async function settleStudentQuantityOperationFromRemote(
+async function blockStudentQuantityOperationForInactiveContract(
   classroomId: string,
   repository: Repository,
 ): Promise<void> {
@@ -308,19 +308,25 @@ async function settleStudentQuantityOperationFromRemote(
     if (!current) throw new NotFoundError("classroom not found");
     if (!current.etag) throw new ConfigurationError("billing repository returned no etag");
     const operation = current.document.billing.studentQuantityOperation;
-    if (!operation || !["pending", "pending_reconciliation"].includes(operation.status)) return;
-    const matches = current.document.billableStudentCount === operation.targetQuantity;
-    const nextOperation: BillingOperationLeaseDoc = {
-      ...operation,
-      status: matches ? "completed" : "pending_reconciliation",
-      completedAt: matches ? new Date().toISOString() : null,
-      lastError: matches ? null : "remote student quantity differs from desired target",
-    };
+    if (
+      !operation ||
+      !["pending", "pending_reconciliation"].includes(operation.status)
+    ) {
+      return;
+    }
     try {
       await repository.upsertClassroom(
         {
           ...current.document,
-          billing: { ...current.document.billing, studentQuantityOperation: nextOperation },
+          billing: {
+            ...current.document.billing,
+            studentQuantityOperation: {
+              ...operation,
+              status: "blocked_inactive",
+              completedAt: null,
+              lastError: "student quantity sync is blocked while the contract is inactive",
+            },
+          },
           updatedAt: new Date().toISOString(),
         },
         { ifMatch: current.etag },
@@ -330,7 +336,7 @@ async function settleStudentQuantityOperationFromRemote(
       if (!(error instanceof RepositoryConflictError) || attempt === 3) throw error;
     }
   }
-  throw new RepositoryConflictError("student quantity settlement retries exhausted");
+  throw new RepositoryConflictError("inactive student operation settlement retries exhausted");
 }
 
 async function acquirePortalAttempt(
@@ -540,14 +546,6 @@ export async function syncClassroomFromSubscription(
   ) {
     throw new ValidationError("Stripe subscription metadata does not match classroom");
   }
-  if (
-    currentClassroom.billing.stripeSubscriptionId &&
-    currentClassroom.billing.stripeSubscriptionId !== subscription.id &&
-    currentClassroom.billing.stripeSubscriptionCreatedAt &&
-    currentClassroom.billing.stripeSubscriptionCreatedAt >= subscription.created
-  ) {
-    return currentClassroom;
-  }
   const mapping = mapStripeSubscriptionStatus(subscription.status);
   const baseItem = subscription.items.data.find((item) => subscriptionItemPriceId(item) === config.classroomBasePriceId);
   const studentItem = subscription.items.data.find((item) => subscriptionItemPriceId(item) === config.classroomStudentPriceId);
@@ -557,26 +555,85 @@ export async function syncClassroomFromSubscription(
   const customer = customerId(subscription.customer);
   return updateClassroomWithCas(
     classroomId,
-    (current) => ({
-      ...current,
-      billableStudentCount: studentItem?.quantity ?? 0,
-      billing: {
-        ...current.billing,
-        stripeCustomerId: customer,
-        stripeSubscriptionId: subscription.id,
-        status: mapping.contractStatus,
-        stripeStatus: subscription.status,
-        stripeSubscriptionCreatedAt: subscription.created,
-        stripeBaseSubscriptionItemId: baseItem?.id ?? null,
-        stripeStudentSubscriptionItemId: studentItem?.id ?? null,
-        stripeCurrentPeriodStart: subscriptionPeriod(baseItem?.current_period_start),
-        stripeCurrentPeriodEnd: subscriptionPeriod(baseItem?.current_period_end),
-        billingVersion: (current.billing.billingVersion ?? 0) + 1,
-      },
-      appStatus: mapping.appStatus,
-      updatedAt: new Date().toISOString(),
-    }),
+    (current) => {
+      const storedCreatedAt = current.billing.stripeSubscriptionCreatedAt;
+      const differentIdentity =
+        current.billing.stripeSubscriptionId !== null &&
+        current.billing.stripeSubscriptionId !== subscription.id;
+      if (
+        differentIdentity &&
+        storedCreatedAt !== null &&
+        storedCreatedAt !== undefined &&
+        (storedCreatedAt > subscription.created || storedCreatedAt === subscription.created)
+      ) {
+        return current;
+      }
+      if (
+        current.billing.stripeCustomerId &&
+        current.billing.stripeCustomerId !== customer
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        billableStudentCount: studentItem?.quantity ?? 0,
+        billing: {
+          ...current.billing,
+          stripeCustomerId: customer,
+          stripeSubscriptionId: subscription.id,
+          status: mapping.contractStatus,
+          stripeStatus: subscription.status,
+          stripeSubscriptionCreatedAt: subscription.created,
+          stripeBaseSubscriptionItemId: baseItem?.id ?? null,
+          stripeStudentSubscriptionItemId: studentItem?.id ?? null,
+          stripeCurrentPeriodStart: subscriptionPeriod(baseItem?.current_period_start),
+          stripeCurrentPeriodEnd: subscriptionPeriod(baseItem?.current_period_end),
+          billingVersion: (current.billing.billingVersion ?? 0) + 1,
+        },
+        appStatus: mapping.appStatus,
+        updatedAt: new Date().toISOString(),
+      };
+    },
     repository,
+  );
+}
+
+async function reconcileSelectedSubscription(
+  classroomId: string,
+  subscription: Stripe.Subscription,
+  repository: Repository,
+  stripe: StripeGateway,
+): Promise<ClassroomDoc> {
+  const config = getStripeBillingConfig();
+  const classroom = await repository.getClassroom(classroomId);
+  if (!classroom) throw new NotFoundError("classroom not found");
+  const mapping = mapStripeSubscriptionStatus(subscription.status);
+  if (mapping.access !== "available") {
+    const updated = await syncClassroomFromSubscription(classroomId, subscription, repository);
+    await blockStudentQuantityOperationForInactiveContract(classroomId, repository);
+    return (await repository.getClassroom(classroomId)) ?? updated;
+  }
+  const analysis = analyzeStudentItems(
+    subscription,
+    config.classroomStudentPriceId,
+    classroom.billing.stripeStudentSubscriptionItemId,
+  );
+  const existingOperation = classroom.billing.studentQuantityOperation;
+  const targetQuantity =
+    existingOperation &&
+    ["pending", "pending_reconciliation"].includes(existingOperation.status)
+      ? existingOperation.targetQuantity
+      : analysis.totalEffectiveQuantity;
+  const operationVersion =
+    existingOperation &&
+    ["pending", "pending_reconciliation"].includes(existingOperation.status)
+      ? existingOperation.operationVersion
+      : `webhook:${subscription.id}:${subscription.created}`;
+  await syncClassroomFromSubscription(classroomId, subscription, repository);
+  return setBillableStudentQuantity(
+    { classroomId, quantity: targetQuantity, operationVersion },
+    repository,
+    stripe,
   );
 }
 
@@ -604,9 +661,7 @@ export async function reconcileClassroomSubscription(
     .sort((left, right) => right.created - left.created);
   const latest = candidates[0];
   if (latest) {
-    const updated = await syncClassroomFromSubscription(classroomId, latest, repository);
-    await settleStudentQuantityOperationFromRemote(classroomId, repository);
-    return (await repository.getClassroom(classroomId)) ?? updated;
+    return reconcileSelectedSubscription(classroomId, latest, repository, stripeClient);
   }
   if (!eventSubscriptionId) return null;
   const eventSubscription = await stripeClient.retrieveSubscription(eventSubscriptionId);
@@ -617,9 +672,7 @@ export async function reconcileClassroomSubscription(
   ) {
     throw new ValidationError("Stripe subscription does not match classroom billing configuration");
   }
-  const updated = await syncClassroomFromSubscription(classroomId, eventSubscription, repository);
-  await settleStudentQuantityOperationFromRemote(classroomId, repository);
-  return (await repository.getClassroom(classroomId)) ?? updated;
+  return reconcileSelectedSubscription(classroomId, eventSubscription, repository, stripeClient);
 }
 
 export interface SetBillableStudentQuantityInput {
@@ -739,6 +792,26 @@ function canonicalStudentItem(
   return items.find((item) => item.id === preferredId) ?? items[0];
 }
 
+interface StudentItemAnalysis {
+  canonicalItem: Stripe.SubscriptionItem | undefined;
+  duplicateItems: Stripe.SubscriptionItem[];
+  totalEffectiveQuantity: number;
+}
+
+function analyzeStudentItems(
+  subscription: Stripe.Subscription,
+  studentPriceId: string,
+  preferredId?: string | null,
+): StudentItemAnalysis {
+  const items = studentSubscriptionItems(subscription, studentPriceId);
+  const canonicalItem = canonicalStudentItem(items, preferredId);
+  return {
+    canonicalItem,
+    duplicateItems: items.filter((item) => item.id !== canonicalItem?.id),
+    totalEffectiveQuantity: items.reduce((total, item) => total + (item.quantity ?? 0), 0),
+  };
+}
+
 export async function setBillableStudentQuantity(
   input: SetBillableStudentQuantityInput,
   repository: Repository = getRepository(),
@@ -771,34 +844,41 @@ export async function setBillableStudentQuantity(
     }
     const baseItem = subscription.items.data.find((candidate) => subscriptionItemPriceId(candidate) === config.classroomBasePriceId);
     if (!baseItem) throw new ValidationError("Stripe subscription is missing the classroom base price");
-    const items = studentSubscriptionItems(subscription, config.classroomStudentPriceId);
-    const canonical = canonicalStudentItem(items, current.billing.stripeStudentSubscriptionItemId);
+    const analysis = analyzeStudentItems(
+      subscription,
+      config.classroomStudentPriceId,
+      current.billing.stripeStudentSubscriptionItemId,
+    );
+    const canonical = analysis.canonicalItem;
     const mutationKey = `classroom:${input.classroomId}:membership:${operationKeyHash(input.operationVersion)}`;
-    for (const extra of items.filter((item) => item.id !== canonical?.id)) {
+    for (const extra of analysis.duplicateItems) {
+      externalMutationSucceeded = true;
       await stripeClient.deleteSubscriptionItem(
         extra.id,
         { proration_behavior: "always_invoice" },
         { idempotencyKey: `${mutationKey}:delete:${extra.id}` },
       );
-      externalMutationSucceeded = true;
     }
     if (input.quantity === 0) {
       if (canonical) {
+        externalMutationSucceeded = true;
         await stripeClient.deleteSubscriptionItem(
           canonical.id,
           { proration_behavior: "always_invoice" },
           { idempotencyKey: `${mutationKey}:delete:${canonical.id}` },
         );
-        externalMutationSucceeded = true;
       }
-    } else if (canonical && canonical.quantity !== input.quantity) {
-      await stripeClient.updateSubscriptionItem(
-        canonical.id,
-        { quantity: input.quantity, proration_behavior: "always_invoice" },
-        { idempotencyKey: `${mutationKey}:update:${canonical.id}` },
-      );
-      externalMutationSucceeded = true;
+    } else if (canonical) {
+      if (canonical.quantity !== input.quantity) {
+        externalMutationSucceeded = true;
+        await stripeClient.updateSubscriptionItem(
+          canonical.id,
+          { quantity: input.quantity, proration_behavior: "always_invoice" },
+          { idempotencyKey: `${mutationKey}:update:${canonical.id}` },
+        );
+      }
     } else {
+      externalMutationSucceeded = true;
       await stripeClient.createSubscriptionItem(
         {
           subscription: subscription.id,
@@ -808,9 +888,17 @@ export async function setBillableStudentQuantity(
         },
         { idempotencyKey: `${mutationKey}:create` },
       );
-      externalMutationSucceeded = true;
     }
     const remote = await stripeClient.retrieveSubscription(subscription.id);
+    const finalAnalysis = analyzeStudentItems(remote, config.classroomStudentPriceId);
+    const exactStudentQuantity =
+      finalAnalysis.duplicateItems.length === 0 &&
+      (input.quantity === 0
+        ? !finalAnalysis.canonicalItem || finalAnalysis.canonicalItem.quantity === 0
+        : finalAnalysis.canonicalItem?.quantity === input.quantity);
+    if (!exactStudentQuantity) {
+      throw new BillingInProgressError("student quantity reconciliation is incomplete");
+    }
     const result = await syncClassroomFromSubscription(input.classroomId, remote, repository);
     await finishStudentQuantityLease(input.classroomId, lease.ownerToken, "completed", repository);
     return result;

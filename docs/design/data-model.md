@@ -745,7 +745,9 @@ Checkout attemptもoperation key hash、session ID/URL、expiryを保持し、�
 Stripe外部APIとCosmosはtransactionではないため、membership更新は教室単位の
 operation leaseをETag/CASで取得して直列化し、外部操作後にSubscriptionを再取得します。
 同一student Price itemが複数存在する場合はcanonical itemを選び、余剰itemを削除してから
-local count/item IDをCAS反映します。失敗・クラッシュ時はlease expiry後にreconciliationで
+remote再解析でexactly one（quantity 0は0 itemまたはquantity 0 item）を確認してlocal
+count/item IDをCAS反映します。inactive subscriptionではpending operationを
+`blocked_inactive`として再契約待ちにし、completedへ進めません。失敗・クラッシュ時はlease expiry後にreconciliationで
 remote/localを補償します。
 
 ---

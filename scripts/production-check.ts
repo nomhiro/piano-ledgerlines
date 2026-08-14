@@ -14,6 +14,7 @@ import {
   mapStripeSubscriptionStatus,
   processStripeWebhook,
   setBillableStudentQuantity,
+  syncClassroomFromSubscription,
 } from "../src/lib/server/billing";
 import type { StripeGateway } from "../src/lib/server/stripe";
 import { BillingInProgressError } from "../src/lib/server/http";
@@ -50,10 +51,12 @@ class FakeBillingGateway implements StripeGateway {
   subscriptions: Stripe.Subscription[];
   checkoutSessionCount = 0;
   portalSessionCount = 0;
+  createdItemCount = 0;
   deletedItemIds: string[] = [];
   retrieveGate: Promise<void> | null = null;
   failRetrieveAfterFirst = false;
   retrieveCount = 0;
+  failDeleteCount = 0;
 
   constructor(event: Stripe.Event, subscriptions: Stripe.Subscription[] = []) {
     this.event = event;
@@ -97,6 +100,7 @@ class FakeBillingGateway implements StripeGateway {
   }
 
   async createSubscriptionItem(params: Stripe.SubscriptionItemCreateParams): Promise<Stripe.SubscriptionItem> {
+    this.createdItemCount += 1;
     const subscription = this.subscriptions.find((item) => item.id === params.subscription);
     if (!subscription) throw new Error("missing test subscription");
     const template = subscription.items.data[0];
@@ -122,6 +126,10 @@ class FakeBillingGateway implements StripeGateway {
   }
 
   async deleteSubscriptionItem(itemId: string): Promise<Stripe.DeletedSubscriptionItem> {
+    if (this.failDeleteCount > 0) {
+      this.failDeleteCount -= 1;
+      throw new Error("simulated duplicate item deletion failure");
+    }
     this.deletedItemIds.push(itemId);
     for (const subscription of this.subscriptions) {
       subscription.items.data = subscription.items.data.filter((item) => item.id !== itemId);
@@ -966,6 +974,129 @@ test("Webhook reconciliation selects the newest metadata and base-price subscrip
   }
 });
 
+test("CAS retry ignores an old subscription after a newer contract is saved", async () => {
+  const restore = testStripeEnvironment();
+  try {
+    const repository = new LocalRepository();
+    const classroomId = `classroom_cas_order_${Date.now()}`;
+    const now = new Date().toISOString();
+    await repository.createClassroom({
+      id: classroomId,
+      type: "classroom",
+      name: "CAS order test",
+      ownerUserId: "owner-cas",
+      teacherLimit: 10,
+      billableStudentCount: 0,
+      billing: {
+        stripeCustomerId: "cus_test",
+        stripeSubscriptionId: "sub_old_cas",
+        stripeSubscriptionCreatedAt: 100,
+        status: "active",
+      },
+      appStatus: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const oldSubscription = testSubscription("sub_old_cas", 100, "canceled", [], classroomId);
+    const originalUpsert = repository.upsertClassroom.bind(repository);
+    let injected = false;
+    repository.upsertClassroom = async (document, options) => {
+      if (!injected && document.billing.stripeSubscriptionId === "sub_old_cas") {
+        injected = true;
+        const current = await repository.getClassroomRecord(classroomId);
+        if (!current?.etag) throw new Error("missing CAS record");
+        await originalUpsert(
+          {
+            ...current.document,
+            billing: {
+              ...current.document.billing,
+              stripeSubscriptionId: "sub_new_cas",
+              stripeSubscriptionCreatedAt: 200,
+              status: "active",
+              stripeStatus: "active",
+            },
+          },
+          { ifMatch: current.etag },
+        );
+        throw new RepositoryConflictError("simulated concurrent contract write");
+      }
+      return originalUpsert(document, options);
+    };
+    await syncClassroomFromSubscription(classroomId, oldSubscription, repository);
+    const current = await repository.getClassroom(classroomId);
+    assert.equal(current?.billing.stripeSubscriptionId, "sub_new_cas");
+    assert.equal(current?.billing.status, "active");
+  } finally {
+    restore();
+  }
+});
+
+test("Inactive duplicate student items block pending operations until re-contract reconciliation", async () => {
+  const restore = testStripeEnvironment();
+  try {
+    const repository = new LocalRepository();
+    const classroomId = `classroom_inactive_quantity_${Date.now()}`;
+    const now = new Date().toISOString();
+    await repository.createClassroom({
+      id: classroomId,
+      type: "classroom",
+      name: "Inactive quantity test",
+      ownerUserId: "owner-inactive",
+      teacherLimit: 10,
+      billableStudentCount: 1,
+      billing: {
+        stripeCustomerId: "cus_test",
+        stripeSubscriptionId: "sub_inactive",
+        status: "active",
+        studentQuantityOperation: {
+          operationVersion: "pending-inactive",
+          ownerToken: "pending-owner",
+          targetQuantity: 2,
+          status: "pending",
+          startedAt: now,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+      appStatus: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const inactive = testSubscription("sub_inactive", 100, "canceled", [1, 1], classroomId);
+    const gateway = new FakeBillingGateway({
+      id: `evt_inactive_${Date.now()}`,
+      object: "event",
+      created: 200,
+      livemode: false,
+      type: "customer.subscription.deleted",
+      data: { object: inactive },
+    } as Stripe.Event, [inactive]);
+    await processStripeWebhook("{}", "sig", repository, gateway);
+    assert.equal(
+      (await repository.getClassroom(classroomId))?.billing.studentQuantityOperation?.status,
+      "blocked_inactive",
+    );
+    assert.equal(inactive.items.data.filter((item) => item.id.includes("_student_")).length, 2);
+
+    const active = testSubscription("sub_recontract", 300, "active", [2], classroomId);
+    gateway.subscriptions = [active];
+    gateway.event = {
+      id: `evt_recontract_${Date.now()}`,
+      object: "event",
+      created: 400,
+      livemode: false,
+      type: "customer.subscription.updated",
+      data: { object: active },
+    } as Stripe.Event;
+    await processStripeWebhook("{}", "sig", repository, gateway);
+    const reconciled = await repository.getClassroom(classroomId);
+    assert.equal(reconciled?.billing.stripeSubscriptionId, "sub_recontract");
+    assert.equal(reconciled?.billableStudentCount, 2);
+    assert.equal(reconciled?.billing.studentQuantityOperation?.status, "completed");
+  } finally {
+    restore();
+  }
+});
+
 test("Student quantity lease canonicalizes duplicate price items and reclaims stale leases", async () => {
   const restore = testStripeEnvironment();
   try {
@@ -1005,6 +1136,7 @@ test("Student quantity lease canonicalizes duplicate price items and reclaims st
       gateway,
     );
     assert.equal(updated.billableStudentCount, 3);
+    assert.equal(gateway.createdItemCount, 0);
     assert.equal(subscription.items.data.filter((item) => item.id.includes("_student_")).length, 1);
     assert.equal(subscription.items.data.find((item) => item.id === "sub_quantity_student_0")?.quantity, 3);
     assert.equal(gateway.deletedItemIds.length, 1);
@@ -1040,6 +1172,30 @@ test("Student quantity lease canonicalizes duplicate price items and reclaims st
       gateway,
     );
     assert.equal(reconciled.billableStudentCount, 4);
+    assert.equal((await repository.getClassroom(classroomId))?.billing.studentQuantityOperation?.status, "completed");
+    const canonicalItem = subscription.items.data.find((item) => item.id === "sub_quantity_student_0");
+    if (!canonicalItem) throw new Error("missing canonical student item");
+    subscription.items.data.push({ ...canonicalItem, id: "sub_quantity_student_extra", quantity: 1 });
+    gateway.failDeleteCount = 1;
+    await assert.rejects(
+      setBillableStudentQuantity(
+        { classroomId, quantity: 4, operationVersion: "delete-retry" },
+        repository,
+        gateway,
+      ),
+      /simulated duplicate item deletion failure/,
+    );
+    assert.equal(
+      (await repository.getClassroom(classroomId))?.billing.studentQuantityOperation?.status,
+      "pending_reconciliation",
+    );
+    gateway.failDeleteCount = 0;
+    await setBillableStudentQuantity(
+      { classroomId, quantity: 4, operationVersion: "delete-retry" },
+      repository,
+      gateway,
+    );
+    assert.equal(subscription.items.data.filter((item) => item.id.includes("_student_")).length, 1);
     assert.equal((await repository.getClassroom(classroomId))?.billing.studentQuantityOperation?.status, "completed");
 
     let releaseRetrieve: () => void = () => {};

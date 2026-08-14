@@ -218,7 +218,7 @@ export interface BillingOperationLeaseDoc {
   operationVersion: string;
   ownerToken: string;
   targetQuantity: number;
-  status: "pending" | "pending_reconciliation" | "completed" | "failed";
+  status: "pending" | "pending_reconciliation" | "completed" | "failed" | "blocked_inactive";
   startedAt: string;
   expiresAt: string;
   completedAt?: string | null;

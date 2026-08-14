@@ -848,6 +848,9 @@ stripe trigger checkout.session.completed
 `provisioning`/`removing` とStripe外部操作を分離するsaga契約で扱い、外部呼び出し失敗時は
 membershipを確定せず同じoperation versionで再照合します。学生数量leaseは教室単位で外部
 mutationを直列化し、同じstudent Price itemが複数ならcanonical itemへ集約して余剰を削除します。
+非利用可能subscriptionではpending operationを`blocked_inactive`へ遷移させ、
+`completed`にはしません。再契約でactiveへ戻ったWebhookまたは同じoperationVersionの
+reconciliationがremote student itemを再解析し、canonicalize後にcountとoperationを完了させます。
 
 ---
 
