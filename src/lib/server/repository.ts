@@ -54,6 +54,10 @@ export interface Repository {
   getClassroomInvitation(classroomId: string, invitationId: string): Promise<ClassroomInvitationDoc | null>;
   upsertClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc>;
   listClassroomInvitations(classroomId: string): Promise<ClassroomInvitationDoc[]>;
+  getClassroomInvitationRecord(
+    classroomId: string,
+    invitationId: string,
+  ): Promise<RepositoryDocument<ClassroomInvitationDoc> | null>;
   deleteClassroomInvitation(classroomId: string, invitationId: string, options?: RepositoryWriteOptions): Promise<void>;
   createBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc>;
   getBillingEvent(eventId: string): Promise<BillingEventDoc | null>;
@@ -232,12 +236,26 @@ export class LocalRepository implements Repository {
     return listJsonFiles<ClassroomInvitationDoc>(classroomInvitationsDir(classroomId));
   }
 
+  async getClassroomInvitationRecord(
+    classroomId: string,
+    invitationId: string,
+  ): Promise<RepositoryDocument<ClassroomInvitationDoc> | null> {
+    return this.readDomainRecord<ClassroomInvitationDoc>(
+      classroomInvitationDocPath(classroomId, invitationId),
+    );
+  }
+
   async deleteClassroomInvitation(classroomId: string, invitationId: string, options?: RepositoryWriteOptions): Promise<void> {
     const filePath = classroomInvitationDocPath(classroomId, invitationId);
-    const current = await this.readDomainRecord<ClassroomInvitationDoc>(filePath);
-    if (!current) return;
-    this.assertWriteCondition(current, options);
-    await fs.rm(filePath, { force: true });
+    await withDomainLock(filePath, async () => {
+      const current = await this.readDomainRecord<ClassroomInvitationDoc>(filePath);
+      if (!current) {
+        this.assertWriteCondition(current, options);
+        return;
+      }
+      this.assertWriteCondition(current, options);
+      await fs.rm(filePath);
+    });
   }
 
   async createBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc> {
@@ -497,17 +515,45 @@ function domainEtag(document: unknown): string {
 
 const DOMAIN_LOCK_TIMEOUT_MS = 5_000;
 const DOMAIN_LOCK_RETRY_MS = 25;
+// Domain writes are expected to complete quickly. A crashed process may leave a
+// lease behind, so only locks older than this recovery threshold are reclaimed.
+const DOMAIN_LOCK_LEASE_MS = 30_000;
+const DOMAIN_LOCK_STALE_THRESHOLD_MS = 60_000;
+
+interface DomainLockMetadata {
+  ownerToken: string;
+  pid: number;
+  createdAt: number;
+  expiresAt: number;
+}
 
 async function withDomainLock<T>(filePath: string, action: () => Promise<T>): Promise<T> {
   const lockPath = `${filePath}.lock`;
   await ensureDir(path.dirname(filePath));
   const deadline = Date.now() + DOMAIN_LOCK_TIMEOUT_MS;
-  let lockHandle: FileHandle | undefined;
-  while (!lockHandle) {
+  const ownerToken = randomUUID();
+  let acquired = false;
+  while (!acquired) {
+    let lockHandle: FileHandle | undefined;
     try {
       lockHandle = await fs.open(lockPath, "wx");
+      const createdAt = Date.now();
+      const metadata: DomainLockMetadata = {
+        ownerToken,
+        pid: process.pid,
+        createdAt,
+        expiresAt: createdAt + DOMAIN_LOCK_LEASE_MS,
+      };
+      await lockHandle.writeFile(JSON.stringify(metadata), "utf-8");
+      await lockHandle.close();
+      acquired = true;
     } catch (error) {
+      if (lockHandle) {
+        await lockHandle.close();
+        await fs.rm(lockPath, { force: true });
+      }
       if (!isFileExists(error)) throw error;
+      await reclaimStaleDomainLock(lockPath);
       if (Date.now() >= deadline) {
         throw new RepositoryConflictError("timed out acquiring repository lock");
       }
@@ -518,8 +564,86 @@ async function withDomainLock<T>(filePath: string, action: () => Promise<T>): Pr
   try {
     return await action();
   } finally {
-    await lockHandle.close();
-    await fs.rm(lockPath, { force: true });
+    await releaseDomainLock(lockPath, ownerToken);
+  }
+}
+
+async function reclaimStaleDomainLock(lockPath: string): Promise<void> {
+  const metadata = await readDomainLockMetadata(lockPath);
+  let stats: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stats = await fs.stat(lockPath);
+  } catch (error) {
+    if (isEnoent(error)) return;
+    throw error;
+  }
+  const now = Date.now();
+  const stale =
+    now - stats.mtimeMs > DOMAIN_LOCK_STALE_THRESHOLD_MS &&
+    (!metadata || metadata.expiresAt <= now);
+  if (!stale) return;
+
+  const reclaimPath = `${lockPath}.${randomUUID()}.reclaim`;
+  try {
+    await fs.rename(lockPath, reclaimPath);
+  } catch (error) {
+    if (isEnoent(error)) return;
+    throw error;
+  }
+  const reclaimed = await readDomainLockMetadata(reclaimPath);
+  if (reclaimed?.ownerToken === metadata?.ownerToken) {
+    await fs.rm(reclaimPath, { force: true });
+    return;
+  }
+  // The lock changed between stat and rename. Never delete another owner's lock.
+  try {
+    await fs.access(lockPath);
+  } catch (error) {
+    if (!isEnoent(error)) throw error;
+    await fs.rename(reclaimPath, lockPath);
+  }
+}
+
+async function readDomainLockMetadata(lockPath: string): Promise<DomainLockMetadata | null> {
+  try {
+    const parsed: unknown = JSON.parse(await fs.readFile(lockPath, "utf-8"));
+    if (!isDomainLockMetadata(parsed)) return null;
+    return parsed;
+  } catch (error) {
+    if (isEnoent(error)) return null;
+    if (error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+function isDomainLockMetadata(value: unknown): value is DomainLockMetadata {
+  return typeof value === "object" && value !== null &&
+    typeof (value as { ownerToken?: unknown }).ownerToken === "string" &&
+    typeof (value as { pid?: unknown }).pid === "number" &&
+    typeof (value as { createdAt?: unknown }).createdAt === "number" &&
+    typeof (value as { expiresAt?: unknown }).expiresAt === "number";
+}
+
+async function releaseDomainLock(lockPath: string, ownerToken: string): Promise<void> {
+  const releasePath = `${lockPath}.${ownerToken}.release`;
+  try {
+    await fs.rename(lockPath, releasePath);
+  } catch (error) {
+    if (isEnoent(error)) return;
+    throw error;
+  }
+  const metadata = await readDomainLockMetadata(releasePath);
+  if (metadata?.ownerToken === ownerToken) {
+    await fs.rm(releasePath, { force: true });
+    return;
+  }
+  // A stale-recovery race moved another owner's lock. Restore it only when the
+  // lock path is still empty; never remove or overwrite the other owner.
+  try {
+    await fs.access(lockPath);
+  } catch (error) {
+    if (!isEnoent(error)) throw error;
+    await fs.rename(releasePath, lockPath);
   }
 }
 

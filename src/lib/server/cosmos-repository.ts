@@ -46,6 +46,13 @@ export function cosmosWriteMode(options?: RepositoryWriteOptions): "create" | "r
   return "upsert";
 }
 
+export function isCosmosConditionalConflict(
+  error: unknown,
+  mode: "create" | "replace" | "upsert",
+): boolean {
+  return conflict(error) || (mode === "replace" && notFound(error));
+}
+
 export class CosmosRepository implements Repository {
   private readonly songs: Container;
   private readonly takes: Container;
@@ -159,6 +166,13 @@ export class CosmosRepository implements Repository {
     return (await this.classroomInvitations.items.query<ClassroomInvitationDoc>(query, { partitionKey: classroomId }).fetchAll()).resources;
   }
 
+  async getClassroomInvitationRecord(
+    classroomId: string,
+    invitationId: string,
+  ): Promise<RepositoryDocument<ClassroomInvitationDoc> | null> {
+    return this.readRecord(this.classroomInvitations, invitationId, classroomId);
+  }
+
   async deleteClassroomInvitation(classroomId: string, invitationId: string, options?: RepositoryWriteOptions): Promise<void> {
     const item = this.classroomInvitations.item(invitationId, classroomId);
     try {
@@ -247,10 +261,8 @@ export class CosmosRepository implements Repository {
         : await container.items.upsert<T>(document);
       return { document: response.resource ?? document, etag: response.etag ?? null };
     } catch (error) {
-      if (conflict(error)) {
-        throw new RepositoryConflictErrorClass(
-          cosmosWriteMode(options) === "create" ? "document already exists" : "etag does not match",
-        );
+      if (isCosmosConditionalConflict(error, mode)) {
+        throw new RepositoryConflictErrorClass("etag does not match");
       }
       throw error;
     }

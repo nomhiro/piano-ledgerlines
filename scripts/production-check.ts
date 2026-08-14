@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import test from "node:test";
 import { coachReviewSchema, fallbackReview, type CoachInput } from "../src/lib/server/ai-coach";
 import { redactTelemetry } from "../src/lib/server/observability";
@@ -17,7 +18,11 @@ import {
   RepositoryConflictError,
 } from "../src/lib/server/repository";
 import { classroomMemberId } from "../src/lib/server/ids";
-import { cosmosWriteMode } from "../src/lib/server/cosmos-repository";
+import {
+  cosmosWriteMode,
+  isCosmosConditionalConflict,
+} from "../src/lib/server/cosmos-repository";
+import { userDocPath } from "../src/lib/server/paths";
 import type {
   BillingEventDoc,
   ClassroomDoc,
@@ -344,6 +349,74 @@ test("Cosmos conditional writes select atomic create or replace operations", () 
   assert.equal(cosmosWriteMode({ ifNoneMatch: true }), "create");
   assert.equal(cosmosWriteMode({ ifMatch: "etag" }), "replace");
   assert.equal(cosmosWriteMode(), "upsert");
+  assert.equal(isCosmosConditionalConflict({ code: 404 }, "replace"), true);
+  assert.equal(isCosmosConditionalConflict({ code: 404 }, "upsert"), false);
+  assert.equal(isCosmosConditionalConflict({ code: 412 }, "replace"), true);
+});
+
+test("LocalRepository recovers a stale leased domain lock", async () => {
+  const repository = new LocalRepository();
+  const user: AuthenticatedUser = {
+    id: `google:stale_lock_test_${Date.now()}`,
+    roles: [],
+    plan: "free",
+    provider: "google",
+    email: "stale-lock@example.com",
+    displayName: "Stale Lock User",
+    emailVerified: true,
+    isDevelopmentFallback: false,
+  };
+  const profile = createUserProfile(user);
+  await repository.upsertUser(profile);
+  const lockPath = `${userDocPath(user.id)}.lock`;
+  await fs.writeFile(lockPath, JSON.stringify({
+    ownerToken: "crashed-process",
+    pid: 999999,
+    createdAt: 0,
+    expiresAt: 1,
+  }), "utf8");
+  const staleAt = new Date(Date.now() - 120_000);
+  await fs.utimes(lockPath, staleAt, staleAt);
+
+  await repository.upsertUser({ ...profile, displayName: "Recovered User" });
+  assert.equal((await repository.getUser(user.id))?.displayName, "Recovered User");
+  await assert.rejects(fs.access(lockPath));
+});
+
+test("LocalRepository serializes invitation update and stale delete", async () => {
+  const repository = new LocalRepository();
+  const classroomId = `classroom_delete_test_${Date.now()}`;
+  const invitation: ClassroomInvitationDoc = {
+    id: "delete-race-invite",
+    type: "classroom-invitation",
+    classroomId,
+    email: "delete-race@example.com",
+    normalizedEmail: "delete-race@example.com",
+    role: "student",
+    status: "pending",
+    tokenHash: null,
+    expiresAt: null,
+    createdByUserId: "owner-delete-race",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await repository.createClassroomInvitation(invitation);
+  const initial = await repository.getClassroomInvitationRecord(classroomId, invitation.id);
+  assert.ok(initial?.etag);
+  const [updated, deleted] = await Promise.allSettled([
+    repository.upsertClassroomInvitation(
+      { ...invitation, status: "accepted" },
+      { ifMatch: initial.etag },
+    ),
+    repository.deleteClassroomInvitation(classroomId, invitation.id, { ifMatch: initial.etag }),
+  ]);
+  assert.equal([updated, deleted].filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(
+    [updated, deleted].filter((result) =>
+      result.status === "rejected" && result.reason instanceof RepositoryConflictError,
+    ).length,
+    1,
+  );
 });
 
 test("LocalRepository supports classroom and billing CRUD with deterministic memberships", async () => {
