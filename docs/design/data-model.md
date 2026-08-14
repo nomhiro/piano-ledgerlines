@@ -750,6 +750,11 @@ count/item IDをCAS反映します。inactive subscriptionではpending operatio
 `blocked_inactive`として再契約待ちにし、completedへ進めません。失敗・クラッシュ時はlease expiry後にreconciliationで
 remote/localを補償します。
 
+Subscriptionのcurrent identityは `stripeSubscriptionSelectionKey` (version 1) として
+`created`、利用可能status rank、Subscription IDの順で永続化します。remote list選択と
+CAS callbackは同じtotal orderingを使うため、同一秒の再契約や同一status複数契約でも
+全リトライが同じcurrentを選び、古いeventで巻き戻りません。
+
 ---
 
 ## 10. 関連ドキュメント

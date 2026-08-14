@@ -832,7 +832,9 @@ owner token・開始時刻・expiry付きleaseで `processing → processed` ま
 します。Subscription
 eventではpayloadのstatusを盲信せず、StripeからSubscriptionを再取得して最新items、
 customer、periodを反映します。customer/classroom metadataと固定base Priceを検証し、
-customerの全Subscriptionからcreated時刻が最も新しい対象契約だけを反映します。
+customerの全Subscriptionから `(created, usable status rank, subscription ID)` の
+selection keyが最大の対象契約だけを反映します。同一秒のactive/trialing/past_dueは
+canceled/incomplete_expired/unpaidより優先し、同一status・同一秒でもIDで決定します。
 `active`/`trialing`/`past_due` は利用可能、
 `unpaid`/`canceled`/`incomplete_expired` と未知statusは停止です。
 

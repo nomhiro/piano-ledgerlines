@@ -974,6 +974,49 @@ test("Webhook reconciliation selects the newest metadata and base-price subscrip
   }
 });
 
+test("Same-second subscription selection prefers usable status then deterministic identity", async () => {
+  const restore = testStripeEnvironment();
+  try {
+    const repository = new LocalRepository();
+    const classroomId = `classroom_same_second_${Date.now()}`;
+    const now = new Date().toISOString();
+    await repository.createClassroom({
+      id: classroomId,
+      type: "classroom",
+      name: "Same second test",
+      ownerUserId: "owner-same-second",
+      teacherLimit: 10,
+      billableStudentCount: 0,
+      billing: {
+        stripeCustomerId: "cus_test",
+        stripeSubscriptionId: "sub_a",
+        status: "canceled",
+      },
+      appStatus: "suspended",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const oldCanceled = testSubscription("sub_a", 500, "canceled", [], classroomId);
+    const activeB = testSubscription("sub_b", 500, "active", [1], classroomId);
+    const activeC = testSubscription("sub_c", 500, "active", [2], classroomId);
+    const gateway = new FakeBillingGateway({
+      id: `evt_same_second_${Date.now()}`,
+      object: "event",
+      created: 600,
+      livemode: false,
+      type: "customer.subscription.deleted",
+      data: { object: oldCanceled },
+    } as Stripe.Event, [activeB, oldCanceled, activeC]);
+    await processStripeWebhook("{}", "sig", repository, gateway);
+    const updated = await repository.getClassroom(classroomId);
+    assert.equal(updated?.billing.stripeSubscriptionId, "sub_c");
+    assert.equal(updated?.billableStudentCount, 2);
+    assert.equal(updated?.billing.stripeSubscriptionSelectionKey?.endsWith(":sub_c"), true);
+  } finally {
+    restore();
+  }
+});
+
 test("CAS retry ignores an old subscription after a newer contract is saved", async () => {
   const restore = testStripeEnvironment();
   try {
@@ -1011,7 +1054,7 @@ test("CAS retry ignores an old subscription after a newer contract is saved", as
             billing: {
               ...current.document.billing,
               stripeSubscriptionId: "sub_new_cas",
-              stripeSubscriptionCreatedAt: 200,
+              stripeSubscriptionCreatedAt: 100,
               status: "active",
               stripeStatus: "active",
             },

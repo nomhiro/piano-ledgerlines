@@ -56,6 +56,47 @@ export function mapStripeSubscriptionStatus(status: string): StripeStatusMapping
   }
 }
 
+export function stripeSubscriptionStatusPriority(status: string): number {
+  if (status === "active" || status === "trialing" || status === "past_due") return 2;
+  if (status === "incomplete") return 1;
+  return 0;
+}
+
+export function stripeSubscriptionSelectionKey(subscription: Stripe.Subscription): string {
+  return [
+    subscription.created.toString().padStart(12, "0"),
+    stripeSubscriptionStatusPriority(subscription.status).toString(),
+    subscription.id,
+  ].join(":");
+}
+
+export function compareStripeSubscriptionSelection(
+  left: Stripe.Subscription,
+  right: Stripe.Subscription,
+): number {
+  const leftKey = stripeSubscriptionSelectionKey(left);
+  const rightKey = stripeSubscriptionSelectionKey(right);
+  return leftKey === rightKey ? 0 : leftKey > rightKey ? 1 : -1;
+}
+
+function storedSubscriptionSelectionKey(classroom: ClassroomDoc): string | null {
+  if (classroom.billing.stripeSubscriptionSelectionKey) {
+    return classroom.billing.stripeSubscriptionSelectionKey;
+  }
+  if (
+    !classroom.billing.stripeSubscriptionId ||
+    classroom.billing.stripeSubscriptionCreatedAt === null ||
+    classroom.billing.stripeSubscriptionCreatedAt === undefined
+  ) {
+    return null;
+  }
+  return [
+    classroom.billing.stripeSubscriptionCreatedAt.toString().padStart(12, "0"),
+    stripeSubscriptionStatusPriority(classroom.billing.stripeStatus ?? "").toString(),
+    classroom.billing.stripeSubscriptionId,
+  ].join(":");
+}
+
 export function classroomHasPaidEntitlement(status: ClassroomContractStatus): boolean {
   return status === "active" || status === "past_due";
 }
@@ -553,18 +594,18 @@ export async function syncClassroomFromSubscription(
     throw new ValidationError("Stripe subscription is missing the classroom base price");
   }
   const customer = customerId(subscription.customer);
+  const incomingSelectionKey = stripeSubscriptionSelectionKey(subscription);
   return updateClassroomWithCas(
     classroomId,
     (current) => {
-      const storedCreatedAt = current.billing.stripeSubscriptionCreatedAt;
       const differentIdentity =
         current.billing.stripeSubscriptionId !== null &&
         current.billing.stripeSubscriptionId !== subscription.id;
+      const storedSelectionKey = storedSubscriptionSelectionKey(current);
       if (
         differentIdentity &&
-        storedCreatedAt !== null &&
-        storedCreatedAt !== undefined &&
-        (storedCreatedAt > subscription.created || storedCreatedAt === subscription.created)
+        storedSelectionKey &&
+        incomingSelectionKey <= storedSelectionKey
       ) {
         return current;
       }
@@ -584,6 +625,8 @@ export async function syncClassroomFromSubscription(
           status: mapping.contractStatus,
           stripeStatus: subscription.status,
           stripeSubscriptionCreatedAt: subscription.created,
+          stripeSubscriptionSelectionKey: incomingSelectionKey,
+          stripeSubscriptionSelectionVersion: 1,
           stripeBaseSubscriptionItemId: baseItem?.id ?? null,
           stripeStudentSubscriptionItemId: studentItem?.id ?? null,
           stripeCurrentPeriodStart: subscriptionPeriod(baseItem?.current_period_start),
@@ -658,7 +701,7 @@ export async function reconcileClassroomSubscription(
     .filter((subscription) => subscriptionCustomerId(subscription) === customer)
     .filter((subscription) => subscription.metadata.classroomId === classroomId)
     .filter((subscription) => hasClassroomBasePrice(subscription, config.classroomBasePriceId))
-    .sort((left, right) => right.created - left.created);
+    .sort((left, right) => compareStripeSubscriptionSelection(right, left));
   const latest = candidates[0];
   if (latest) {
     return reconcileSelectedSubscription(classroomId, latest, repository, stripeClient);

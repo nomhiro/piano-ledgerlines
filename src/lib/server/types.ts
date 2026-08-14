@@ -185,6 +185,8 @@ export interface ClassroomDoc {
     stripeCurrentPeriodStart?: string | null;
     stripeCurrentPeriodEnd?: string | null;
     stripeSubscriptionCreatedAt?: number | null;
+    stripeSubscriptionSelectionKey?: string | null;
+    stripeSubscriptionSelectionVersion?: number;
     billingVersion?: number;
     checkoutAttempt?: CheckoutAttemptDoc | null;
     portalAttempt?: PortalAttemptDoc | null;
