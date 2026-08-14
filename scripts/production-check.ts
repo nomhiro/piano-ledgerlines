@@ -224,7 +224,7 @@ test("Easy Auth rejects missing or invalid identity claims", async () => {
 test("user profile upsert normalizes email and preserves settings", async () => {
   const repository = new LocalRepository();
   const user: AuthenticatedUser = {
-    id: `user_profile_test_${Date.now()}`,
+    id: `google:user_profile_test_${Date.now()}`,
     roles: [],
     plan: "free",
     provider: "google",

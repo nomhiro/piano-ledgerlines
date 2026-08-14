@@ -85,6 +85,7 @@ export default function AppShell({
             </div>
             <div className="leading-tight">
               <div className="text-xs">{account.profile.displayName}</div>
+              <div className="text-[10px] text-[var(--muted)]">{account.profile.email}</div>
               {classroomName && (
                 <div className="text-[10px] text-[var(--muted)]">{classroomName}</div>
               )}
