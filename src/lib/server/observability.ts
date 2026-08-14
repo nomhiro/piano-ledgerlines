@@ -19,7 +19,7 @@ export interface TelemetrySink {
   metric(name: string, value: number, tags?: Record<string, string>): void;
 }
 
-const sensitiveKey = /authorization|cookie|password|secret|token|sas|signature|credential|audio|memo|title|composer|email|displayName|userName|prompt|content/i;
+const sensitiveKey = /authorization|cookie|password|secret|token|sas|signature|credential|stripe|audio|memo|title|composer|email|displayName|userName|prompt|content/i;
 const jwt = /\b(?:eyJ|bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi;
 
 function redactValue(value: unknown, key?: string): unknown {

@@ -77,6 +77,7 @@
 | `QUOTA_EXCEEDED` | 402 | 月間テイク数の上限 | プラン案内 |
 | `RATE_LIMITED` | 429 | レート制限 | `Retry-After` 秒後に再試行 |
 | `UPSTREAM_UNAVAILABLE` | 503 | Foundry 等の一時障害 | 再試行ボタン |
+| `CONFIGURATION_ERROR` | 503 | 課金設定が未構成 | 管理者へ連絡 |
 | `INTERNAL` | 500 | 想定外 | 汎用エラー |
 
 ### 2.3 解析失敗コード（`FailureCode`）
@@ -800,7 +801,62 @@ PoVモックは `src/lib/mock/generate.ts` でデータを生成しているが�
 
 ---
 
-## 9. 未決事項
+## 9. 教室Stripe課金
+
+課金routeは Node.js runtime のserver-only処理です。Stripeのsecret、Customer ID、
+Subscription ID、Webhook payloadはクライアントへ返さず、ログにも出しません。
+Stripe未設定のlocal/testでは課金routeだけが `CONFIGURATION_ERROR` (503) になります。
+
+| Method | Path | 認可 | 内容 |
+|---|---|---|---|
+| `POST` | `/api/classrooms` | 認証済みowner候補 | `{ "name": "..." }` でdraft教室とowner membershipを作成 |
+| `POST` | `/api/classrooms/{classroomId}/checkout` | 教室ownerのみ | 固定base PriceでSubscription Checkout URLを返す |
+| `POST` | `/api/classrooms/{classroomId}/billing-portal` | 教室ownerのみ | 保存済みStripe CustomerのPortal URLを返す |
+| `POST` | `/api/stripe/webhook` | Stripe署名 | raw bodyを検証し、課金状態を反映 |
+
+Checkoutは `STRIPE_CLASSROOM_BASE_PRICE_ID` のitemだけで開始します。Stripeの
+Subscription item quantity=0は採用せず、学生が最初に有効化されたときに
+`STRIPE_CLASSROOM_STUDENT_PRICE_ID` のitemをquantity付きで作成します。増減・削除は
+`proration_behavior=always_invoice` を明示し、月途中の差額を即時invoiceにします。
+Checkout/Portalは検証済みの `Idempotency-Key`（未指定時はrequest ID）をnamespace/hash化して
+Stripeへ渡します。Checkout attempt/session ID、session URL、expiryを教室へCAS保存し、
+有効sessionは同じHTTP retryで再利用、処理中の別操作は503、完了または期限切れ後だけ新attempt
+へ進みます。
+Portalもsession URLとrequest fingerprintをCAS保存しますが、Stripe Portal URLのconsumed状態は
+取得できないため、transport retry windowは30秒に限定します。同じkeyの即時retryだけ再利用し、
+window後はサーバー生成の新attempt keyで新URLを発行します。
+
+Webhookは重複・順序逆転を前提にしています。event IDを `billing-events` にCAS保存し、
+owner token・開始時刻・expiry付きleaseで `processing → processed` または
+`processing → failed` を記録します。active lease中のdeliveryは503、stale leaseはCAS reclaim
+します。Subscription
+eventではpayloadのstatusを盲信せず、StripeからSubscriptionを再取得して最新items、
+customer、periodを反映します。customer/classroom metadataと固定base Priceを検証し、
+customerの全Subscriptionから `(created, usable status rank, subscription ID)` の
+selection keyが最大の対象契約だけを反映します。同一秒のactive/trialing/past_dueは
+canceled/incomplete_expired/unpaidより優先し、同一status・同一秒でもIDで決定します。
+`active`/`trialing`/`past_due` は利用可能、
+`unpaid`/`canceled`/`incomplete_expired` と未知statusは停止です。
+
+ローカルではStripe CLIを次のように起動し、表示された `whsec_...` を環境変数へ設定します。
+
+```powershell
+stripe listen --forward-to localhost:3000/api/stripe/webhook
+stripe trigger checkout.session.completed
+```
+
+失敗イベントはStripe Dashboardから再送し、必要なら運用者がreconciliation service
+（`reconcileBillableStudentQuantity`）を実行します。学生membership変更は
+`provisioning`/`removing` とStripe外部操作を分離するsaga契約で扱い、外部呼び出し失敗時は
+membershipを確定せず同じoperation versionで再照合します。学生数量leaseは教室単位で外部
+mutationを直列化し、同じstudent Price itemが複数ならcanonical itemへ集約して余剰を削除します。
+非利用可能subscriptionではpending operationを`blocked_inactive`へ遷移させ、
+`completed`にはしません。再契約でactiveへ戻ったWebhookまたは同じoperationVersionの
+reconciliationがremote student itemを再解析し、canonicalize後にcountとoperationを完了させます。
+
+---
+
+## 10. 未決事項
 
 | # | 論点 | 決定時期 |
 |---|---|---|
@@ -811,7 +867,7 @@ PoVモックは `src/lib/mock/generate.ts` でデータを生成しているが�
 
 ---
 
-## 10. 関連ドキュメント
+## 11. 関連ドキュメント
 
 - [機能仕様](./functional.md)
 - [評価指標定義](./metrics.md)

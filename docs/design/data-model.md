@@ -722,6 +722,41 @@ export interface Take {
 
 ---
 
+## 9. 教室課金ドキュメント
+
+`classrooms` は教室ごとにStripe Customer/Subscriptionを1つだけ保持します。
+`billing.status` はStripe statusの安全側アプリ正規化値で、`active` は
+`active` と `trialing`、`past_due` はそのまま利用可能、`canceled`/`incomplete` は
+停止を表します。元のStripe statusは `billing.stripeStatus` に保持します。
+
+基本料金はSubscriptionの固定base item、学生料金は有効な学生membership数の
+subscription itemです。quantity=0のitemは作らず、0への削除も
+`always_invoice` で日割り差額を確定します。`stripeStudentSubscriptionItemId`、
+`billableStudentCount`、periodを同じCAS更新で収束させます。
+
+`billing-events` はevent IDをidempotency keyとして使い、payload本文ではなくSHA-256
+hashだけを保存します。状態は `processing`、`processed`、`failed` で、processingには
+owner token、開始時刻、expiryを持つleaseを保存します。active lease中はdeliveryを503にし、
+stale leaseだけをCAS reclaimします。失敗イベントは再送時に再処理できます。
+
+Checkout attemptもoperation key hash、session ID/URL、expiryを保持し、同じHTTP retryだけを
+再利用します。Portal attemptもfingerprint、session ID/URL、created/expiryを保持し、consumed
+状態をStripeから取得できないため30秒のtransport retry window後は必ず新attemptを作ります。
+Stripe外部APIとCosmosはtransactionではないため、membership更新は教室単位の
+operation leaseをETag/CASで取得して直列化し、外部操作後にSubscriptionを再取得します。
+同一student Price itemが複数存在する場合はcanonical itemを選び、余剰itemを削除してから
+remote再解析でexactly one（quantity 0は0 itemまたはquantity 0 item）を確認してlocal
+count/item IDをCAS反映します。inactive subscriptionではpending operationを
+`blocked_inactive`として再契約待ちにし、completedへ進めません。失敗・クラッシュ時はlease expiry後にreconciliationで
+remote/localを補償します。
+
+Subscriptionのcurrent identityは `stripeSubscriptionSelectionKey` (version 1) として
+`created`、利用可能status rank、Subscription IDの順で永続化します。remote list選択と
+CAS callbackは同じtotal orderingを使うため、同一秒の再契約や同一status複数契約でも
+全リトライが同じcurrentを選び、古いeventで巻き戻りません。
+
+---
+
 ## 10. 関連ドキュメント
 
 - [機能仕様](../spec/functional.md)

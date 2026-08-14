@@ -45,8 +45,11 @@ export interface Repository {
   upsertUserRecord(user: UserProfileDoc, options?: RepositoryWriteOptions): Promise<RepositoryDocument<UserProfileDoc>>;
   createClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc>;
   getClassroom(classroomId: string): Promise<ClassroomDoc | null>;
+  getClassroomRecord?(classroomId: string): Promise<RepositoryDocument<ClassroomDoc> | null>;
   upsertClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc>;
   listClassroomsByOwner(ownerUserId: string): Promise<ClassroomDoc[]>;
+  findClassroomByStripeCustomerId?(customerId: string): Promise<ClassroomDoc | null>;
+  findClassroomByStripeSubscriptionId?(subscriptionId: string): Promise<ClassroomDoc | null>;
   createClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc>;
   getClassroomMember(classroomId: string, userId: string): Promise<ClassroomMemberDoc | null>;
   upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc>;
@@ -62,6 +65,7 @@ export interface Repository {
   deleteClassroomInvitation(classroomId: string, invitationId: string, options?: RepositoryWriteOptions): Promise<void>;
   createBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc>;
   getBillingEvent(eventId: string): Promise<BillingEventDoc | null>;
+  getBillingEventRecord?(eventId: string): Promise<RepositoryDocument<BillingEventDoc> | null>;
   upsertBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc>;
   listBillingEvents(): Promise<BillingEventDoc[]>;
   createSong(userId: string, input: CreateSongInput): Promise<SongDoc>;
@@ -177,6 +181,10 @@ export class LocalRepository implements Repository {
     return (await this.readDomainRecord<ClassroomDoc>(classroomDocPath(classroomId)))?.document ?? null;
   }
 
+  async getClassroomRecord(classroomId: string): Promise<RepositoryDocument<ClassroomDoc> | null> {
+    return this.readDomainRecord<ClassroomDoc>(classroomDocPath(classroomId));
+  }
+
   async upsertClassroom(classroom: ClassroomDoc, options?: RepositoryWriteOptions): Promise<ClassroomDoc> {
     return (await this.writeDomainRecord(classroomDocPath(classroom.id), classroom, options)).document;
   }
@@ -184,6 +192,16 @@ export class LocalRepository implements Repository {
   async listClassroomsByOwner(ownerUserId: string): Promise<ClassroomDoc[]> {
     const docs = await listJsonFiles<ClassroomDoc>(classroomsDir());
     return docs.filter((doc) => doc.ownerUserId === ownerUserId);
+  }
+
+  async findClassroomByStripeCustomerId(customerId: string): Promise<ClassroomDoc | null> {
+    const docs = await listJsonFiles<ClassroomDoc>(classroomsDir());
+    return docs.find((doc) => doc.billing.stripeCustomerId === customerId) ?? null;
+  }
+
+  async findClassroomByStripeSubscriptionId(subscriptionId: string): Promise<ClassroomDoc | null> {
+    const docs = await listJsonFiles<ClassroomDoc>(classroomsDir());
+    return docs.find((doc) => doc.billing.stripeSubscriptionId === subscriptionId) ?? null;
   }
 
   async createClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
@@ -265,6 +283,10 @@ export class LocalRepository implements Repository {
 
   async getBillingEvent(eventId: string): Promise<BillingEventDoc | null> {
     return (await this.readDomainRecord<BillingEventDoc>(billingEventDocPath(eventId)))?.document ?? null;
+  }
+
+  async getBillingEventRecord(eventId: string): Promise<RepositoryDocument<BillingEventDoc> | null> {
+    return this.readDomainRecord<BillingEventDoc>(billingEventDocPath(eventId));
   }
 
   async upsertBillingEvent(event: BillingEventDoc, options?: RepositoryWriteOptions): Promise<BillingEventDoc> {
