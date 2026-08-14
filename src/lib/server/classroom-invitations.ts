@@ -64,14 +64,53 @@ async function reconcileTeacherSeatReservations(
       Object.values(current.document.invitationReservations ?? {}).map((reservation) => reservation.invitationId),
     );
     const timestamp = now();
+    for (const reservation of Object.values(current.document.invitationReservations ?? {})) {
+      const invitation = linkedInvitations.find((candidate) => candidate?.id === reservation.invitationId);
+      if (
+        invitation?.status === "preparing" &&
+        reservation.state === "linked" &&
+        invitation.generation === reservation.generation &&
+        invitation.reservationVersion === reservation.version
+      ) {
+        const finalized = await updateInvitationWithCas(invitation, (latest) => ({
+          ...latest,
+          status: latest.status === "preparing" ? "pending" : latest.status,
+          updatedAt: now().toISOString(),
+        }), repository);
+        const index = linkedInvitations.findIndex((candidate) => candidate?.id === finalized.id);
+        if (index >= 0) linkedInvitations[index] = finalized;
+        invitationById.set(finalized.id, finalized);
+      }
+    }
     const reservations: Record<string, ClassroomInvitationReservationDoc> = {};
+    for (const invitation of linkedInvitations) {
+      if (
+        !invitation ||
+        !["pending", "accepting"].includes(invitation.status) ||
+        invitation.id === deterministicInvitationId(classroomId, invitation.normalizedEmail, invitation.role)
+      ) continue;
+      const revoked = await updateInvitationWithCas(invitation, (latest) => ({
+        ...latest,
+        status: latest.status === "pending" || latest.status === "accepting" ? "revoked" : latest.status,
+        updatedAt: now().toISOString(),
+      }), repository);
+      const oldIndex = linkedInvitations.findIndex((candidate) => candidate?.id === revoked.id);
+      if (oldIndex >= 0) linkedInvitations[oldIndex] = revoked;
+      invitationById.set(revoked.id, revoked);
+    }
     for (const [key, reservation] of Object.entries(current.document.invitationReservations ?? {})) {
       const invitation = invitationById.get(reservation.invitationId);
-      const liveDocument = invitation && ["pending", "accepting"].includes(invitation.status);
+      const liveDocument = invitation && (
+        ["pending", "accepting"].includes(invitation.status) ||
+        (invitation.status === "preparing" &&
+          (reservation.state === "linked" || reservation.leaseExpiresAt > timestamp.toISOString()))
+      );
       const missingLeaseActive = !invitation && reservation.leaseExpiresAt > timestamp.toISOString();
       if (!liveDocument && !missingLeaseActive) continue;
       reservations[key] = {
         ...reservation,
+        generation: invitation?.generation ?? reservation.generation,
+        version: invitation?.reservationVersion ?? reservation.version,
         state: invitation?.status === "accepting"
           ? "accepting"
           : invitation?.status === "pending"
@@ -94,6 +133,7 @@ async function reconcileTeacherSeatReservations(
         state: invitation.status === "accepting" ? "accepting" : "pending",
         ownerToken: randomUUID(),
         version: randomUUID(),
+        generation: invitation.generation ?? 1,
         createdAt: invitation.createdAt,
         leaseExpiresAt: invitation.expiresAt ?? timestamp.toISOString(),
       };
@@ -188,6 +228,17 @@ function invitationReservationKey(
   return createHash("sha256")
     .update(`${role}:${normalizedEmail}`)
     .digest("hex");
+}
+
+function deterministicInvitationId(
+  classroomId: string,
+  normalizedEmail: string,
+  role: Exclude<ClassroomRole, "owner">,
+): string {
+  return `invitation_${createHmac("sha256", invitationTokenSecret())
+    .update(`${classroomId}:${role}:${normalizedEmail}`)
+    .digest("hex")
+    .slice(0, 32)}`;
 }
 
 function liveTeacherReservationCount(
@@ -446,6 +497,23 @@ async function sendInvitation(
   repository: Repository,
   sender: EmailSender,
 ): Promise<ClassroomInvitationDoc> {
+  const classroom = await repository.getClassroom(invitation.classroomId);
+  const key = invitationReservationKey(invitation.normalizedEmail, invitation.role);
+  const reservation = classroom?.invitationReservations?.[key];
+  const latest = await repository.getClassroomInvitation(invitation.classroomId, invitation.id);
+  if (
+    !reservation ||
+    reservation.invitationId !== invitation.id ||
+    reservation.generation !== invitation.generation ||
+    reservation.version !== invitation.reservationVersion ||
+    reservation.state !== "linked" ||
+    !latest ||
+    latest.status !== "pending" ||
+    latest.generation !== invitation.generation ||
+    latest.reservationVersion !== invitation.reservationVersion
+  ) {
+    throw new ConflictError("invitation delivery fence changed");
+  }
   const message: EmailMessage = {
     to: invitation.email,
     subject: "Ledger Lines 教室への招待",
@@ -486,6 +554,7 @@ async function reserveInvitationReservation(
   inviterId: string,
   ownerToken: string,
   version: string,
+  generation: number,
   createdAt: Date,
   limits: { max: number; windowMs: number },
   repository: Repository,
@@ -541,6 +610,7 @@ async function reserveInvitationReservation(
       state: "creating",
       ownerToken,
       version,
+      generation,
       createdAt: createdAt.toISOString(),
       leaseExpiresAt: new Date(createdAt.getTime() + INVITATION_CREATION_LEASE_MS).toISOString(),
     };
@@ -575,6 +645,7 @@ async function transitionReservationToCommitting(
   invitationId: string,
   ownerToken: string,
   version: string,
+  generation: number,
   repository: Repository,
 ): Promise<void> {
   if (!repository.getClassroomRecord) throw new ConfigurationError("repository does not support compare-and-swap");
@@ -587,6 +658,7 @@ async function transitionReservationToCommitting(
       reservation.invitationId !== invitationId ||
       reservation.ownerToken !== ownerToken ||
       reservation.version !== version ||
+      reservation.generation !== generation ||
       reservation.state !== "creating" ||
       reservation.leaseExpiresAt <= now().toISOString()
     ) {
@@ -627,7 +699,8 @@ async function linkInvitationReservation(
       reservation.invitationId !== invitation.id ||
       reservation.ownerToken !== ownerToken ||
       reservation.version !== version ||
-      reservation.state !== "committing"
+      reservation.state !== "committing" ||
+      reservation.generation !== invitation.generation
     ) {
       throw new ConflictError("invitation reservation ownership was lost");
     }
@@ -635,7 +708,7 @@ async function linkInvitationReservation(
       ...current.document,
       invitationReservations: {
         ...current.document.invitationReservations,
-        [key]: { ...reservation, state: "pending" as const },
+        [key]: { ...reservation, state: "linked" as const },
       },
       updatedAt: now().toISOString(),
     };
@@ -649,18 +722,92 @@ async function linkInvitationReservation(
   throw new RepositoryConflictError("invitation reservation link retries exhausted");
 }
 
-async function compensateOrphanInvitation(
+async function publishPreparedInvitation(
+  invitation: ClassroomInvitationDoc,
+  version: string,
+  repository: Repository,
+): Promise<ClassroomInvitationDoc> {
+  const classroom = await repository.getClassroom(invitation.classroomId);
+  const key = invitationReservationKey(invitation.normalizedEmail, invitation.role);
+  const reservation = classroom?.invitationReservations?.[key];
+  if (
+    !reservation ||
+    reservation.invitationId !== invitation.id ||
+    reservation.version !== version ||
+    reservation.generation !== invitation.generation ||
+    reservation.state !== "linked"
+  ) {
+    throw new ConflictError("invitation reservation link fence changed");
+  }
+  return updateInvitationWithCas(invitation, (current) => {
+    if (
+      current.status !== "preparing" ||
+      current.generation !== invitation.generation ||
+      current.reservationVersion !== version
+    ) {
+      throw new ConflictError("invitation preparation fence changed");
+    }
+
+    return {
+      ...current,
+      status: "pending",
+      updatedAt: now().toISOString(),
+    };
+  }, repository);
+}
+
+async function persistPreparingInvitation(
   invitation: ClassroomInvitationDoc,
   repository: Repository,
 ): Promise<void> {
+  if (!repository.getClassroomInvitationRecord) {
+    throw new ConfigurationError("repository does not support compare-and-swap");
+  }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await repository.getClassroomInvitationRecord(invitation.classroomId, invitation.id);
+    if (!current) {
+      try {
+        await repository.createClassroomInvitation(invitation, { ifNoneMatch: true });
+        return;
+      } catch (error) {
+        if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
+        continue;
+      }
+    }
+    if (!current.etag) throw new ConfigurationError("repository returned no invitation etag");
+    if (["pending", "accepting"].includes(current.document.status)) {
+      throw new ConflictError("a pending invitation already exists for this address and role");
+    }
+    try {
+      await repository.upsertClassroomInvitation(invitation, { ifMatch: current.etag });
+      return;
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
+    }
+  }
+  throw new RepositoryConflictError("invitation preparation retries exhausted");
+}
+
+async function compensateOrphanInvitation(
+  invitation: ClassroomInvitationDoc,
+  ownerToken: string,
+  version: string,
+  generation: number,
+  repository: Repository,
+): Promise<void> {
   const current = await repository.getClassroomInvitationRecord?.(invitation.classroomId, invitation.id);
-  if (current?.etag && current.document.status === "pending") {
+  if (
+    current?.etag &&
+    current.document.status === "pending" &&
+    current.document.reservationVersion === version &&
+    current.document.generation === generation
+  ) {
     await repository.upsertClassroomInvitation(
       { ...current.document, status: "revoked", updatedAt: now().toISOString() },
       { ifMatch: current.etag },
     );
   }
-  await releasePendingReservation(invitation, repository);
+  await releasePendingReservation(invitation, repository, ownerToken, version, generation);
 }
 
 export async function createClassroomInvitation(
@@ -691,7 +838,12 @@ export async function createClassroomInvitation(
   }
   const limits = rateLimitConfig();
   const key = invitationReservationKey(normalizedEmail, input.role);
-  const invitationId = `invitation_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  const invitationId = deterministicInvitationId(classroomId, normalizedEmail, input.role);
+  const existingInvitation = await repository.getClassroomInvitation(classroomId, invitationId);
+  if (existingInvitation && ["pending", "accepting"].includes(existingInvitation.status)) {
+    throw new ConflictError("a pending invitation already exists for this address and role");
+  }
+  const generation = (existingInvitation?.generation ?? 0) + 1;
   const reservationOwnerToken = randomUUID();
   const reservationVersion = randomUUID();
   const secret = randomBytes(32).toString("base64url");
@@ -706,6 +858,7 @@ export async function createClassroomInvitation(
     inviter.id,
     reservationOwnerToken,
     reservationVersion,
+    generation,
     createdAt,
     limits,
     repository,
@@ -717,9 +870,11 @@ export async function createClassroomInvitation(
     email,
     normalizedEmail,
     role: input.role,
-    status: "pending",
+    status: "preparing",
     tokenHash: tokenHash(classroomId, invitationId, secret),
     tokenVersion: TOKEN_VERSION,
+    generation,
+    reservationVersion,
     expiresAt,
     createdByUserId: inviter.id,
     acceptedByUserId: null,
@@ -737,9 +892,10 @@ export async function createClassroomInvitation(
       invitationId,
       reservationOwnerToken,
       reservationVersion,
+      generation,
       repository,
     );
-    await repository.createClassroomInvitation(invitation, { ifNoneMatch: true });
+    await persistPreparingInvitation(invitation, repository);
     await linkInvitationReservation(
       invitation,
       key,
@@ -747,15 +903,26 @@ export async function createClassroomInvitation(
       reservationVersion,
       repository,
     );
+    const publishedInvitation = await publishPreparedInvitation(
+      invitation,
+      reservationVersion,
+      repository,
+    );
+    const delivered = await sendInvitation(publishedInvitation, secret, repository, sender);
+    return {
+      invitation: safeInvitation(delivered),
+      invitationUrl: url,
+    };
   } catch (error) {
-    await compensateOrphanInvitation(invitation, repository);
+    await compensateOrphanInvitation(
+      invitation,
+      reservationOwnerToken,
+      reservationVersion,
+      generation,
+      repository,
+    );
     throw error;
   }
-  const delivered = await sendInvitation(invitation, secret, repository, sender);
-  return {
-    invitation: safeInvitation(delivered),
-    invitationUrl: url,
-  };
 }
 
 async function markInvitationReservationState(
@@ -768,6 +935,12 @@ async function markInvitationReservationState(
     const reservations = { ...(current.invitationReservations ?? {}) };
     const existing = reservations[key];
     if (!existing || existing.invitationId !== invitation.id) return current;
+    if (
+      (invitation.generation !== undefined && existing.generation !== invitation.generation) ||
+      (invitation.reservationVersion && existing.version !== invitation.reservationVersion)
+    ) {
+      throw new ConflictError("invitation reservation generation changed");
+    }
     reservations[key] = {
       invitationId: invitation.id,
       role: invitation.role,
@@ -775,6 +948,7 @@ async function markInvitationReservationState(
       state,
       ownerToken: existing.ownerToken ?? randomUUID(),
       version: existing.version ?? randomUUID(),
+      generation: existing.generation ?? invitation.generation ?? 1,
       createdAt: existing?.createdAt ?? invitation.createdAt,
       leaseExpiresAt: existing?.leaseExpiresAt ?? invitation.expiresAt ?? new Date().toISOString(),
     };
@@ -782,13 +956,28 @@ async function markInvitationReservationState(
   }, repository);
 }
 
-async function releasePendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
+async function releasePendingReservation(
+  invitation: ClassroomInvitationDoc,
+  repository: Repository,
+  ownerToken?: string,
+  version?: string,
+  generation?: number,
+): Promise<void> {
   await updateClassroomWithCas(invitation.classroomId, (current) => {
     const reservations = { ...(current.invitationReservations ?? {}) };
     const key = Object.keys(reservations).find(
       (candidate) => reservations[candidate].invitationId === invitation.id,
     );
     if (!key) return current;
+    const reservation = reservations[key];
+    if (
+      ownerToken &&
+      version &&
+      generation !== undefined &&
+      (reservation.ownerToken !== ownerToken ||
+        reservation.version !== version ||
+        reservation.generation !== generation)
+    ) return current;
     delete reservations[key];
     return {
       ...current,
@@ -850,6 +1039,8 @@ export async function resendClassroomInvitation(
   if (existing.status !== "pending" || !existing.expiresAt) throw new ConflictError("only pending invitations can be resent");
   const secret = randomBytes(32).toString("base64url");
   const url = invitationUrl(classroomId, invitationId, secret);
+  const generation = (existing.generation ?? 0) + 1;
+  const reservationVersion = randomUUID();
   await consumeInvitationRateLimit(classroomId, userId, repository);
   const refreshed = await updateInvitationWithCas(existing, (current) => {
     if (current.status !== "pending") {
@@ -859,12 +1050,33 @@ export async function resendClassroomInvitation(
       ...current,
       tokenHash: tokenHash(classroomId, invitationId, secret),
       tokenVersion: TOKEN_VERSION,
+      generation,
+      reservationVersion,
       expiresAt: new Date(now().getTime() + invitationTtlMs()).toISOString(),
       resentAt: now().toISOString(),
       deliveryStatus: "pending",
       deliveryError: null,
       updatedAt: now().toISOString(),
     };
+  }, repository);
+  await updateClassroomWithCas(classroomId, (current) => {
+    const key = invitationReservationKey(existing.normalizedEmail, existing.role);
+    const reservations = { ...(current.invitationReservations ?? {}) };
+    const reservation = reservations[key];
+    if (!reservation || reservation.invitationId !== invitationId) {
+      throw new ConflictError("invitation reservation is missing");
+    }
+    if (reservation.generation > generation) {
+      throw new ConflictError("invitation generation has advanced");
+    }
+    reservations[key] = {
+      ...reservation,
+      state: "linked",
+      generation,
+      version: reservationVersion,
+      leaseExpiresAt: refreshed.expiresAt ?? reservation.leaseExpiresAt,
+    };
+    return { ...current, invitationReservations: reservations, updatedAt: now().toISOString() };
   }, repository);
   const delivered = await sendInvitation(refreshed, secret, repository, sender);
   return { invitation: safeInvitation(delivered), invitationUrl: url };
@@ -1135,6 +1347,8 @@ async function markInvitationAccepted(
       current.acceptOperationVersion !== operationVersion ||
       current.claimedByUserId !== userId ||
       current.claimedTokenFingerprint !== tokenFingerprintValue ||
+      current.generation !== invitation.generation ||
+      current.reservationVersion !== invitation.reservationVersion ||
       tokenFingerprint(current) !== tokenFingerprintValue
     ) {
       throw new ConflictError("invitation acceptance fence changed");

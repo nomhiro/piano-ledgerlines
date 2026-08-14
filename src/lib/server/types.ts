@@ -213,9 +213,10 @@ export interface ClassroomInvitationReservationDoc {
   invitationId: string;
   role: Exclude<ClassroomRole, "owner">;
   emailRoleFingerprint: string;
-  state: "creating" | "committing" | "pending" | "accepting";
+  state: "creating" | "committing" | "linked" | "pending" | "accepting";
   ownerToken: string;
   version: string;
+  generation: number;
   createdAt: string;
   leaseExpiresAt: string;
 }
@@ -271,9 +272,11 @@ export interface ClassroomInvitationDoc {
   email: string;
   normalizedEmail: string;
   role: Exclude<ClassroomRole, "owner">;
-  status: "pending" | "accepting" | "accepted" | "expired" | "revoked";
+  status: "preparing" | "pending" | "accepting" | "accepted" | "expired" | "revoked";
   tokenHash: string | null;
   tokenVersion?: number;
+  generation?: number;
+  reservationVersion?: string | null;
   expiresAt: string | null;
   createdByUserId: string;
   acceptedByUserId?: string | null;

@@ -212,9 +212,12 @@ class PausingCreatingReservationRepository extends LocalRepository {
 
   async getClassroomRecord(classroomId: string) {
     const record = await super.getClassroomRecord(classroomId);
-    const hasCreating = Object.values(record?.document.invitationReservations ?? {})
-      .some((reservation) => reservation.state === "creating");
-    if (this.pauseNextCreatingRead && hasCreating) {
+    const committing = Object.entries(record?.document.invitationReservations ?? {})
+      .find(([, reservation]) => reservation.state === "committing");
+    const preparing = committing
+      ? await super.getClassroomInvitation(classroomId, committing[1].invitationId)
+      : null;
+    if (this.pauseNextCreatingRead && committing && preparing?.status === "preparing") {
       this.pauseNextCreatingRead = false;
       this.markEntered?.();
       await new Promise<void>((resolve) => {
@@ -501,6 +504,7 @@ test("creating reservation protects a missing invitation until its lease expires
         state: "creating",
         ownerToken: "test-owner",
         version: "test-version",
+        generation: 1,
         createdAt: new Date(nowValue).toISOString(),
         leaseExpiresAt: new Date(nowValue + 60_000).toISOString(),
       },
@@ -577,4 +581,33 @@ test("expired creator loses ownership to replacement and cannot send an orphan i
   assert.equal((await replacementRepository.listClassroomInvitations(classroom.id))
     .filter((invitation) => invitation.normalizedEmail === email).length, 1);
   assert.equal(Object.keys((await replacementRepository.getClassroom(classroom.id))?.invitationReservations ?? {}).length, 1);
+});
+
+test("reconciliation finalizes linked preparation without changing its generation", async () => {
+  const repository = new LocalRepository();
+  const owner = googleUser(`owner-${Date.now()}`, `owner-${Date.now()}@example.com`);
+  const classroom = await activeClassroom(repository, owner);
+  const email = `linked-preparing-${Date.now()}@example.com`;
+  const invitation = await createClassroomInvitation(
+    classroom.id,
+    owner,
+    { email, role: "teacher" },
+    repository,
+    new InMemoryEmailSender(),
+  );
+  const values = new URLSearchParams(new URL(invitation.invitationUrl).hash.slice(1));
+  const invitationId = values.get("invitationId")!;
+  const currentInvitation = await repository.getClassroomInvitationRecord(classroom.id, invitationId);
+  assert.ok(currentInvitation?.etag);
+  const preparing = await repository.upsertClassroomInvitation({
+    ...currentInvitation.document,
+    status: "preparing",
+  }, { ifMatch: currentInvitation.etag });
+  await assert.rejects(
+    createClassroomInvitation(classroom.id, owner, { email, role: "teacher" }, repository, new InMemoryEmailSender()),
+    /pending invitation already exists/,
+  );
+  const finalized = await repository.getClassroomInvitation(classroom.id, invitationId);
+  assert.equal(finalized?.status, "pending");
+  assert.equal(finalized?.generation, preparing.generation);
 });
