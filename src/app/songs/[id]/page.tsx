@@ -8,6 +8,8 @@ import SongManagementControls from "@/components/SongManagementControls";
 import ScorePreview from "@/components/ScorePreview";
 import VerifiedScoreReplacement from "@/components/VerifiedScoreReplacement";
 
+export const dynamic = "force-dynamic";
+
 function scoreStatusLabel(status: string, scoreSource: string | null): string {
   if (scoreSource === "pdf") return "OMRドラフト";
   switch (status) {
