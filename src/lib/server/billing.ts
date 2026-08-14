@@ -129,7 +129,10 @@ export async function createDraftClassroom(
     type: "classroom",
     name,
     ownerUserId,
-    teacherLimit: 10,
+    teacherLimit: 5,
+    reservedTeacherSeatCount: 0,
+    teacherSeatVersion: 0,
+    invitationRateLimits: {},
     billableStudentCount: 0,
     billing: {
       stripeCustomerId: null,

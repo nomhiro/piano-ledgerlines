@@ -583,6 +583,26 @@ AC-14  測定ノイズ未満の差分が「横ばい」と表示され、改善�
 
 ---
 
+## 8.1 教室サブスクリプションとmembership
+
+- ownerを含むteacher上限は `teacherLimit`（初期値5）。active/provisioning teacherと
+  pending teacher invitationを `reservedTeacherSeatCount` とETag CASで予約し、重複招待・
+  同時承諾・再送をべき等に処理する。
+- ownerはteacher/student、teacherはstudentだけを招待する。招待は7日を既定値とする
+  bounded expiry、一度限りのversion付きHMAC token、normalized email完全一致を要求する。
+  Googleアカウントのない代理studentは作らない。
+- active studentだけをStripe quantityへ反映する。studentの承諾と除籍は同じ
+  `operationVersion` のquantity sagaを使い、外部失敗時はprovisioning/removingを残して
+  reconciliation可能にする。
+- 除籍・退会はmembership/profile参照だけを削除し、studentのsongs、takes、音声Blobは
+  削除しない。teacherの生徒読み取りはclassroom-scoped routeで毎回active membership、
+  contract、student membershipを検証し、teacherの書き込みは存在しない。
+- ACS Emailはproductionではendpoint、verified sender、Managed Identity/RBACを必須とし、
+  `beginSend().pollUntilDone()`の成功statusだけをdelivery成功とする。DNS検証が必要な
+  customer-managed domainはSPF/DKIM/DMARCを運用手順で完了してから有効化する。
+
+---
+
 ## 9. 関連ドキュメント
 
 - [評価指標定義](./metrics.md)

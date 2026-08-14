@@ -174,6 +174,14 @@ export interface ClassroomDoc {
   name: string;
   ownerUserId: string;
   teacherLimit: number;
+  /** Includes active/provisioning teachers and pending teacher invitations. */
+  reservedTeacherSeatCount?: number;
+  teacherSeatVersion?: number;
+  invitationRateLimits?: Record<string, {
+    windowStartedAt: string;
+    count: number;
+  }>;
+  pendingInvitationKeys?: Record<string, string>;
   billableStudentCount: number;
   billing: {
     stripeCustomerId: string | null;
@@ -234,6 +242,7 @@ export interface ClassroomMemberDoc {
   userId: string;
   role: ClassroomRole;
   status: ClassroomMemberStatus;
+  operationVersion?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -247,8 +256,14 @@ export interface ClassroomInvitationDoc {
   role: Exclude<ClassroomRole, "owner">;
   status: "pending" | "accepted" | "expired" | "revoked";
   tokenHash: string | null;
+  tokenVersion?: number;
   expiresAt: string | null;
   createdByUserId: string;
+  acceptedByUserId?: string | null;
+  sentAt?: string | null;
+  resentAt?: string | null;
+  deliveryStatus?: "pending" | "sent" | "failed";
+  deliveryError?: string | null;
   createdAt: string;
   updatedAt: string;
 }

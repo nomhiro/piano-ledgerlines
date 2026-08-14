@@ -1,0 +1,738 @@
+import {
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
+import { normalizeEmail } from "./account";
+import {
+  assertAuthenticatedGoogleUser,
+  requireActiveClassroomAccess,
+  requireClassroomRole,
+} from "./classroom-access";
+import { classroomHasPaidEntitlement, reconcileBillableStudentQuantity, setBillableStudentQuantity } from "./billing";
+import { getConfig } from "./config";
+import { ConflictError, ConfigurationError, ForbiddenError, NotFoundError, RateLimitError, ValidationError } from "./http";
+import { getRepository, RepositoryConflictError, type Repository } from "./repository";
+import { classroomMemberId } from "./ids";
+import type {
+  ClassroomDoc,
+  ClassroomInvitationDoc,
+  ClassroomMemberDoc,
+  ClassroomMemberStatus,
+  ClassroomReference,
+  ClassroomRole,
+  UserProfileDoc,
+} from "./types";
+import type { AuthenticatedUser } from "./auth";
+import { getEmailSender, type EmailMessage, type EmailSender } from "./email";
+import type { StripeGateway } from "./stripe";
+
+const TOKEN_VERSION = 1;
+const DEFAULT_INVITATION_TTL_DAYS = 7;
+const DEFAULT_INVITE_RATE_LIMIT = 20;
+
+function now(): Date {
+  return new Date();
+}
+
+async function reconcileTeacherSeatReservations(
+  classroomId: string,
+  repository: Repository,
+): Promise<void> {
+  const [members, invitations] = await Promise.all([
+    repository.listClassroomMembers(classroomId),
+    repository.listClassroomInvitations(classroomId),
+  ]);
+  const count = members.filter(
+    (member) => member.role === "teacher" && ["active", "provisioning"].includes(member.status),
+  ).length + invitations.filter(
+    (invitation) => invitation.role === "teacher" && invitation.status === "pending",
+  ).length;
+  await updateClassroomWithCas(classroomId, (current) => {
+    const nextCount = Math.max(
+    count,
+    Object.keys(current.pendingInvitationKeys ?? {}).filter((key) => key.startsWith("teacher:")).length,
+    );
+    return {
+    ...current,
+    reservedTeacherSeatCount: nextCount,
+    teacherSeatVersion:
+      (current.teacherSeatVersion ?? 0) + (current.reservedTeacherSeatCount === nextCount ? 0 : 1),
+    updatedAt: now().toISOString(),
+    };
+  }, repository);
+}
+
+function invitationTokenSecret(): string {
+  const configured = process.env.LEDGERLINES_INVITATION_TOKEN_SECRET?.trim();
+  if (configured) return configured;
+  if (getConfig().nodeEnv === "production") {
+    throw new ConfigurationError("invitation token signing is not configured");
+  }
+  return "local-only-invitation-secret";
+}
+
+function invitationTtlMs(): number {
+  const configured = Number(process.env.LEDGERLINES_INVITATION_TTL_DAYS ?? DEFAULT_INVITATION_TTL_DAYS);
+  if (!Number.isFinite(configured) || configured < 1 || configured > 30) {
+    throw new ConfigurationError("invitation expiry must be between 1 and 30 days");
+  }
+  return configured * 24 * 60 * 60 * 1000;
+}
+
+function rateLimitConfig(): { max: number; windowMs: number } {
+  const max = Number(process.env.LEDGERLINES_INVITE_RATE_LIMIT ?? DEFAULT_INVITE_RATE_LIMIT);
+  const minutes = Number(process.env.LEDGERLINES_INVITE_RATE_WINDOW_MINUTES ?? "60");
+  if (!Number.isInteger(max) || max < 1 || max > 1000 || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    throw new ConfigurationError("invitation rate limit configuration is invalid");
+  }
+  return { max, windowMs: minutes * 60 * 1000 };
+}
+
+function tokenHash(classroomId: string, invitationId: string, secret: string): string {
+  return createHmac("sha256", invitationTokenSecret())
+    .update(`${TOKEN_VERSION}:${classroomId}:${invitationId}:${secret}`)
+    .digest("hex");
+}
+
+function tokenMatches(invitation: ClassroomInvitationDoc, secret: string): boolean {
+  if (invitation.tokenVersion !== TOKEN_VERSION || !invitation.tokenHash || !secret) return false;
+  const expected = Buffer.from(invitation.tokenHash, "hex");
+  const actual = Buffer.from(tokenHash(invitation.classroomId, invitation.id, secret), "hex");
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function invitationUrl(classroomId: string, invitationId: string, secret: string): string {
+  const config = getConfig();
+  const configuredBase = config.ledgerlinesAppBaseUrl;
+  if (!configuredBase && config.nodeEnv === "production") {
+    throw new ConfigurationError("public application base URL is not configured");
+  }
+  const base = configuredBase ?? "http://localhost:3000";
+  const root = base.endsWith("/") ? base.slice(0, -1) : base;
+  return `${root}/classroom-invitations/accept#classroomId=${encodeURIComponent(classroomId)}&invitationId=${encodeURIComponent(invitationId)}&secret=${encodeURIComponent(secret)}`;
+}
+
+function invitationKey(normalizedEmail: string, role: Exclude<ClassroomRole, "owner">): string {
+  return `${role}:${normalizedEmail}`;
+}
+
+async function consumeInvitationRateLimit(
+  classroomId: string,
+  userId: string,
+  repository: Repository,
+): Promise<void> {
+  const limits = rateLimitConfig();
+  const timestamp = now();
+  await updateClassroomWithCas(classroomId, (current) => {
+    const rate = current.invitationRateLimits?.[userId];
+    const withinWindow = rate && timestamp.getTime() - new Date(rate.windowStartedAt).getTime() < limits.windowMs;
+    if (withinWindow && rate.count >= limits.max) {
+      throw new RateLimitError(
+        "invitation rate limit exceeded",
+        Math.ceil((limits.windowMs - (timestamp.getTime() - new Date(rate.windowStartedAt).getTime())) / 1000),
+      );
+    }
+    return {
+      ...current,
+      invitationRateLimits: {
+        ...(current.invitationRateLimits ?? {}),
+        [userId]: {
+          windowStartedAt: withinWindow ? rate!.windowStartedAt : timestamp.toISOString(),
+          count: withinWindow ? rate!.count + 1 : 1,
+        },
+      },
+      updatedAt: timestamp.toISOString(),
+    };
+  }, repository);
+}
+
+function safeInvitation(invitation: ClassroomInvitationDoc): Record<string, unknown> {
+  const { tokenHash, ...publicInvitation } = invitation;
+  void tokenHash;
+  return publicInvitation;
+}
+
+async function updateClassroomWithCas(
+  classroomId: string,
+  update: (classroom: ClassroomDoc) => ClassroomDoc,
+  repository: Repository,
+): Promise<ClassroomDoc> {
+  if (!repository.getClassroomRecord) throw new ConfigurationError("repository does not support compare-and-swap");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await repository.getClassroomRecord(classroomId);
+    if (!current) throw new NotFoundError("classroom not found");
+    if (!current.etag) throw new ConfigurationError("repository returned no etag");
+    try {
+      return await repository.upsertClassroom(update(current.document), { ifMatch: current.etag });
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
+    }
+  }
+  throw new RepositoryConflictError("classroom update retries exhausted");
+}
+
+async function updateInvitationWithCas(
+  invitation: ClassroomInvitationDoc,
+  update: (current: ClassroomInvitationDoc) => ClassroomInvitationDoc,
+  repository: Repository,
+): Promise<ClassroomInvitationDoc> {
+  if (!repository.getClassroomInvitationRecord) throw new ConfigurationError("repository does not support compare-and-swap");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await repository.getClassroomInvitationRecord(invitation.classroomId, invitation.id);
+    if (!current) throw new NotFoundError("invitation not found");
+    if (!current.etag) throw new ConfigurationError("repository returned no invitation etag");
+    try {
+      return await repository.upsertClassroomInvitation(update(current.document), { ifMatch: current.etag });
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
+    }
+  }
+  throw new RepositoryConflictError("invitation update retries exhausted");
+}
+
+async function updateMemberWithCas(
+  member: ClassroomMemberDoc,
+  update: (current: ClassroomMemberDoc) => ClassroomMemberDoc,
+  repository: Repository,
+): Promise<ClassroomMemberDoc> {
+  if (!repository.getClassroomMemberRecord) throw new ConfigurationError("repository does not support member compare-and-swap");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await repository.getClassroomMemberRecord(member.classroomId, member.userId);
+    if (!current) throw new NotFoundError("classroom member not found");
+    if (!current.etag) throw new ConfigurationError("repository returned no member etag");
+    try {
+      return await repository.upsertClassroomMember(update(current.document), { ifMatch: current.etag });
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
+    }
+  }
+  throw new RepositoryConflictError("member update retries exhausted");
+}
+
+async function updateProfileWithCas(
+  userId: string,
+  update: (profile: UserProfileDoc) => UserProfileDoc,
+  repository: Repository,
+): Promise<UserProfileDoc> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await repository.getUserRecord(userId);
+    if (!current) throw new NotFoundError("user profile not found");
+    if (!current.etag) throw new ConfigurationError("repository returned no profile etag");
+    try {
+      return await repository.upsertUserRecord(update(current.document), { ifMatch: current.etag }).then((result) => result.document);
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError) || attempt === 4) throw error;
+    }
+  }
+  throw new RepositoryConflictError("profile update retries exhausted");
+}
+
+function appendRef(profile: UserProfileDoc, classroomId: string, role: ClassroomRole, status: ClassroomReference["status"]): UserProfileDoc {
+  const refs = profile.classroomRefs.filter((ref) => ref.classroomId !== classroomId);
+  refs.push({ classroomId, role, status });
+  return { ...profile, classroomRefs: refs, updatedAt: now().toISOString() };
+}
+
+async function ensureUserProfile(user: AuthenticatedUser, repository: Repository): Promise<UserProfileDoc> {
+  const existing = await repository.getUser(user.id);
+  if (existing) return existing;
+  const profile: UserProfileDoc = {
+    id: user.id,
+    type: "user",
+    email: user.email,
+    normalizedEmail: normalizeEmail(user.email),
+    displayName: user.displayName,
+    provider: user.provider,
+    providerSyncedAt: now().toISOString(),
+    settings: {
+      dailyPracticeMinutes: 30,
+      locale: "ja-JP",
+      allowTrainingUse: false,
+      notifyOnAnalysisComplete: true,
+    },
+    classroomRefs: [],
+    createdAt: now().toISOString(),
+    updatedAt: now().toISOString(),
+  };
+  try {
+    return await repository.upsertUser(profile, { ifNoneMatch: true });
+  } catch (error) {
+    if (!(error instanceof RepositoryConflictError)) throw error;
+    const raced = await repository.getUser(user.id);
+    if (!raced) throw error;
+    return raced;
+  }
+}
+
+function assertInviterCanInvite(inviterRole: ClassroomRole, role: Exclude<ClassroomRole, "owner">): void {
+  if (inviterRole === "owner") return;
+  if (inviterRole === "teacher" && role === "student") return;
+  throw new ForbiddenError("your classroom role cannot send this invitation");
+}
+
+async function sendInvitation(
+  invitation: ClassroomInvitationDoc,
+  secret: string,
+  repository: Repository,
+  sender: EmailSender,
+): Promise<ClassroomInvitationDoc> {
+  const message: EmailMessage = {
+    to: invitation.email,
+    subject: "Ledger Lines 教室への招待",
+    text: `Ledger Lines の教室への招待です。次のリンクから承諾してください。\n${invitationUrl(invitation.classroomId, invitation.id, secret)}`,
+    html: `<p>Ledger Lines の教室への招待です。</p><p><a href="${invitationUrl(invitation.classroomId, invitation.id, secret)}">招待を承諾する</a></p>`,
+  };
+  try {
+    await sender.send(message);
+  } catch (error) {
+    const messageText = error instanceof Error ? error.name : "delivery failed";
+    const failed = await updateInvitationWithCas(invitation, (current) => ({
+      ...current,
+      deliveryStatus: "failed",
+      deliveryError: messageText,
+      updatedAt: now().toISOString(),
+    }), repository);
+    return failed;
+  }
+  return updateInvitationWithCas(invitation, (current) => ({
+    ...current,
+    deliveryStatus: "sent",
+    deliveryError: null,
+    sentAt: current.sentAt ?? now().toISOString(),
+    updatedAt: now().toISOString(),
+  }), repository);
+}
+
+export interface CreateInvitationInput {
+  email: string;
+  role: Exclude<ClassroomRole, "owner">;
+}
+
+export async function createClassroomInvitation(
+  classroomId: string,
+  inviter: AuthenticatedUser,
+  input: CreateInvitationInput,
+  repository: Repository = getRepository(),
+  sender: EmailSender = getEmailSender(),
+): Promise<{ invitation: Record<string, unknown>; invitationUrl: string }> {
+  const access = await requireActiveClassroomAccess(classroomId, inviter.id, ["owner", "teacher"], repository);
+  assertInviterCanInvite(access.member.role, input.role);
+  const email = input.email.trim();
+  const normalizedEmail = normalizeEmail(email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail) || normalizedEmail.length > 320) {
+    throw new ValidationError("email is invalid");
+  }
+  const pendingInvitations = await repository.listClassroomInvitations(classroomId);
+  for (const pending of pendingInvitations) {
+    if (pending.status === "pending" && (!pending.expiresAt || pending.expiresAt <= now().toISOString())) {
+      await expireInvitation(pending, repository);
+    }
+  }
+  await reconcileTeacherSeatReservations(classroomId, repository);
+  const existingMembers = await repository.listClassroomMembers(classroomId);
+  const existingTeacherSeats = existingMembers.filter(
+    (member) => member.role === "teacher" && ["active", "provisioning"].includes(member.status),
+  ).length;
+  for (const member of existingMembers.filter((candidate) => candidate.status !== "removed")) {
+    const profile = await repository.getUser(member.userId);
+    if (profile?.normalizedEmail === normalizedEmail) throw new ConflictError("user is already a classroom member");
+  }
+  const limits = rateLimitConfig();
+  const key = invitationKey(normalizedEmail, input.role);
+  const invitationId = `invitation_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+  const secret = randomBytes(32).toString("base64url");
+  const url = invitationUrl(classroomId, invitationId, secret);
+  const createdAt = now();
+  const expiresAt = new Date(createdAt.getTime() + invitationTtlMs()).toISOString();
+  await updateClassroomWithCas(classroomId, (current) => {
+    const pendingKeys = { ...(current.pendingInvitationKeys ?? {}) };
+    if (pendingKeys[key]) throw new ConflictError("a pending invitation already exists for this address and role");
+    const reservedTeacherSeats = Math.max(current.reservedTeacherSeatCount ?? 0, existingTeacherSeats);
+    if (input.role === "teacher" && reservedTeacherSeats >= Math.max(0, current.teacherLimit - 1)) {
+      throw new ConflictError("teacher seat limit reached");
+    }
+    const rate = current.invitationRateLimits?.[inviter.id];
+    const withinWindow = rate && createdAt.getTime() - new Date(rate.windowStartedAt).getTime() < limits.windowMs;
+    if (withinWindow && rate.count >= limits.max) throw new RateLimitError("invitation rate limit exceeded", Math.ceil((limits.windowMs - (createdAt.getTime() - new Date(rate.windowStartedAt).getTime())) / 1000));
+    pendingKeys[key] = invitationId;
+    return {
+      ...current,
+      reservedTeacherSeatCount: reservedTeacherSeats + (input.role === "teacher" ? 1 : 0),
+      teacherSeatVersion: (current.teacherSeatVersion ?? 0) + (input.role === "teacher" ? 1 : 0),
+      pendingInvitationKeys: pendingKeys,
+      invitationRateLimits: {
+        ...(current.invitationRateLimits ?? {}),
+        [inviter.id]: {
+          windowStartedAt: withinWindow ? rate!.windowStartedAt : createdAt.toISOString(),
+          count: withinWindow ? rate!.count + 1 : 1,
+        },
+      },
+      updatedAt: createdAt.toISOString(),
+    };
+  }, repository);
+  const invitation: ClassroomInvitationDoc = {
+    id: invitationId,
+    type: "classroom-invitation",
+    classroomId,
+    email,
+    normalizedEmail,
+    role: input.role,
+    status: "pending",
+    tokenHash: tokenHash(classroomId, invitationId, secret),
+    tokenVersion: TOKEN_VERSION,
+    expiresAt,
+    createdByUserId: inviter.id,
+    acceptedByUserId: null,
+    sentAt: null,
+    resentAt: null,
+    deliveryStatus: "pending",
+    deliveryError: null,
+    createdAt: createdAt.toISOString(),
+    updatedAt: createdAt.toISOString(),
+  };
+  try {
+    await repository.createClassroomInvitation(invitation, { ifNoneMatch: true });
+  } catch (error) {
+    await releasePendingReservation(invitation, repository);
+    throw error;
+  }
+  const delivered = await sendInvitation(invitation, secret, repository, sender);
+  return {
+    invitation: safeInvitation(delivered),
+    invitationUrl: url,
+  };
+}
+
+async function releasePendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
+  const key = invitationKey(invitation.normalizedEmail, invitation.role);
+  await updateClassroomWithCas(invitation.classroomId, (current) => {
+    const pending = { ...(current.pendingInvitationKeys ?? {}) };
+    if (pending[key] !== invitation.id) return current;
+    delete pending[key];
+    return {
+      ...current,
+      reservedTeacherSeatCount: Math.max(0, (current.reservedTeacherSeatCount ?? 0) - (invitation.role === "teacher" ? 1 : 0)),
+      teacherSeatVersion: (current.teacherSeatVersion ?? 0) + (invitation.role === "teacher" ? 1 : 0),
+      pendingInvitationKeys: pending,
+      updatedAt: now().toISOString(),
+    };
+  }, repository);
+}
+
+async function acceptPendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
+  const key = invitationKey(invitation.normalizedEmail, invitation.role);
+  await updateClassroomWithCas(invitation.classroomId, (current) => {
+    const pending = { ...(current.pendingInvitationKeys ?? {}) };
+    if (pending[key] === invitation.id) delete pending[key];
+    return { ...current, pendingInvitationKeys: pending, updatedAt: now().toISOString() };
+  }, repository);
+}
+
+export async function listClassroomInvitations(
+  classroomId: string,
+  userId: string,
+  repository: Repository = getRepository(),
+): Promise<Record<string, unknown>[]> {
+  const access = await requireActiveClassroomAccess(classroomId, userId, ["owner", "teacher"], repository);
+  const invitations = await repository.listClassroomInvitations(classroomId);
+  const visible = access.member.role === "owner" ? invitations : invitations.filter((invitation) => invitation.role === "student");
+  return Promise.all(visible.map(async (invitation) => {
+    if (invitation.status === "pending" && (!invitation.expiresAt || invitation.expiresAt <= now().toISOString())) {
+      const expired = await expireInvitation(invitation, repository);
+      return safeInvitation(expired);
+    }
+    return safeInvitation(invitation);
+  }));
+}
+
+export async function resendClassroomInvitation(
+  classroomId: string,
+  invitationId: string,
+  userId: string,
+  repository: Repository = getRepository(),
+  sender: EmailSender = getEmailSender(),
+): Promise<Record<string, unknown>> {
+  const access = await requireActiveClassroomAccess(classroomId, userId, ["owner", "teacher"], repository);
+  const existing = await repository.getClassroomInvitation(classroomId, invitationId);
+  if (!existing) throw new NotFoundError("invitation not found");
+  if (access.member.role === "teacher" && existing.role !== "student") throw new ForbiddenError();
+  if (existing.status !== "pending" || !existing.expiresAt) throw new ConflictError("only pending invitations can be resent");
+  const secret = randomBytes(32).toString("base64url");
+  const url = invitationUrl(classroomId, invitationId, secret);
+  await consumeInvitationRateLimit(classroomId, userId, repository);
+  const refreshed = await updateInvitationWithCas(existing, (current) => ({
+    ...current,
+    tokenHash: tokenHash(classroomId, invitationId, secret),
+    tokenVersion: TOKEN_VERSION,
+    expiresAt: new Date(now().getTime() + invitationTtlMs()).toISOString(),
+    resentAt: now().toISOString(),
+    deliveryStatus: "pending",
+    deliveryError: null,
+    updatedAt: now().toISOString(),
+  }), repository);
+  const delivered = await sendInvitation(refreshed, secret, repository, sender);
+  return { invitation: safeInvitation(delivered), invitationUrl: url };
+}
+
+async function expireInvitation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<ClassroomInvitationDoc> {
+  const changed = await updateInvitationWithCas(invitation, (current) => {
+    if (current.status !== "pending" || (current.expiresAt && current.expiresAt > now().toISOString())) return current;
+    return { ...current, status: "expired", tokenHash: current.tokenHash, updatedAt: now().toISOString() };
+  }, repository);
+  if (changed.status === "expired") await releasePendingReservation(changed, repository);
+  return changed;
+}
+
+export async function revokeClassroomInvitation(
+  classroomId: string,
+  invitationId: string,
+  userId: string,
+  repository: Repository = getRepository(),
+): Promise<void> {
+  const access = await requireActiveClassroomAccess(classroomId, userId, ["owner", "teacher"], repository);
+  const existing = await repository.getClassroomInvitation(classroomId, invitationId);
+  if (!existing) throw new NotFoundError("invitation not found");
+  if (access.member.role === "teacher" && existing.role !== "student") throw new ForbiddenError();
+  if (existing.status !== "pending") throw new ConflictError("invitation is no longer pending");
+  const revoked = await updateInvitationWithCas(existing, (current) =>
+    current.status === "pending"
+      ? { ...current, status: "revoked", updatedAt: now().toISOString() }
+      : current,
+    repository,
+  );
+  if (revoked.status === "revoked") await releasePendingReservation(revoked, repository);
+}
+
+async function ensureMemberProvisioning(
+  classroomId: string,
+  userId: string,
+  role: Exclude<ClassroomRole, "owner">,
+  operationVersion: string,
+  repository: Repository,
+): Promise<ClassroomMemberDoc> {
+  const existing = await repository.getClassroomMember(classroomId, userId);
+  const timestamp = now().toISOString();
+  if (!existing) {
+    const member: ClassroomMemberDoc = {
+      id: classroomMemberId(classroomId, userId),
+      type: "classroom-member",
+      classroomId,
+      userId,
+      role,
+      status: "provisioning",
+      operationVersion,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    try {
+      return await repository.createClassroomMember(member, { ifNoneMatch: true });
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError)) throw error;
+      const raced = await repository.getClassroomMember(classroomId, userId);
+      if (!raced) throw error;
+      return raced;
+    }
+  }
+  if (existing.role !== role) throw new ConflictError("user already has a different classroom role");
+  if (existing.status === "removing") throw new ConflictError("membership removal is in progress");
+  if (existing.status === "active") return existing;
+  if (existing.status === "provisioning") return existing;
+  return updateMemberWithCas(existing, (current) => ({
+    ...current,
+    status: "provisioning",
+    operationVersion,
+    updatedAt: timestamp,
+  }), repository);
+}
+
+async function reserveStudentProfile(
+  profile: UserProfileDoc,
+  classroomId: string,
+  repository: Repository,
+): Promise<UserProfileDoc> {
+  const existing = profile.classroomRefs.find((ref) => ref.role === "student" && ref.status !== "removed");
+  if (existing && existing.classroomId !== classroomId) {
+    throw new ConflictError("student already belongs to another classroom");
+  }
+  const current = profile.classroomRefs.find((ref) => ref.classroomId === classroomId);
+  if (current?.role === "student" && current.status === "active") return profile;
+  if (current?.role === "student" && current.status === "removing") {
+    throw new ConflictError("student membership removal is in progress");
+  }
+  return updateProfileWithCas(profile.id, (latest) => {
+    const conflictRef = latest.classroomRefs.find((ref) => ref.role === "student" && ref.status !== "removed" && ref.classroomId !== classroomId);
+    if (conflictRef) throw new ConflictError("student already belongs to another classroom");
+    return appendRef(latest, classroomId, "student", "provisioning");
+  }, repository);
+}
+
+async function activateProfileRef(
+  userId: string,
+  classroomId: string,
+  role: Exclude<ClassroomRole, "owner">,
+  repository: Repository,
+): Promise<void> {
+  await updateProfileWithCas(userId, (profile) => {
+    const current = profile.classroomRefs.find((ref) => ref.classroomId === classroomId);
+    if (current?.role === role && current.status === "active") return profile;
+    return appendRef(profile, classroomId, role, "active");
+  }, repository);
+}
+
+async function removeProfileRef(userId: string, classroomId: string, repository: Repository): Promise<void> {
+  await updateProfileWithCas(userId, (profile) => ({
+    ...profile,
+    classroomRefs: profile.classroomRefs.filter((ref) => ref.classroomId !== classroomId),
+    updatedAt: now().toISOString(),
+  }), repository);
+}
+
+async function markInvitationAccepted(
+  invitation: ClassroomInvitationDoc,
+  userId: string,
+  repository: Repository,
+): Promise<void> {
+  const accepted = await updateInvitationWithCas(invitation, (current) => {
+    if (current.status === "accepted") {
+      if (current.acceptedByUserId === userId) return current;
+      throw new ConflictError("invitation has already been used");
+    }
+    if (current.status !== "pending") throw new ConflictError("invitation is no longer available");
+    if (!current.expiresAt || current.expiresAt <= now().toISOString()) throw new ConflictError("invitation has expired");
+    return {
+      ...current,
+      status: "accepted",
+      acceptedByUserId: userId,
+      tokenHash: current.tokenHash,
+      updatedAt: now().toISOString(),
+    };
+  }, repository);
+  await acceptPendingReservation(accepted, repository);
+}
+
+export async function acceptClassroomInvitation(
+  input: { classroomId: string; invitationId: string; secret: string },
+  user: AuthenticatedUser,
+  repository: Repository = getRepository(),
+  stripe?: StripeGateway,
+): Promise<{ classroomId: string; role: Exclude<ClassroomRole, "owner">; status: ClassroomMemberStatus }> {
+  assertAuthenticatedGoogleUser(user);
+  if (!input.secret || input.secret.length < 32 || input.secret.length > 128) throw new ValidationError("invitation token is invalid");
+  const invitation = await repository.getClassroomInvitation(input.classroomId, input.invitationId);
+  if (!invitation || !tokenMatches(invitation, input.secret)) throw new ValidationError("invitation token is invalid");
+  if (invitation.status === "accepted" && invitation.acceptedByUserId === user.id) {
+    const member = await repository.getClassroomMember(input.classroomId, user.id);
+    if (member?.status === "active" && member.role !== "owner") {
+      return { classroomId: input.classroomId, role: member.role, status: member.status };
+    }
+  }
+  if (invitation.status !== "pending") throw new ConflictError("invitation is no longer available");
+  if (!invitation.expiresAt || invitation.expiresAt <= now().toISOString()) {
+    await expireInvitation(invitation, repository);
+    throw new ConflictError("invitation has expired");
+  }
+  if (normalizeEmail(user.email) !== invitation.normalizedEmail) throw new ForbiddenError("Google account email does not match the invitation");
+  const classroom = await repository.getClassroom(input.classroomId);
+  if (!classroom) throw new NotFoundError("classroom not found");
+  if (classroom.appStatus !== "active" || !classroomHasPaidEntitlement(classroom.billing.status)) {
+    throw new ForbiddenError("classroom subscription is not active");
+  }
+  const profile = await ensureUserProfile(user, repository);
+  const operationVersion = `invitation:${invitation.id}`;
+  if (invitation.role === "student") {
+    await reserveStudentProfile(profile, input.classroomId, repository);
+    const member = await ensureMemberProvisioning(input.classroomId, user.id, "student", operationVersion, repository);
+    if (member.status !== "active") {
+      const activeStudents = (await repository.listClassroomMembers(input.classroomId))
+        .filter((candidate) => candidate.role === "student" && candidate.status === "active" && candidate.userId !== user.id).length;
+      await setBillableStudentQuantity(
+        { classroomId: input.classroomId, quantity: activeStudents + 1, operationVersion },
+        repository,
+        stripe,
+      );
+      await updateMemberWithCas(member, (current) => ({
+        ...current,
+        status: "active",
+        operationVersion,
+        updatedAt: now().toISOString(),
+      }), repository);
+    }
+    await activateProfileRef(user.id, input.classroomId, "student", repository);
+    await markInvitationAccepted(invitation, user.id, repository);
+    return { classroomId: input.classroomId, role: "student", status: "active" };
+  }
+  const member = await ensureMemberProvisioning(input.classroomId, user.id, "teacher", operationVersion, repository);
+  if (member.status !== "active") {
+    await updateProfileWithCas(user.id, (latest) => appendRef(latest, input.classroomId, "teacher", "provisioning"), repository);
+    await updateMemberWithCas(member, (current) => ({
+      ...current,
+      status: "active",
+      operationVersion,
+      updatedAt: now().toISOString(),
+    }), repository);
+  }
+  await activateProfileRef(user.id, input.classroomId, "teacher", repository);
+  await markInvitationAccepted(invitation, user.id, repository);
+  return { classroomId: input.classroomId, role: "teacher", status: "active" };
+}
+
+export async function removeClassroomMember(
+  classroomId: string,
+  targetUserId: string,
+  actorUserId: string,
+  repository: Repository = getRepository(),
+  stripe?: StripeGateway,
+): Promise<{ status: "removed" | "removing" }> {
+  const target = await repository.getClassroomMember(classroomId, targetUserId);
+  if (!target) throw new NotFoundError("classroom member not found");
+  const classroom = await repository.getClassroom(classroomId);
+  if (!classroom) throw new NotFoundError("classroom not found");
+  if (target.role === "owner") throw new ForbiddenError("classroom owner cannot be removed");
+  const actor = await repository.getClassroomMember(classroomId, actorUserId);
+  if (!actor || actor.status !== "active" || (target.role === "teacher" ? actor.role !== "owner" : actor.role !== "owner" && targetUserId !== actorUserId)) {
+    throw new ForbiddenError();
+  }
+  if (target.status === "removed") {
+    await removeProfileRef(targetUserId, classroomId, repository);
+    if (target.role === "teacher") await reconcileTeacherSeatReservations(classroomId, repository);
+    return { status: "removed" };
+  }
+  if (target.status !== "removing" && !classroomHasPaidEntitlement(classroom.billing.status)) {
+    throw new ForbiddenError("classroom subscription is not active");
+  }
+  const removing = target.status === "removing"
+    ? target
+    : await updateMemberWithCas(target, (current) => ({ ...current, status: "removing", operationVersion: `remove:${randomUUID()}`, updatedAt: now().toISOString() }), repository);
+  if (removing.role === "student") {
+    if (removing.operationVersion === null || !removing.operationVersion) throw new ConfigurationError("removal operation is missing");
+    const remaining = (await repository.listClassroomMembers(classroomId))
+      .filter((member) => member.role === "student" && member.status === "active" && member.userId !== targetUserId).length;
+    await setBillableStudentQuantity(
+      { classroomId, quantity: remaining, operationVersion: removing.operationVersion },
+      repository,
+      stripe,
+    );
+  }
+  await updateMemberWithCas(removing, (current) => ({ ...current, status: "removed", updatedAt: now().toISOString() }), repository);
+  await removeProfileRef(targetUserId, classroomId, repository);
+  if (removing.role === "teacher") await reconcileTeacherSeatReservations(classroomId, repository);
+  return { status: "removed" };
+}
+
+export async function reconcileClassroomBilling(
+  classroomId: string,
+  ownerUserId: string,
+  repository: Repository = getRepository(),
+  stripe?: StripeGateway,
+): Promise<ClassroomDoc> {
+  await requireClassroomRole(classroomId, ownerUserId, ["owner"], repository);
+  const operation = (await repository.getClassroom(classroomId))?.billing.studentQuantityOperation;
+  return reconcileBillableStudentQuantity(
+    classroomId,
+    operation?.operationVersion ?? `reconcile:${randomUUID()}`,
+    repository,
+    stripe,
+  );
+}

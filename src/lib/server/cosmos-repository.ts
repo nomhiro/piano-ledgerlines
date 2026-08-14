@@ -154,6 +154,17 @@ export class CosmosRepository implements Repository {
     )?.document ?? null;
   }
 
+  async getClassroomMemberRecord(
+    classroomId: string,
+    userId: string,
+  ): Promise<RepositoryDocument<ClassroomMemberDoc> | null> {
+    return this.readRecord(
+      this.classroomMembers,
+      classroomMemberId(classroomId, userId),
+      classroomId,
+    );
+  }
+
   async upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {
     return (await this.upsertRecord(this.classroomMembers, member, member.classroomId, options)).document;
   }

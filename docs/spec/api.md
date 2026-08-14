@@ -189,6 +189,34 @@ POST /api/shares/{token}/comments
 | 34 | PATCH | `/shares/{id}` | 有効/無効の切替 |
 | 35 | GET | `/shares/{token}` | 共有ビューのデータ（未認証） |
 | 36 | GET | `/practice-plan` | 今日の練習メニュー |
+| 37 | GET | `/classrooms/{id}/members` | owner/teacher向けmembership一覧 |
+| 38 | GET | `/classrooms/{id}/invitations` | roleに応じた招待一覧 |
+| 39 | POST | `/classrooms/{id}/invitations` | teacher/student招待の作成 |
+| 40 | POST | `/classrooms/{id}/invitations/{invitationId}/resend` | pending招待の再送 |
+| 41 | DELETE | `/classrooms/{id}/invitations/{invitationId}` | 招待の取消 |
+| 42 | POST | `/classroom-invitations/accept` | Googleアカウントで招待承諾 |
+| 43 | DELETE | `/classrooms/{id}/members/{userId}` | ownerの除籍／student本人の退会 |
+| 44 | POST | `/classrooms/{id}/reconciliation` | owner限定の課金数量再収束 |
+| 45 | GET | `/classrooms/{id}/students/{studentId}/songs` | teacher/ownerの生徒曲一覧 |
+| 46 | GET | `/classrooms/{id}/students/{studentId}/songs/{songId}` | teacher/ownerの曲詳細 |
+| 47 | GET | `/classrooms/{id}/students/{studentId}/songs/{songId}/takes` | teacher/ownerのテイク一覧 |
+| 48 | GET | `/classrooms/{id}/students/{studentId}/takes/{takeId}` | teacher/ownerのテイク詳細 |
+
+---
+
+## 4.1 教室招待・認可
+
+教室契約が `active`、`trialing` 相当の `active`、または `past_due` のときだけ
+招待・membership変更・生徒読み取りを許可する。`unpaid`、`canceled`、
+`incomplete_expired` 等では403とし、課金ポータルとowner限定のreconciliationだけを残す。
+ownerはteacher/student、teacherはstudentだけを招待できる。studentは招待できず、
+teacherは複数教室、生徒は有効教室1つに限定する。
+
+招待URLは `classroomId`、`invitationId` と十分なentropyのsecretをfragmentに含め、
+accept APIへJSON POSTする。サーバーはnormalized Google email、期限、pending status、
+version付きHMACをCASで再検証する。承諾は teacher では membership/profile CAS、
+student では `provisioning → Stripe quantity → active` の順で収束し、Stripe失敗時に
+招待をacceptedへ進めない。曲・テイク・Blobの所有者は常にstudent userIdのままである。
 
 ---
 

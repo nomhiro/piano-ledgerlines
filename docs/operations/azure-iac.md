@@ -98,6 +98,15 @@ customer-managed domain の送信元を `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRES
 で認証します。`LEDGERLINES_EMAIL_BACKEND=azure` が本番の必須設定です。開発では
 `memory`（既定）または本文・宛先を出力しない `console` を明示的に選択できます。
 招待URL、トークン、宛先アドレス、本文をログや telemetry に出力しないでください。
+`LEDGERLINES_INVITATION_TOKEN_SECRET` はランダムな32バイト以上の値をKey Vaultまたは
+Container App secretから注入し、ローテーション時は旧versionとの段階移行を行います。
+`LEDGERLINES_INVITE_RATE_LIMIT` と `LEDGERLINES_INVITE_RATE_WINDOW_MINUTES` は
+repository-backedの教室単位制限であり、プロセスメモリのrate limiterではありません。
+
+customer-managed domainを使う場合、email domainの検証を先に完了し、DNSへ指定された
+SPF、DKIM、DMARCレコードを登録してから `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS`
+を切り替えます。BicepのAzure-managed domain作成を、未検証domainの自動置換に使わない
+でください。prodではデプロイ後にACSの送信成功statusとbounce監視を確認します。
 
 ## 環境の更新・削除
 
