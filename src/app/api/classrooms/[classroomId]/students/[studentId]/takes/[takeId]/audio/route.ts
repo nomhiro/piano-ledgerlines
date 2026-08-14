@@ -31,7 +31,7 @@ export async function GET(
         try {
           bytes = await getBlobStore().download(getConfig().audioContainer, `users/${studentId}/songs/${take.songId}/takes/${takeId}/original${extension}`);
           contentType = take.contentType ?? `audio/${extension.slice(1)}`;
-          return new Response(new Uint8Array(bytes), { headers: { "Content-Type": contentType, "Cache-Control": "private, max-age=300" } });
+          return new Response(new Uint8Array(bytes), { headers: { "Content-Type": contentType, "Cache-Control": "private, no-store", "Pragma": "no-cache" } });
         } catch (error) {
           lastError = error;
         }
@@ -42,7 +42,7 @@ export async function GET(
     const audioName = entries.find((entry) => entry.startsWith("original") && AUDIO_EXTENSIONS.includes(path.extname(entry).toLowerCase()));
     if (!audioName) throw new NotFoundError("audio asset not found");
     bytes = await fs.readFile(path.join(audioDir(takeId), audioName));
-    return new Response(new Uint8Array(bytes), { headers: { "Content-Type": contentType, "Cache-Control": "private, max-age=300" } });
+    return new Response(new Uint8Array(bytes), { headers: { "Content-Type": contentType, "Cache-Control": "private, no-store", "Pragma": "no-cache" } });
   } catch (error) {
     return errorResponse(request, error);
   }

@@ -33,7 +33,8 @@ export async function GET(
     return new Response(new Uint8Array(bytes), {
       headers: {
         "Content-Type": format === "midi" ? "audio/midi" : "application/vnd.recordare.musicxml+xml",
-        "Cache-Control": "private, max-age=300",
+        "Cache-Control": "private, no-store",
+        "Pragma": "no-cache",
       },
     });
   } catch (error) {

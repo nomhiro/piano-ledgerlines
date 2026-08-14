@@ -1,5 +1,17 @@
 # データモデル設計 — Ledger Lines
 
+## 教室 UI のデータ境界
+
+`user` の `email` と `displayName` は認証プロバイダーから同期する。教室画面のメンバー
+レスポンスはロールに応じて安全な表示名だけを返し、メールアドレスはオーナーに限って返す。
+`classroom-member` は `owner` / `teacher` / `student` と世代付きの状態遷移
+(`provisioning` → `active` → `removing` → `removed`) を持つ。
+`billableStudentCount` と `teacherLimit` は請求・予約処理が確定した値であり、UI の表示用に
+再計算 API (`POST /classrooms/{id}/reconciliation`) を提供する。
+
+退出した生徒の個人 `song` / `take` / 音声は削除せず、教室参照だけを削除する。
+削除・保持期間はユーザーのデータ削除要求と Blob ライフサイクル規則に従う。
+
 | 項目 | 内容 |
 |---|---|
 | ドキュメントID | DESIGN-DATA |
@@ -156,9 +168,9 @@ rename/deleteは行わない。lockは短いread/check/atomic rename critical se
 {
   "id": "usr_01HQ...",              // Entra のオブジェクトIDから導出
   "type": "user",
-  "displayName": "野村 大樹",
+  "displayName": "利用者の表示名",       // 例示。認証プロバイダーから同期
   "email": "...",
-  "teacherName": "白鳥ピアノ教室",   // 任意
+  "teacherName": "教室名（例）",      // 任意。教室membershipとは別の旧例示フィールド
   "settings": {
     "dailyPracticeMinutes": 30,     // 練習メニュー生成の上限
     "locale": "ja-JP",

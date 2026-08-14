@@ -2,6 +2,7 @@ import { getAuthenticatedUser } from "@/lib/server/auth";
 import { createDraftClassroom } from "@/lib/server/billing";
 import { errorResponse, readJson, ValidationError, jsonResponse } from "@/lib/server/http";
 import { getRepository } from "@/lib/server/repository";
+import { safeClassroomView } from "@/lib/server/classroom-view";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
     const parsed = createClassroomSchema.safeParse(await readJson(request));
     if (!parsed.success) throw new ValidationError("classroom name is required");
     const classroom = await createDraftClassroom(user.id, parsed.data, getRepository());
-    return jsonResponse({ classroom }, request, { status: 201 });
+    return jsonResponse({ classroom: safeClassroomView(classroom) }, request, { status: 201 });
   } catch (error) {
     return errorResponse(request, error);
   }

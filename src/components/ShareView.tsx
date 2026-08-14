@@ -23,18 +23,32 @@ const STATUS_META = {
   done: { label: "完了", color: "#22c55e" },
 } as const;
 
+function scoreBand(score: number): { label: string; color: string } {
+  if (score >= 85) return { label: "85点以上", color: "#22c55e" };
+  if (score >= 70) return { label: "70〜84点", color: "#84cc16" };
+  if (score >= 55) return { label: "55〜69点", color: "#eab308" };
+  if (score >= 40) return { label: "40〜54点", color: "#f97316" };
+  return { label: "40点未満", color: "#ef4444" };
+}
+
 export default function ShareView({
   songs,
   song,
   takes,
   comments: initialComments,
   assignments: initialAssignments,
+  viewerDisplayName,
+  teacherDisplayName,
+  classroomName,
 }: {
   songs: Song[];
   song: Song;
   takes: Take[];
   comments: TeacherComment[];
   assignments: Assignment[];
+  viewerDisplayName?: string;
+  teacherDisplayName?: string | null;
+  classroomName?: string | null;
 }) {
   const [copied, setCopied] = useState(false);
   const [comments, setComments] = useState(initialComments);
@@ -44,6 +58,7 @@ export default function ShareView({
   const latest = takes[takes.length - 1];
   const shareUrl = `https://ledgerlines.app/s/${song.id}-7f3a9c`;
   const nextId = useRef(0);
+  const viewerName = viewerDisplayName?.trim() || "あなた";
 
   function post() {
     if (!body.trim()) return;
@@ -55,7 +70,7 @@ export default function ShareView({
         songId: song.id,
         takeId: latest.id,
         measure: pinned === "" ? null : Number(pinned),
-        author: "野村 大樹",
+        author: viewerName,
         role: "student",
         body,
         createdAt: "2026-07-25T13:40:00+09:00",
@@ -102,10 +117,11 @@ export default function ShareView({
             <div className="p-5">
               <div className="flex flex-wrap gap-2">
                 <div className="flex min-w-[240px] flex-1 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-2.5">
-                  <Link2 size={15} className="shrink-0 text-[var(--muted)]" />
+                  <Link2 size={15} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
                   <span className="truncate text-xs">{shareUrl}</span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => {
                     navigator.clipboard?.writeText(shareUrl);
                     setCopied(true);
@@ -113,7 +129,7 @@ export default function ShareView({
                   }}
                   className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 py-2.5 text-sm font-medium text-white hover:bg-violet-500"
                 >
-                  {copied ? <Check size={15} /> : <Copy size={15} />}
+                  {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
                   {copied ? "コピーしました" : "コピー"}
                 </button>
               </div>
@@ -130,7 +146,7 @@ export default function ShareView({
                     className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-2.5 text-xs"
                   >
                     <span className="flex items-center gap-2">
-                      <Eye size={13} className="text-[var(--muted)]" />
+                      <Eye size={13} className="text-[var(--muted)]" aria-hidden="true" />
                       {s}
                     </span>
                     <input type="checkbox" defaultChecked className="h-4 w-4 accent-violet-500" />
@@ -140,12 +156,14 @@ export default function ShareView({
 
               <div className="mt-4 flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
                 <div className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-500/20 text-cyan-300">
-                  <Users size={16} />
+                  <Users size={16} aria-hidden="true" />
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm">白鳥 玲子 先生</div>
+                  <div className="text-sm">
+                    {teacherDisplayName?.trim() || (classroomName?.trim() ? "共有先の先生" : "共有先未設定")}
+                  </div>
                   <div className="text-[11px] text-[var(--muted)]">
-                    白鳥ピアノ教室 ・ 最終閲覧 2026/07/25 09:15
+                    {classroomName?.trim() || "個人利用"} ・ 共有設定を確認してください
                   </div>
                 </div>
                 <Badge color="#22c55e">閲覧済み</Badge>
@@ -176,7 +194,7 @@ export default function ShareView({
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-semibold">{c.author}</span>
+                      <span className="text-xs font-semibold">{c.role === "teacher" ? "先生" : viewerName}</span>
                       {c.measure !== null && (
                         <Badge color="#a78bfa">{c.measure} 小節</Badge>
                       )}
@@ -199,35 +217,43 @@ export default function ShareView({
             </div>
             <div className="border-t border-[var(--border)] p-4">
               <div className="mb-2 flex items-center gap-2">
-                <MessageSquare size={13} className="text-[var(--muted)]" />
-                <select
-                  value={pinned}
-                  onChange={(e) =>
-                    setPinned(e.target.value === "" ? "" : Number(e.target.value))
-                  }
-                  className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-[11px]"
-                >
-                  <option value="">小節を指定しない</option>
-                  {latest.measureScores.map((m) => (
-                    <option key={m.measure} value={m.measure}>
-                      {m.measure} 小節
-                    </option>
-                  ))}
-                </select>
+                <MessageSquare size={13} className="text-[var(--muted)]" aria-hidden="true" />
+                <label className="text-[11px] text-[var(--muted)]">
+                  コメントの小節
+                  <select
+                    value={pinned}
+                    onChange={(e) =>
+                      setPinned(e.target.value === "" ? "" : Number(e.target.value))
+                    }
+                    className="ml-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-[11px] text-[var(--foreground)]"
+                  >
+                    <option value="">小節を指定しない</option>
+                    {latest.measureScores.map((m) => (
+                      <option key={m.measure} value={m.measure}>
+                        {m.measure} 小節
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               <div className="flex gap-2">
-                <input
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && post()}
-                  placeholder="先生にメッセージを送る"
-                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs outline-none"
-                />
+                <label className="min-w-0 flex-1 text-xs">
+                  先生へのメッセージ
+                  <input
+                    value={body}
+                    onChange={(e) => setBody(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && post()}
+                    placeholder="メッセージを入力"
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs outline-none"
+                  />
+                </label>
                 <button
+                  type="button"
+                  aria-label="メッセージを送信"
                   onClick={post}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white hover:bg-violet-500"
+                  className="flex h-9 w-9 items-center justify-center self-end rounded-lg bg-violet-600 text-white hover:bg-violet-500"
                 >
-                  <Send size={15} />
+                  <Send size={15} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -241,7 +267,7 @@ export default function ShareView({
               title="先生からの課題"
               subtitle="次回レッスンまでの宿題"
               right={
-                <ClipboardList size={15} className="text-[var(--muted)]" />
+                <ClipboardList size={15} className="text-[var(--muted)]" aria-hidden="true" />
               }
             />
             <div className="space-y-2.5 p-5">
@@ -262,7 +288,7 @@ export default function ShareView({
                       >
                         {a.title}
                       </span>
-                      <button onClick={() => cycleStatus(a.id)}>
+                      <button type="button" onClick={() => cycleStatus(a.id)} aria-label={`${a.title}の状態を変更`}>
                         <Badge color={meta.color}>{meta.label}</Badge>
                       </button>
                     </div>
@@ -289,7 +315,7 @@ export default function ShareView({
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-4">
                 <div className="text-xs font-semibold">{song.title}</div>
                 <div className="text-[10px] text-[var(--muted)]">
-                  {song.composer} ・ 野村 大樹さんの練習レポート
+                  {song.composer} ・ {viewerName}さんの練習レポート
                 </div>
                 <div className="mt-3 flex items-center gap-3">
                   <ScoreRing score={latest.overallScore} size={56} />
@@ -299,25 +325,33 @@ export default function ShareView({
                     <div>指摘 {latest.issues.length} 件</div>
                   </div>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-1">
+                <div className="mt-3 flex flex-wrap gap-1" aria-label="小節スコアの分布">
                   {latest.measureScores.slice(0, 16).map((m) => (
-                    <span
-                      key={m.measure}
-                      className="h-3 w-3 rounded-sm"
-                      style={{
-                        backgroundColor:
-                          m.score >= 85
-                            ? "#22c55e"
-                            : m.score >= 70
-                              ? "#84cc16"
-                              : m.score >= 55
-                                ? "#eab308"
-                                : m.score >= 40
-                                  ? "#f97316"
-                                  : "#ef4444",
-                      }}
-                    />
+                    (() => {
+                      const band = scoreBand(m.score);
+                      return (
+                        <span
+                          key={m.measure}
+                          role="img"
+                          aria-label={`${m.measure}小節: ${m.score}点、${band.label}`}
+                          title={`${m.measure}小節: ${m.score}点`}
+                          className="h-3 w-3 rounded-sm"
+                          style={{ backgroundColor: band.color }}
+                        />
+                      );
+                    })()
                   ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-[var(--muted)]" aria-label="スコア区分">
+                  {[85, 70, 55, 40, 0].map((score) => {
+                    const band = scoreBand(score);
+                    return (
+                      <span key={band.label} className="flex items-center gap-1">
+                        <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: band.color }} aria-hidden="true" />
+                        {band.label}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
               <p className="mt-3 text-[11px] leading-relaxed text-[var(--muted)]">

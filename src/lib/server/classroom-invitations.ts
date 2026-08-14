@@ -359,6 +359,7 @@ function safeInvitation(invitation: ClassroomInvitationDoc): Record<string, unkn
     acceptOperationVersion,
     claimedByUserId,
     claimedAt,
+    deliveryError,
     ...publicInvitation
   } = invitation;
   void tokenHash;
@@ -366,6 +367,7 @@ function safeInvitation(invitation: ClassroomInvitationDoc): Record<string, unkn
   void acceptOperationVersion;
   void claimedByUserId;
   void claimedAt;
+  void deliveryError;
   return publicInvitation;
 }
 
@@ -1854,13 +1856,16 @@ export async function removeClassroomMember(
   repository: Repository = getRepository(),
   stripe?: StripeGateway,
 ): Promise<{ status: "removed" | "removing" }> {
-  const target = await repository.getClassroomMember(classroomId, targetUserId);
-  if (!target) throw new NotFoundError("classroom member not found");
   const classroom = await repository.getClassroom(classroomId);
   if (!classroom) throw new NotFoundError("classroom not found");
-  if (target.role === "owner") throw new ForbiddenError("classroom owner cannot be removed");
   const actor = await repository.getClassroomMember(classroomId, actorUserId);
-  if (!actor || actor.status !== "active" || (target.role === "teacher" ? actor.role !== "owner" : actor.role !== "owner" && targetUserId !== actorUserId)) {
+  if (!actor || actor.status !== "active") {
+    throw new ForbiddenError();
+  }
+  const target = await repository.getClassroomMember(classroomId, targetUserId);
+  if (!target) throw new NotFoundError("classroom member not found");
+  if (target.role === "owner") throw new ForbiddenError("classroom owner cannot be removed");
+  if (target.role === "teacher" ? actor.role !== "owner" : actor.role !== "owner" && targetUserId !== actorUserId) {
     throw new ForbiddenError();
   }
   if (target.status === "removed") {
@@ -1871,7 +1876,8 @@ export async function removeClassroomMember(
     if (target.role === "teacher") await reconcileTeacherSeatReservations(classroomId, repository);
     return { status: "removed" };
   }
-  if (target.status !== "removing" && !classroomHasPaidEntitlement(classroom.billing.status)) {
+  const isStudentSelfRemoval = actor.role === "student" && targetUserId === actorUserId;
+  if (target.status !== "removing" && !classroomHasPaidEntitlement(classroom.billing.status) && !isStudentSelfRemoval) {
     throw new ForbiddenError("classroom subscription is not active");
   }
   const removing = target.status === "removing"
@@ -1894,7 +1900,7 @@ export async function removeClassroomMember(
     removalGeneration,
     repository,
   );
-  if (removing.role === "student") {
+  if (removing.role === "student" && classroomHasPaidEntitlement(classroom.billing.status)) {
     await setBillableStudentQuantity(
       {
         classroomId,

@@ -1,5 +1,27 @@
 # API仕様 — Ledger Lines
 
+## 教室 UI API
+
+| メソッド | パス | 権限 | 用途 |
+|---|---|---|---|
+| `GET` | `/classrooms/{id}` | 所属メンバー | 教室状態とロール別メンバー表示（メールはオーナーのみ） |
+| `PATCH` | `/classrooms/{id}` | オーナー | 教室名更新。Cosmos ETag の CAS で競合を防止 |
+| `POST` | `/classrooms` | 認証済み | 個人利用から下書き教室を作成 |
+| `POST` | `/classrooms/{id}/checkout` | オーナー | Stripe Checkout。`Idempotency-Key` 必須 |
+| `POST` | `/classrooms/{id}/billing-portal` | オーナー | Stripe Billing Portal の再開・管理 |
+| `POST` | `/classrooms/{id}/reconciliation` | オーナー | 生徒数・先生枠・Stripe quantity を再調整 |
+| `GET/POST` | `/classrooms/{id}/invitations` | オーナー/先生 | 招待一覧・作成（先生は生徒のみ） |
+| `DELETE` | `/classrooms/{id}/members/{userId}` | 所属ルール | 先生/オーナーによる削除、生徒自身の退出 |
+| `GET` | `/classrooms/{id}/students/{studentId}/songs` | オーナー/先生 | 生徒の読み取り専用曲一覧 |
+| `GET` | `/classrooms/{id}/students/{studentId}/songs/{songId}` | オーナー/先生 | 生徒の読み取り専用曲・テイク |
+
+`past_due` は猶予期間として読み取り・招待を含む通常利用を許可する。`canceled` や
+`inactive` では個人データを削除せず、オーナーの請求復旧操作だけを許可する。
+403/404 のレスポンスや UI は対象ユーザー・曲の存在を推測できる情報を含めない。
+教室一覧・作成・更新のレスポンスは Stripe ID、招待secret/tokenHash、ACS設定を含めず、
+メンバーのメールは owner にだけ返す。`PATCH` は空白をtrimした1〜120文字を受け付け、
+Cosmos ETag競合時は409を返す。
+
 | 項目 | 内容 |
 |---|---|
 | ドキュメントID | SPEC-API |

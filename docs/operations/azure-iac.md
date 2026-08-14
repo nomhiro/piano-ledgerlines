@@ -1,5 +1,24 @@
 # Azure リソース管理（Bicep + azd）
 
+## 教室運用チェックリスト
+
+- ロールは `owner`（請求・メンバー管理）、`teacher`（生徒の読み取りと生徒招待）、
+  `student`（自分のデータと先生一覧）に固定し、API でも再検証する。
+- 個人利用には教室データを表示せず、教室作成後は Stripe Checkout を HTTPS の
+  Stripe ホストに限定して遷移する。`past_due` は猶予期間、`canceled`/`inactive` は
+  請求復旧のみとする。
+- 招待と Stripe 操作は `Idempotency-Key`、Cosmos ETag CAS、定期 reconciliation で
+  冪等にする。失敗した招待・課金処理は再送/ポータルから回復し、秘密値や Stripe
+  セッション内部をログに出さない。
+- ユーザーが教室を退出しても曲・録音・楽譜は個人データとして保持し、削除要求時に
+  Cosmos と Blob のユーザープレフィックスを消去する。保持期間と監査ログは環境ごとに
+  定める。
+
+Stripe の webhook は Managed Identity で Key Vault の署名設定を参照する。ACS の送信元
+ドメイン、DNS SPF/DKIM、カスタムドメイン証明書を本番前に検証する。ローカルでは
+`npm run azure:up`、`npm run azure:health` と開発 Stripe/ACS のモック設定を使い、
+決済 URL は実際に遷移せずレスポンスのホスト検証までをテストする。
+
 `infra/main.bicep` はリソースグループスコープの宣言型デプロイです。環境ごとに
 Storage（Blob コンテナと Queue）、Cosmos DB Serverless、Log Analytics /
 Application Insights、Key Vault、ユーザー割り当て Managed Identity と RBAC を作成します。
@@ -10,6 +29,30 @@ Next.js の Web Container App と Python 解析ワーカーは、既存の Conta
 environment を利用して配備します。Python ワーカーの公開 GHCR イメージを指定して、
 `enableWorkerHosting=true` と `workerImage` を指定して `azd provision` を実行します。
 Worker は Storage Queue を常時監視し、Managed Identity で Blob / Cosmos / Queue に接続します。
+
+## 教室機能のセットアップ手順（Stripe + ACS）
+
+1. Stripe Dashboardで教室基本料金と有効生徒数の月額 recurring Priceを作成し、
+   `STRIPE_CLASSROOM_BASE_PRICE_ID` と `STRIPE_CLASSROOM_STUDENT_PRICE_ID` を
+   Container App secretまたはKey Vault参照として設定する。Webhook endpointを
+   `/api/stripe/webhook`へ登録し、`STRIPE_SECRET_KEY` と
+   `STRIPE_WEBHOOK_SECRET`を同じserver-only経路へ注入する。
+2. `enableCommunicationEmail=true`でACS EmailをProvisionし、送信専用の
+   `email-sender` Managed Identityを作成する。Web identityとは分離し、
+   ACS resource scopeのRBACだけをこのidentityへ付与する。
+3. `AZURE_COMMUNICATION_EMAIL_ENDPOINT`、検証済みの
+   `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS`、
+   `AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID`、
+   `LEDGERLINES_INVITATION_TOKEN_SECRET`を設定する。custom domainを使う場合は
+   ACSが提示するSPF/DKIM/DMARCとDNS検証を完了してからsender addressを切り替える。
+4. `LEDGERLINES_APP_BASE_URL`をHTTPSの本番originに設定し、Checkout/Portalの
+   return URLを同一originまたはStripeが返すHTTPS URLに限定する。値はログやparameter
+   fileへ書かない。
+5. ローカルでは `npm run azure:up`、`npm run azure:health`、`npm run lint`、
+   `npm run test:classroom`、`npm run test:infra`を実行する。Stripe CLIの
+   `stripe listen --forward-to localhost:3000/api/stripe/webhook`を使う場合も、
+   表示されたwebhook signing secretだけをローカル環境変数へ設定し、実決済URLへ
+   遷移せずUIのHTTPS host検証とIdempotency-Key再送を確認する。
 
 ## 前提
 
