@@ -52,6 +52,7 @@ export interface Repository {
   findClassroomByStripeSubscriptionId?(subscriptionId: string): Promise<ClassroomDoc | null>;
   createClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc>;
   getClassroomMember(classroomId: string, userId: string): Promise<ClassroomMemberDoc | null>;
+  getClassroomMemberRecord?(classroomId: string, userId: string): Promise<RepositoryDocument<ClassroomMemberDoc> | null>;
   upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc>;
   listClassroomMembers(classroomId: string): Promise<ClassroomMemberDoc[]>;
   createClassroomInvitation(invitation: ClassroomInvitationDoc, options?: RepositoryWriteOptions): Promise<ClassroomInvitationDoc>;
@@ -215,6 +216,15 @@ export class LocalRepository implements Repository {
   async getClassroomMember(classroomId: string, userId: string): Promise<ClassroomMemberDoc | null> {
     const id = classroomMemberId(classroomId, userId);
     return (await this.readDomainRecord<ClassroomMemberDoc>(classroomMemberDocPath(classroomId, id)))?.document ?? null;
+  }
+
+  async getClassroomMemberRecord(
+    classroomId: string,
+    userId: string,
+  ): Promise<RepositoryDocument<ClassroomMemberDoc> | null> {
+    return this.readDomainRecord<ClassroomMemberDoc>(
+      classroomMemberDocPath(classroomId, classroomMemberId(classroomId, userId)),
+    );
   }
 
   async upsertClassroomMember(member: ClassroomMemberDoc, options?: RepositoryWriteOptions): Promise<ClassroomMemberDoc> {

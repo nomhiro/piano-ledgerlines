@@ -142,6 +142,8 @@ export interface ClassroomReference {
   classroomId: string;
   role: ClassroomRole;
   status: ClassroomMemberStatus;
+  generation?: number;
+  operationVersion?: string | null;
 }
 
 export interface UserProfileDoc {
@@ -174,6 +176,16 @@ export interface ClassroomDoc {
   name: string;
   ownerUserId: string;
   teacherLimit: number;
+  /** Includes active/provisioning teachers and pending teacher invitations. */
+  reservedTeacherSeatCount?: number;
+  teacherSeatVersion?: number;
+  invitationRateLimits?: Record<string, {
+    windowStartedAt: string;
+    count: number;
+  }>;
+  /** @deprecated Legacy documents are migrated and this field is deleted by reconciliation. */
+  pendingInvitationKeys?: Record<string, string>;
+  invitationReservations?: Record<string, ClassroomInvitationReservationDoc>;
   billableStudentCount: number;
   billing: {
     stripeCustomerId: string | null;
@@ -195,6 +207,22 @@ export interface ClassroomDoc {
   appStatus: ClassroomAppStatus;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ClassroomInvitationReservationDoc {
+  invitationId: string;
+  role: Exclude<ClassroomRole, "owner">;
+  emailRoleFingerprint: string;
+  state: "creating" | "committing" | "linked" | "pending" | "accepting" | "sending" | "resending";
+  ownerToken: string;
+  version: string;
+  generation: number;
+  deliveryOwnerToken?: string | null;
+  deliveryLeaseExpiresAt?: string | null;
+  deliverySourceGeneration?: number | null;
+  deliverySourceVersion?: string | null;
+  createdAt: string;
+  leaseExpiresAt: string;
 }
 
 export interface CheckoutAttemptDoc {
@@ -234,6 +262,9 @@ export interface ClassroomMemberDoc {
   userId: string;
   role: ClassroomRole;
   status: ClassroomMemberStatus;
+  operationVersion?: string | null;
+  billingDesiredStatus?: "active" | "removed" | null;
+  generation?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -245,10 +276,23 @@ export interface ClassroomInvitationDoc {
   email: string;
   normalizedEmail: string;
   role: Exclude<ClassroomRole, "owner">;
-  status: "pending" | "accepted" | "expired" | "revoked";
+  status: "preparing" | "pending" | "accepting" | "accepted" | "expired" | "revoked";
   tokenHash: string | null;
+  tokenVersion?: number;
+  generation?: number;
+  reservationVersion?: string | null;
+  reservationOwnerToken?: string | null;
   expiresAt: string | null;
   createdByUserId: string;
+  acceptedByUserId?: string | null;
+  acceptOperationVersion?: string | null;
+  claimedByUserId?: string | null;
+  claimedTokenFingerprint?: string | null;
+  claimedAt?: string | null;
+  sentAt?: string | null;
+  resentAt?: string | null;
+  deliveryStatus?: "pending" | "sent" | "failed";
+  deliveryError?: string | null;
   createdAt: string;
   updatedAt: string;
 }

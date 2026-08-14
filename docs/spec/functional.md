@@ -579,6 +579,33 @@ AC-14  測定ノイズ未満の差分が「横ばい」と表示され、改善�
 | R5 | ルバートを「テンポが不安定」と誤判定する | 中上級者に不評 | テンポ指標は「意図的な揺れ」を区別する設計にする（[指標定義](./metrics.md) 参照） |
 | R6 | 解析コストが想定を超える | 事業性 | CPU推論の実現性をM4で確認。無理ならフリーミアムの回数制限で調整 |
 | R7 | 楽譜と演奏の小節対応がずれる（繰り返し・ダカーポ） | 分析全体が無効 | MusicXMLの繰り返し記号を展開した「演奏順」を正とする。M4で検証 |
+| R8 | 教室招待メールの誤送信・token漏えい | 個人情報・招待の不正利用 | 本番は ACS Email + Managed Identity に限定し、未設定時は fail-closed。in-memory/console-safe sender は開発専用とし、宛先・本文・token をログに出さない |
+
+---
+
+## 8.1 教室サブスクリプションとmembership
+
+- ownerを含むteacher上限は `teacherLimit`（初期値5）。active/provisioning teacherと
+  pending teacher invitationを `reservedTeacherSeatCount` とETag CASで予約し、重複招待・
+  同時承諾・再送をべき等に処理する。
+- ownerはteacher/student、teacherはstudentだけを招待する。招待は7日を既定値とする
+  bounded expiry、一度限りのversion付きHMAC token、normalized email完全一致を要求する。
+  Googleアカウントのない代理studentは作らない。
+- active studentだけをStripe quantityへ反映する。studentの承諾と除籍は同じ
+  `operationVersion` のquantity sagaを使う。billing leaseを取得した後に
+  `ClassroomMemberDoc` を再読し、active + 課金予約済みprovisioningだけをdesired state
+  として数量を確定するため、accept/removeの同時実行でcaller側のstale countを使わない。
+  外部失敗時はprovisioning/removingを残してreconciliation可能にする。
+- 招待承諾は副作用の前に invitation を `accepting` へdurable claimする。
+  `accepting` 中のrevoke/expire/resendは409とし、final accepted CASは同じ
+  operation/user/token fingerprintを要求する。teacher/student membershipとprofile参照には
+  generation fenceを持たせ、removing/removedや別generationをactiveへ戻さない。
+- 除籍・退会はmembership/profile参照だけを削除し、studentのsongs、takes、音声Blobは
+  削除しない。teacherの生徒読み取りはclassroom-scoped routeで毎回active membership、
+  contract、student membershipを検証し、teacherの書き込みは存在しない。
+- ACS Emailはproductionではendpoint、verified sender、Managed Identity/RBACを必須とし、
+  `beginSend().pollUntilDone()`の成功statusだけをdelivery成功とする。DNS検証が必要な
+  customer-managed domainはSPF/DKIM/DMARCを運用手順で完了してから有効化する。
 
 ---
 

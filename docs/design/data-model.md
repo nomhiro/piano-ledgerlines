@@ -121,7 +121,26 @@ work/{takeId}/preprocessed.wav
 
 `src/lib/server/types.ts` の `UserProfileDoc`、`ClassroomDoc`、
 `ClassroomMemberDoc`、`ClassroomInvitationDoc`、`BillingEventDoc` が
-Cosmos/Local共通の永続化型である。契約・招待送信・Stripe webhook処理は後続層が実装する。
+Cosmos/Local共通の永続化型である。`ClassroomInvitationDoc` は
+`role`、normalized email、version付きHMAC token hash、期限、inviter/accepted user、
+delivery status、送信・再送時刻を持ち、平文tokenは保存しない。承諾開始時は
+`pending → accepting → accepted` をCASでclaimし、accept operation、claimed user、
+token fingerprint、claim時刻をfenceとして保存する。`accepting` 中は再送・取消・期限切れ
+を許可せず、同じuser/tokenだけが再開できる。教室の
+`invitationReservations` は email/role fingerprintをkeyにしたstructured reservation ledgerで、
+creating/committing/linked/pending/acceptingの状態、invitationId、owner token、version、generation、作成時刻、
+短いcreation lease期限を持つ。
+招待IDはclassroom、role、normalized email fingerprintからserver HMACで決定し、
+同一keyのdocを物理的に一つへ固定する。docは `preparing → pending` を同generationの
+reservationVersion fenceで遷移し、preparingは承諾・送信対象にならない。
+`reservedTeacherSeatCount` は active/provisioning teacher と有効なteacher reservationを
+reconciliationで再計算する。旧 `pendingInvitationKeys` は読み取りせず、migration時に安全に
+削除する。
+studentの `ClassroomMemberDoc.billingDesiredStatus` は、まだmembershipが
+`provisioning`でも承諾sagaが課金対象として予約したか（`active`）を表す。
+`removing`/`removed` は `removed` として数量から除外する。
+招待送信は server-only の `EmailSender` 抽象を介し、本番では Azure Communication
+Services Email、開発では明示的な in-memory/console-safe 実装を使う。
 `RepositoryWriteOptions.ifMatch` と `RepositoryDocument.etag` により、更新競合を明示的に扱う。
 Localのdomain record更新は `proper-lockfile` のWindows対応atomic lock directory、
 mtime lease、stale recovery、bounded retry/release契約を使い、独自のlockPath

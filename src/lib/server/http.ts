@@ -34,6 +34,24 @@ export class ForbiddenError extends Error {
   }
 }
 
+export class ConflictError extends Error {
+  readonly status = 409;
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
+
+export class RateLimitError extends Error {
+  readonly status = 429;
+  readonly retryAfterSeconds: number;
+  constructor(message = "too many requests", retryAfterSeconds = 60) {
+    super(message);
+    this.name = "RateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 export class ConfigurationError extends Error {
   readonly status = 503;
   constructor(message = "billing is not configured") {
@@ -80,7 +98,11 @@ export function errorResponse(
           ? 402
           : error instanceof ForbiddenError
             ? 403
-            : error instanceof ConfigurationError
+              : error instanceof ConflictError
+                ? 409
+                : error instanceof RateLimitError
+                  ? 429
+              : error instanceof ConfigurationError
               ? 503
               : error instanceof BillingInProgressError
                 ? 503
@@ -95,15 +117,26 @@ export function errorResponse(
           ? "QUOTA_EXCEEDED"
           : error instanceof ForbiddenError
             ? "FORBIDDEN"
+            : error instanceof ConflictError
+              ? "CONFLICT"
+              : error instanceof RateLimitError
+                ? "RATE_LIMITED"
             : error instanceof ConfigurationError
               ? "CONFIGURATION_ERROR"
               : error instanceof BillingInProgressError
                 ? "BILLING_IN_PROGRESS"
           : "INTERNAL";
   const message = status === 500 ? fallbackMessage : error instanceof Error ? error.message : fallbackMessage;
+  const responseHeaders: Record<string, string> = {
+    "X-Request-Id": id,
+    "X-Api-Version": "1",
+  };
+  if (error instanceof RateLimitError) {
+    responseHeaders["Retry-After"] = String(error.retryAfterSeconds);
+  }
   return NextResponse.json(
     { error: { code, message, requestId: id, retryable: status >= 500 } },
-    { status, headers: { "X-Request-Id": id, "X-Api-Version": "1" } }
+    { status, headers: responseHeaders }
   );
 }
 

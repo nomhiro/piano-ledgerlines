@@ -6,6 +6,7 @@
     "location": { "value": "japaneast" },
     "resourceNamePrefix": { "value": "ledgerlines-stg" },
     "enableFoundry": { "value": false },
+    "enableCommunicationEmail": { "value": false },
     "enablePurgeProtection": { "value": true },
     "logAnalyticsRetentionInDays": { "value": 30 }
   }
