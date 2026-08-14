@@ -1,6 +1,10 @@
 import type { AiReview, IssueType, MetricKey, Song, Take } from "@/lib/mock/types";
 import type { SongDoc, TakeDoc } from "@/lib/server/types";
 
+export function sortByRecordedAt<T extends { recordedAt: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime());
+}
+
 function metricsFromDoc(metrics: Record<MetricKey, number | null> | null | undefined): Record<MetricKey, number> {
   return {
     pitch: metrics?.pitch ?? 0,

@@ -225,7 +225,7 @@ export class LocalRepository implements Repository {
     const docs = await listJsonFiles<TakeDoc>(takesDir());
     return docs
       .filter((doc) => doc.userId === userId && doc.songId === songId)
-      .sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
+      .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
   }
 
   async countTakesSince(userId: string, sinceIso: string): Promise<number> {

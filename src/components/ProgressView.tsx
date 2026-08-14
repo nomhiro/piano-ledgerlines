@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, TrendingUp, AlertTriangle } from "lucide-react";
 import type { Song, Take } from "@/lib/mock/types";
@@ -10,6 +10,7 @@ import SongSelector from "@/components/SongSelector";
 import MeasureHeatmap from "@/components/MeasureHeatmap";
 import { MeasureDeltaBar, MetricRadar, MultiMetricTrend, ScoreTrend } from "@/components/charts";
 import { formatDate, formatDateTime, signed } from "@/lib/format";
+import { sortByRecordedAt } from "@/lib/real-history";
 
 const SERIES_COLORS: Record<string, string> = {
   pitch: "#38bdf8",
@@ -30,17 +31,18 @@ export default function ProgressView({
   takes: Take[];
   stagnant: { measure: number; delta: number; score: number }[];
 }) {
-  const [aId, setAId] = useState(takes[0].id);
-  const [bId, setBId] = useState(takes[takes.length - 1].id);
-  const a = takes.find((t) => t.id === aId)!;
-  const b = takes.find((t) => t.id === bId)!;
+  const orderedTakes = useMemo(() => sortByRecordedAt(takes), [takes]);
+  const [aId, setAId] = useState(orderedTakes[0]?.id ?? "");
+  const [bId, setBId] = useState(orderedTakes[orderedTakes.length - 1]?.id ?? "");
+  const a = orderedTakes.find((t) => t.id === aId) ?? orderedTakes[0];
+  const b = orderedTakes.find((t) => t.id === bId) ?? orderedTakes[orderedTakes.length - 1];
 
-  const trend = takes.map((t) => ({
+  const trend = orderedTakes.map((t) => ({
     label: formatDate(t.recordedAt),
     score: t.overallScore,
   }));
 
-  const metricTrend = takes.map((t) => {
+  const metricTrend = orderedTakes.map((t) => {
     const row: Record<string, string | number> = { label: formatDate(t.recordedAt) };
     for (const k of METRIC_KEYS) row[k] = t.metrics[k];
     return row;
@@ -83,7 +85,7 @@ export default function ProgressView({
           label="初回からの伸び"
           value={signed(
             Math.round(
-              (takes[takes.length - 1].overallScore - takes[0].overallScore) * 10,
+              (orderedTakes[orderedTakes.length - 1].overallScore - orderedTakes[0].overallScore) * 10,
             ) / 10,
           )}
           unit="点"
@@ -122,9 +124,9 @@ export default function ProgressView({
         />
         <div className="p-5">
           <div className="mb-5 flex flex-wrap items-center gap-3">
-            <TakePicker takes={takes} value={aId} onChange={setAId} label="A（比較元）" />
+            <TakePicker takes={orderedTakes} value={aId} onChange={setAId} label="A（比較元）" />
             <ArrowRight size={18} className="text-[var(--muted)]" />
-            <TakePicker takes={takes} value={bId} onChange={setBId} label="B（比較先）" />
+            <TakePicker takes={orderedTakes} value={bId} onChange={setBId} label="B（比較先）" />
           </div>
 
           <div className="grid gap-5 lg:grid-cols-3">
@@ -229,7 +231,7 @@ export default function ProgressView({
                       現在のスコア {s.score.toFixed(1)}
                     </div>
                     <div className="mt-2.5 space-y-1">
-                      {takes.map((t) => {
+                      {orderedTakes.map((t) => {
                         const ms = t.measureScores.find((m) => m.measure === s.measure);
                         if (!ms) return null;
                         return (
@@ -272,7 +274,7 @@ export default function ProgressView({
       <div className="mt-5">
         <h2 className="mb-3 text-sm font-semibold">全テイク</h2>
         <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-          {[...takes].reverse().map((t) => (
+          {[...orderedTakes].reverse().map((t) => (
             <Link key={t.id} href={`/takes/${t.id}`}>
               <Card className="flex items-center gap-3 p-4 transition-colors hover:border-violet-500/50">
                 <ScoreRing score={t.overallScore} size={52} />
