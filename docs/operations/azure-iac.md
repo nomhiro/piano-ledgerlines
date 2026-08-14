@@ -30,6 +30,30 @@ environment を利用して配備します。Python ワーカーの公開 GHCR �
 `enableWorkerHosting=true` と `workerImage` を指定して `azd provision` を実行します。
 Worker は Storage Queue を常時監視し、Managed Identity で Blob / Cosmos / Queue に接続します。
 
+## 教室機能のセットアップ手順（Stripe + ACS）
+
+1. Stripe Dashboardで教室基本料金と有効生徒数の月額 recurring Priceを作成し、
+   `STRIPE_CLASSROOM_BASE_PRICE_ID` と `STRIPE_CLASSROOM_STUDENT_PRICE_ID` を
+   Container App secretまたはKey Vault参照として設定する。Webhook endpointを
+   `/api/stripe/webhook`へ登録し、`STRIPE_SECRET_KEY` と
+   `STRIPE_WEBHOOK_SECRET`を同じserver-only経路へ注入する。
+2. `enableCommunicationEmail=true`でACS EmailをProvisionし、送信専用の
+   `email-sender` Managed Identityを作成する。Web identityとは分離し、
+   ACS resource scopeのRBACだけをこのidentityへ付与する。
+3. `AZURE_COMMUNICATION_EMAIL_ENDPOINT`、検証済みの
+   `AZURE_COMMUNICATION_EMAIL_SENDER_ADDRESS`、
+   `AZURE_EMAIL_MANAGED_IDENTITY_CLIENT_ID`、
+   `LEDGERLINES_INVITATION_TOKEN_SECRET`を設定する。custom domainを使う場合は
+   ACSが提示するSPF/DKIM/DMARCとDNS検証を完了してからsender addressを切り替える。
+4. `LEDGERLINES_APP_BASE_URL`をHTTPSの本番originに設定し、Checkout/Portalの
+   return URLを同一originまたはStripeが返すHTTPS URLに限定する。値はログやparameter
+   fileへ書かない。
+5. ローカルでは `npm run azure:up`、`npm run azure:health`、`npm run lint`、
+   `npm run test:classroom`、`npm run test:infra`を実行する。Stripe CLIの
+   `stripe listen --forward-to localhost:3000/api/stripe/webhook`を使う場合も、
+   表示されたwebhook signing secretだけをローカル環境変数へ設定し、実決済URLへ
+   遷移せずUIのHTTPS host検証とIdempotency-Key再送を確認する。
+
 ## 前提
 
 - Azure CLI (`az`) と Azure Developer CLI (`azd`)

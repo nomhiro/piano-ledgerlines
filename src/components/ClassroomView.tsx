@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AccountContext, AccountClassroomSummary } from "@/lib/server/account";
 
 type Member = {
@@ -18,9 +18,13 @@ type Invitation = {
   role: "teacher" | "student";
   status: string;
   expiresAt: string | null;
+  deliveryStatus?: "pending" | "sent" | "failed";
 };
 type ClassroomData = {
-  classroom: AccountClassroomSummary & { hasBillingCustomer: boolean };
+  classroom: Pick<
+    AccountClassroomSummary,
+    "id" | "name" | "appStatus" | "contractStatus" | "teacherLimit" | "billableStudentCount"
+  > & { hasBillingCustomer: boolean };
   role: "owner" | "teacher" | "student";
   members: Member[];
   invitations?: Invitation[];
@@ -32,6 +36,26 @@ const STATUS_LABEL: Record<string, string> = {
   active: "利用中",
   past_due: "支払い確認中",
   canceled: "契約停止",
+};
+const APP_STATUS_LABEL: Record<string, string> = {
+  provisioning: "準備中",
+  active: "利用中",
+  suspended: "停止中",
+  archived: "終了",
+};
+const INVITATION_STATUS_LABEL: Record<string, string> = {
+  preparing: "準備中",
+  pending: "承諾待ち",
+  accepting: "承諾処理中",
+  accepted: "承諾済み",
+  expired: "期限切れ",
+  revoked: "取消済み",
+};
+const MEMBER_STATUS_LABEL: Record<string, string> = {
+  provisioning: "準備中",
+  active: "在籍中",
+  removing: "除籍処理中",
+  removed: "除籍済み",
 };
 
 function safeStripeUrl(value: unknown): string | null {
@@ -50,7 +74,19 @@ function safeStripeUrl(value: unknown): string | null {
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   const body = (await response.json()) as T & { error?: { message?: string } };
-  if (!response.ok) throw new Error(body.error?.message ?? "処理に失敗しました。");
+  if (!response.ok) {
+    const code = (body.error as { code?: string } | undefined)?.code;
+    const userMessage: Record<string, string> = {
+      FORBIDDEN: "この操作を行う権限がありません。",
+      NOT_FOUND: "教室または対象が見つかりません。",
+      CONFLICT: "状態が変わりました。最新の情報を読み込んで再試行してください。",
+      QUOTA_EXCEEDED: "利用上限に達しています。",
+      CONFIGURATION_ERROR: "請求設定が未完了です。管理者に確認してください。",
+      BILLING_IN_PROGRESS: "請求処理中です。少し待ってから再試行してください。",
+      VALIDATION_FAILED: "入力内容を確認してください。",
+    };
+    throw new Error(userMessage[code ?? ""] ?? body.error?.message ?? "処理に失敗しました。");
+  }
   return body;
 }
 
@@ -68,25 +104,50 @@ export default function ClassroomView({
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [invitationError, setInvitationError] = useState("");
+  const loadedClassroomId = useRef<string | null>(null);
+  const [leftClassroom, setLeftClassroom] = useState(false);
 
-  async function loadClassroom(id: string) {
+  const loadClassroom = useCallback(async (id: string) => {
     const data = await apiJson<ClassroomData>(`/api/classrooms/${encodeURIComponent(id)}`);
     setClassroom(data);
     setMembers(data.members);
+    setInvitationError("");
     if (data.role === "owner" || data.role === "teacher") {
       try {
         const invitationData = await apiJson<{ invitations: Invitation[] }>(
           `/api/classrooms/${encodeURIComponent(id)}/invitations`,
         );
         setInvitations(invitationData.invitations);
-      } catch {
+      } catch (caught) {
         setInvitations([]);
+        setInvitationError(
+          caught instanceof Error ? caught.message : "招待状況を読み込めませんでした。",
+        );
       }
+    } else {
+      setInvitations([]);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    const id = initialClassroom?.id;
+    if (!id || classroom || leftClassroom || loadedClassroomId.current === id) return;
+    loadedClassroomId.current = id;
+    let cancelled = false;
+    void loadClassroom(id).catch((caught) => {
+      if (!cancelled) {
+        setError(caught instanceof Error ? caught.message : "教室情報を読み込めませんでした。");
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [classroom, initialClassroom?.id, leftClassroom, loadClassroom]);
 
   async function runBilling(action: "checkout" | "billing-portal") {
     if (!classroom) return;
@@ -122,6 +183,7 @@ export default function ClassroomView({
           body: JSON.stringify({ name }),
         },
       );
+      loadedClassroomId.current = result.classroom.id;
       await loadClassroom(result.classroom.id);
       setName("");
       const checkout = await apiJson<{ url: string }>(
@@ -165,6 +227,7 @@ export default function ClassroomView({
     try {
       await apiJson(`/api/classrooms/${classroom.classroom.id}/members/${userId}`, { method: "DELETE" });
       setMembers((current) => current.filter((member) => member.userId !== userId));
+      setPendingRemoval(null);
       setMessage("メンバーを削除しました。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "メンバーを削除できませんでした。");
@@ -199,10 +262,36 @@ export default function ClassroomView({
       await apiJson(`/api/classrooms/${classroom.classroom.id}/members/${account.user.id}`, { method: "DELETE" });
       setClassroom(null);
       setMembers([]);
+      setLeftClassroom(true);
       setConfirmLeave(false);
       setMessage("教室から退出しました。練習データは個人利用として保持されます。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "退出できませんでした。");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function updateName() {
+    if (!classroom || !name.trim()) return;
+    setBusy("rename");
+    setError("");
+    try {
+      const result = await apiJson<{ classroom: ClassroomData["classroom"] }>(
+        `/api/classrooms/${encodeURIComponent(classroom.classroom.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        },
+      );
+      setClassroom((current) =>
+        current ? { ...current, classroom: { ...current.classroom, ...result.classroom } } : current,
+      );
+      setName("");
+      setMessage("教室名を更新しました。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "教室名を更新できませんでした。");
     } finally {
       setBusy(null);
     }
@@ -242,14 +331,32 @@ export default function ClassroomView({
     );
   }
 
-  if (!classroom && initialClassroom) {
-    void loadClassroom(initialClassroom.id);
+  if (!classroom && initialClassroom && !leftClassroom) {
+    if (error) {
+      return (
+        <div className="space-y-3" role="alert">
+          <h1 className="text-xl font-semibold">教室を表示できません</h1>
+          <p className="text-sm text-red-300">{error}</p>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => {
+              setError("");
+              loadedClassroomId.current = null;
+            }}
+          >
+            再試行
+          </button>
+        </div>
+      );
+    }
     return <p className="text-sm text-[var(--muted)]" aria-live="polite">教室情報を読み込んでいます…</p>;
   }
   if (!classroom) return null;
 
   const status = classroom.classroom.contractStatus;
   const inactive = classroom.classroom.appStatus !== "active" || (status !== "active" && status !== "past_due");
+  const canViewStudentData = !inactive;
   const isStudent = classroom.role === "student";
   const teachers = members.filter((member) => member.role === "owner" || member.role === "teacher");
   const visibleMembers = classroom.role === "teacher"
@@ -281,22 +388,50 @@ export default function ClassroomView({
 
       {classroom.role === "owner" && (
         <>
+          <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+            <h2 className="font-semibold">教室設定</h2>
+            <form
+              className="mt-3 flex flex-wrap gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void updateName();
+              }}
+            >
+              <label className="min-w-[220px] flex-1 text-sm">
+                教室名
+                <input
+                  className="input mt-1"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  maxLength={120}
+                  required
+                  aria-describedby="classroom-name-help"
+                />
+              </label>
+              <span id="classroom-name-help" className="sr-only">
+                1文字以上120文字以内で入力してください。
+              </span>
+              <button type="submit" disabled={busy !== null || !name.trim()} className="button-secondary self-end">
+                {busy === "rename" ? "更新中…" : "教室名を更新"}
+              </button>
+            </form>
+          </section>
           <section className="grid gap-3 sm:grid-cols-3">
             <Metric label="請求対象の生徒" value={`${classroom.classroom.billableStudentCount}人`} />
             <Metric label="先生枠" value={`${classroom.classroom.teacherLimit}人`} />
-            <Metric label="アプリ状態" value={classroom.classroom.appStatus} />
+            <Metric label="アプリ状態" value={APP_STATUS_LABEL[classroom.classroom.appStatus] ?? "確認中"} />
           </section>
           <section className="flex flex-wrap gap-2">
-            {status === "none" || status === "canceled" ? (
-              <button disabled={busy !== null} onClick={() => void runBilling("checkout")} className="button-primary">
+            {status !== "active" && status !== "past_due" ? (
+              <button type="button" disabled={busy !== null} onClick={() => void runBilling("checkout")} className="button-primary">
                 {busy === "checkout" ? "準備中…" : "決済を開始"}
               </button>
             ) : classroom.classroom.hasBillingCustomer ? (
-              <button disabled={busy !== null} onClick={() => void runBilling("billing-portal")} className="button-secondary">
+              <button type="button" disabled={busy !== null} onClick={() => void runBilling("billing-portal")} className="button-secondary">
                 {busy === "billing-portal" ? "準備中…" : "請求情報を管理"}
               </button>
             ) : null}
-            <button disabled={busy !== null || inactive} onClick={async () => {
+            <button type="button" disabled={busy !== null} onClick={async () => {
               setBusy("reconcile");
               try { await apiJson(`/api/classrooms/${classroom.classroom.id}/reconciliation`, { method: "POST" }); setMessage("請求数を再計算しました。"); } catch (caught) { setError(caught instanceof Error ? caught.message : "再計算できませんでした。"); } finally { setBusy(null); }
             }} className="button-secondary">請求数を再計算</button>
@@ -308,50 +443,82 @@ export default function ClassroomView({
         <div className="border-b border-[var(--border)] p-4">
           <h2 className="font-semibold">{isStudent ? "先生" : "メンバー"}</h2>
         </div>
-        <div className="divide-y divide-[var(--border)]">
+        <ul className="divide-y divide-[var(--border)]">
           {(isStudent ? teachers : visibleMembers).map((member) => (
-            <div key={member.id} className="flex flex-wrap items-center gap-3 p-4">
+            <li key={member.id} className="flex flex-wrap items-center gap-3 p-4">
               <div className="min-w-0 flex-1">
                 <div className="text-sm">{member.displayName || "名前未設定"}</div>
-                <div className="text-xs text-[var(--muted)]">{member.role === "owner" ? "オーナー" : member.role === "teacher" ? "先生" : "生徒"} ・ {member.status}</div>
+                <div className="text-xs text-[var(--muted)]">
+                  {member.role === "owner" ? "オーナー" : member.role === "teacher" ? "先生" : "生徒"} ・{" "}
+                  {MEMBER_STATUS_LABEL[member.status] ?? member.status}
+                </div>
                 {member.email && <div className="text-xs text-[var(--muted)]">{member.email}</div>}
               </div>
-              {!isStudent && member.role === "student" && (
+              {!isStudent && member.role === "student" && canViewStudentData && (
                 <Link href={`/classroom/students/${encodeURIComponent(member.userId)}`} className="button-secondary">詳細を見る</Link>
               )}
               {classroom.role === "owner" && member.role !== "owner" && (
-                <button disabled={busy !== null} onClick={() => void removeMember(member.userId)} className="text-xs text-red-300 hover:underline">削除</button>
+                pendingRemoval === member.userId ? (
+                  <span className="flex items-center gap-2 text-xs">
+                    <span>除籍しますか？</span>
+                    <button
+                      type="button"
+                      disabled={busy !== null}
+                      onClick={() => void removeMember(member.userId)}
+                      className="text-red-300 hover:underline"
+                    >
+                      確定
+                    </button>
+                    <button type="button" onClick={() => setPendingRemoval(null)} className="hover:underline">
+                      キャンセル
+                    </button>
+                  </span>
+                ) : (
+                  <button type="button" disabled={busy !== null} onClick={() => setPendingRemoval(member.userId)} className="text-xs text-red-300 hover:underline">除籍</button>
+                )
               )}
-            </div>
+            </li>
           ))}
-          {(isStudent ? teachers : visibleMembers).length === 0 && <p className="p-4 text-sm text-[var(--muted)]">メンバーはいません。</p>}
-        </div>
+          {(isStudent ? teachers : visibleMembers).length === 0 && <li className="p-4 text-sm text-[var(--muted)]">メンバーはいません。</li>}
+        </ul>
       </section>
 
       {!isStudent && (
         <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
           <h2 className="font-semibold">招待</h2>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <label className="sr-only" htmlFor="invite-email">招待先メールアドレス</label>
-            <input id="invite-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="招待先メールアドレス" className="input min-w-[220px] flex-1" />
+          <div className="mt-3 flex flex-wrap items-end gap-2">
+            <label className="min-w-[220px] flex-1 text-sm" htmlFor="invite-email">
+              招待先メールアドレス
+              <input id="invite-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="input mt-1" required aria-describedby="invite-email-help" />
+            </label>
+            <span id="invite-email-help" className="sr-only">招待を送る相手のメールアドレスを入力してください。</span>
             {classroom.role === "owner" && (
-              <select aria-label="招待する役割" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as "teacher" | "student")} className="input w-auto">
+              <label className="text-sm">
+                役割
+                <select aria-label="招待する役割" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as "teacher" | "student")} className="input mt-1 w-auto">
                 <option value="student">生徒</option><option value="teacher">先生</option>
-              </select>
+                </select>
+              </label>
             )}
-            <button disabled={busy !== null || !email.trim() || inactive} onClick={() => void invite()} className="button-primary">{busy === "invite" ? "送信中…" : "招待を送る"}</button>
+            <button type="button" disabled={busy !== null || !email.trim() || !canViewStudentData} onClick={() => void invite()} className="button-primary">{busy === "invite" ? "送信中…" : "招待を送る"}</button>
           </div>
-          <div className="mt-3 space-y-2 text-xs text-[var(--muted)]">
+          {invitationError && <p className="mt-2 text-sm text-amber-200" role="status">{invitationError}</p>}
+          <ul className="mt-3 space-y-2 text-xs text-[var(--muted)]">
             {invitations.map((invitation) => (
-              <div key={invitation.id} className="flex flex-wrap items-center justify-between gap-2">
-                <span>{invitation.email}（{invitation.role === "teacher" ? "先生" : "生徒"}） ・ {invitation.status}</span>
-                <span className="flex gap-2">
-                  {invitation.status === "pending" && <button disabled={busy !== null} onClick={() => void updateInvitation(invitation.id, "resend")} className="text-violet-300 hover:underline">再送</button>}
-                  {classroom.role === "owner" && invitation.status !== "revoked" && <button disabled={busy !== null} onClick={() => void updateInvitation(invitation.id, "revoke")} className="text-red-300 hover:underline">取消</button>}
+              <li key={invitation.id} className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  {invitation.email}（{invitation.role === "teacher" ? "先生" : "生徒"}） ・{" "}
+                  {INVITATION_STATUS_LABEL[invitation.status] ?? invitation.status}
+                  {invitation.deliveryStatus === "failed" ? " ・ 配信失敗" : ""}
                 </span>
-              </div>
+                <span className="flex gap-2">
+                  {(invitation.status === "pending" || invitation.deliveryStatus === "failed") && <button type="button" disabled={busy !== null} onClick={() => void updateInvitation(invitation.id, "resend")} className="text-violet-300 hover:underline">再送</button>}
+                  {classroom.role === "owner" && invitation.status !== "revoked" && <button type="button" disabled={busy !== null} onClick={() => void updateInvitation(invitation.id, "revoke")} className="text-red-300 hover:underline">取消</button>}
+                </span>
+              </li>
             ))}
-          </div>
+            {invitations.length === 0 && <li className="text-[var(--muted)]">保留中の招待はありません。</li>}
+          </ul>
         </section>
       )}
 
@@ -360,11 +527,11 @@ export default function ClassroomView({
           <h2 className="font-semibold">教室から退出</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">退出後も自分の練習データと曲は個人利用として保持されます。</p>
           {!confirmLeave ? (
-            <button onClick={() => setConfirmLeave(true)} className="mt-3 text-sm text-red-300 hover:underline">退出する</button>
+            <button type="button" onClick={() => setConfirmLeave(true)} className="mt-3 text-sm text-red-300 hover:underline">退出する</button>
           ) : (
-            <div className="mt-3 rounded-lg border border-red-500/30 p-3" role="alert">
-              <p className="text-sm">本当に退出しますか？教室のメンバー一覧から外れます。</p>
-              <div className="mt-3 flex gap-2"><button disabled={busy !== null} onClick={() => void leave()} className="button-danger">退出を確定</button><button onClick={() => setConfirmLeave(false)} className="button-secondary">キャンセル</button></div>
+          <div className="mt-3 rounded-lg border border-red-500/30 p-3" role="alert" aria-describedby="leave-description">
+            <p id="leave-description" className="text-sm">本当に退出しますか？教室のメンバー一覧から外れます。練習データと曲は個人利用として保持されます。</p>
+            <div className="mt-3 flex gap-2"><button type="button" disabled={busy !== null} onClick={() => void leave()} className="button-danger">退出を確定</button><button type="button" onClick={() => setConfirmLeave(false)} className="button-secondary">キャンセル</button></div>
             </div>
           )}
         </section>

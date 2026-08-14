@@ -168,9 +168,9 @@ rename/deleteは行わない。lockは短いread/check/atomic rename critical se
 {
   "id": "usr_01HQ...",              // Entra のオブジェクトIDから導出
   "type": "user",
-  "displayName": "野村 大樹",
+  "displayName": "利用者の表示名",       // 例示。認証プロバイダーから同期
   "email": "...",
-  "teacherName": "白鳥ピアノ教室",   // 任意
+  "teacherName": "教室名（例）",      // 任意。教室membershipとは別の旧例示フィールド
   "settings": {
     "dailyPracticeMinutes": 30,     // 練習メニュー生成の上限
     "locale": "ja-JP",

@@ -12,10 +12,17 @@ async function loadSong(studentId: string, songId: string) {
   const account = await getAccountContextForLayout();
   const classroomId = account?.activeClassroom?.id;
   if (!classroomId) throw new NotFoundError("classroom not found");
-  await assertTeacherCanAccessStudent(classroomId, user.id, studentId, getRepository());
+  const access = await assertTeacherCanAccessStudent(classroomId, user.id, studentId, getRepository());
   const song = await getSong(songId, studentId);
   if (!song) throw new NotFoundError("song not found");
-  return { song, takes: await listTakesBySong(songId, studentId) };
+  const profile = await getRepository().getUser(studentId);
+  return {
+    classroomId: access.classroom.id,
+    classroomName: access.classroom.name,
+    studentDisplayName: profile?.displayName?.trim() || "生徒",
+    song,
+    takes: await listTakesBySong(songId, studentId),
+  };
 }
 
 export default async function ClassroomStudentSongPage({
@@ -36,7 +43,23 @@ export default async function ClassroomStudentSongPage({
       <header>
         <Link href={`/classroom/students/${encodeURIComponent(studentId)}`} className="text-xs text-violet-300 hover:underline">← 生徒の曲一覧</Link>
         <h1 className="mt-3 text-2xl font-bold">{song.title}</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">{song.composer} ・ 読み取り専用</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">{data.studentDisplayName}さん / {song.composer} ・ 読み取り専用</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <a
+            href={`/api/classrooms/${encodeURIComponent(data.classroomId)}/students/${encodeURIComponent(studentId)}/songs/${encodeURIComponent(songId)}/score?format=score`}
+            target="_blank"
+            rel="noreferrer"
+            className="button-secondary"
+          >
+            楽譜を開く
+          </a>
+          <a
+            href={`/api/classrooms/${encodeURIComponent(data.classroomId)}/students/${encodeURIComponent(studentId)}/songs/${encodeURIComponent(songId)}/score?format=midi`}
+            className="button-secondary"
+          >
+            MIDIを取得
+          </a>
+        </div>
       </header>
       <section className="grid gap-3 sm:grid-cols-3">
         <Metric label="状態" value={song.status} />
@@ -46,7 +69,23 @@ export default async function ClassroomStudentSongPage({
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">
         <h2 className="border-b border-[var(--border)] p-4 font-semibold">録音履歴</h2>
         <div className="divide-y divide-[var(--border)]">
-          {takes.map((take) => <div key={take.id} className="flex justify-between p-4 text-sm"><span>{take.label}</span><span className="text-xs text-[var(--muted)]">{take.status} ・ {take.overallScore === null ? "スコア未算出" : `${take.overallScore}点`}</span></div>)}
+          {takes.map((take) => (
+            <div key={take.id} className="space-y-2 p-4 text-sm">
+              <div className="flex flex-wrap justify-between gap-2">
+                <span>{take.label}</span>
+                <span className="text-xs text-[var(--muted)]">
+                  {take.status} ・ {take.overallScore === null ? "スコア未算出" : `${take.overallScore}点`}
+                </span>
+              </div>
+              <audio
+                controls
+                preload="none"
+                className="max-w-full"
+                src={`/api/classrooms/${encodeURIComponent(data.classroomId)}/students/${encodeURIComponent(studentId)}/takes/${encodeURIComponent(take.id)}/audio`}
+                aria-label={`${take.label}の録音`}
+              />
+            </div>
+          ))}
           {takes.length === 0 && <p className="p-4 text-sm text-[var(--muted)]">録音はありません。</p>}
         </div>
       </section>

@@ -359,6 +359,7 @@ function safeInvitation(invitation: ClassroomInvitationDoc): Record<string, unkn
     acceptOperationVersion,
     claimedByUserId,
     claimedAt,
+    deliveryError,
     ...publicInvitation
   } = invitation;
   void tokenHash;
@@ -366,6 +367,7 @@ function safeInvitation(invitation: ClassroomInvitationDoc): Record<string, unkn
   void acceptOperationVersion;
   void claimedByUserId;
   void claimedAt;
+  void deliveryError;
   return publicInvitation;
 }
 

@@ -14,8 +14,10 @@ async function loadStudent(studentId: string) {
   if (!classroomId) throw new NotFoundError("classroom not found");
   const access = await assertTeacherCanAccessStudent(classroomId, user.id, studentId, getRepository());
   const songs = await listSongs(studentId);
+  const profile = await getRepository().getUser(studentId);
   return {
     classroomName: access.classroom.name,
+    studentDisplayName: profile?.displayName?.trim() || "生徒",
     songs,
     summaries: await listSongTakeSummaries(songs.map((song) => song.id), studentId),
   };
@@ -37,7 +39,7 @@ export default async function ClassroomStudentPage({
     <div className="space-y-5">
       <header>
         <p className="text-xs text-[var(--muted)]">{data.classroomName} / 生徒</p>
-        <h1 className="text-2xl font-bold">生徒の練習状況</h1>
+        <h1 className="text-2xl font-bold">{data.studentDisplayName}さんの練習状況</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">この画面は読み取り専用です。</p>
       </header>
       <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)]">

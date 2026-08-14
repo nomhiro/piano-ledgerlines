@@ -54,3 +54,21 @@ test("classroom context uses provider display name and role", () => {
   assert.equal(context.activeClassroom?.role, "teacher");
   assert.equal(context.contractStatus, "past_due");
 });
+
+test("inactive classroom remains visible for owner billing recovery", () => {
+  const classroom: ClassroomDoc = {
+    id: "classroom_inactive", type: "classroom", name: "停止中の教室", ownerUserId: user.id,
+    teacherLimit: 5, billableStudentCount: 0,
+    billing: { stripeCustomerId: "cus_test", stripeSubscriptionId: null, status: "canceled" },
+    appStatus: "suspended", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const member: ClassroomMemberDoc = {
+    id: "classroom_inactive:google:user", type: "classroom-member", classroomId: classroom.id,
+    userId: user.id, role: "owner", status: "active",
+    createdAt: classroom.createdAt, updatedAt: classroom.updatedAt,
+  };
+  const context = buildAccountContext(user, profile(), [classroom], [member]);
+  assert.equal(context.mode, "classroom");
+  assert.equal(context.activeClassroom?.role, "owner");
+  assert.equal(context.permissions.canManageBilling, true);
+});

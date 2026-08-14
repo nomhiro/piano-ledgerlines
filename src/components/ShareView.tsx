@@ -109,10 +109,11 @@ export default function ShareView({
             <div className="p-5">
               <div className="flex flex-wrap gap-2">
                 <div className="flex min-w-[240px] flex-1 items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-2.5">
-                  <Link2 size={15} className="shrink-0 text-[var(--muted)]" />
+                  <Link2 size={15} className="shrink-0 text-[var(--muted)]" aria-hidden="true" />
                   <span className="truncate text-xs">{shareUrl}</span>
                 </div>
                 <button
+                  type="button"
                   onClick={() => {
                     navigator.clipboard?.writeText(shareUrl);
                     setCopied(true);
@@ -120,7 +121,7 @@ export default function ShareView({
                   }}
                   className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 py-2.5 text-sm font-medium text-white hover:bg-violet-500"
                 >
-                  {copied ? <Check size={15} /> : <Copy size={15} />}
+                  {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
                   {copied ? "コピーしました" : "コピー"}
                 </button>
               </div>
@@ -137,7 +138,7 @@ export default function ShareView({
                     className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3.5 py-2.5 text-xs"
                   >
                     <span className="flex items-center gap-2">
-                      <Eye size={13} className="text-[var(--muted)]" />
+                      <Eye size={13} className="text-[var(--muted)]" aria-hidden="true" />
                       {s}
                     </span>
                     <input type="checkbox" defaultChecked className="h-4 w-4 accent-violet-500" />
@@ -147,12 +148,14 @@ export default function ShareView({
 
               <div className="mt-4 flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
                 <div className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-500/20 text-cyan-300">
-                  <Users size={16} />
+                  <Users size={16} aria-hidden="true" />
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm">{teacherDisplayName?.trim() || "共有先の先生"}</div>
+                  <div className="text-sm">
+                    {teacherDisplayName?.trim() || (classroomName?.trim() ? "共有先の先生" : "共有先未設定")}
+                  </div>
                   <div className="text-[11px] text-[var(--muted)]">
-                    {classroomName?.trim() || "教室未設定"} ・ 共有設定を確認してください
+                    {classroomName?.trim() || "個人利用"} ・ 共有設定を確認してください
                   </div>
                 </div>
                 <Badge color="#22c55e">閲覧済み</Badge>
@@ -207,34 +210,42 @@ export default function ShareView({
             <div className="border-t border-[var(--border)] p-4">
               <div className="mb-2 flex items-center gap-2">
                 <MessageSquare size={13} className="text-[var(--muted)]" />
-                <select
-                  value={pinned}
-                  onChange={(e) =>
-                    setPinned(e.target.value === "" ? "" : Number(e.target.value))
-                  }
-                  className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-[11px]"
-                >
-                  <option value="">小節を指定しない</option>
-                  {latest.measureScores.map((m) => (
-                    <option key={m.measure} value={m.measure}>
-                      {m.measure} 小節
-                    </option>
-                  ))}
-                </select>
+                <label className="text-[11px] text-[var(--muted)]">
+                  コメントの小節
+                  <select
+                    value={pinned}
+                    onChange={(e) =>
+                      setPinned(e.target.value === "" ? "" : Number(e.target.value))
+                    }
+                    className="ml-2 rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-[11px] text-[var(--foreground)]"
+                  >
+                    <option value="">小節を指定しない</option>
+                    {latest.measureScores.map((m) => (
+                      <option key={m.measure} value={m.measure}>
+                        {m.measure} 小節
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               <div className="flex gap-2">
-                <input
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && post()}
-                  placeholder="先生にメッセージを送る"
-                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs outline-none"
-                />
+                <label className="min-w-0 flex-1 text-xs">
+                  先生へのメッセージ
+                  <input
+                    value={body}
+                    onChange={(e) => setBody(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && post()}
+                    placeholder="メッセージを入力"
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-xs outline-none"
+                  />
+                </label>
                 <button
+                  type="button"
+                  aria-label="メッセージを送信"
                   onClick={post}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white hover:bg-violet-500"
+                  className="flex h-9 w-9 items-center justify-center self-end rounded-lg bg-violet-600 text-white hover:bg-violet-500"
                 >
-                  <Send size={15} />
+                  <Send size={15} aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -269,7 +280,7 @@ export default function ShareView({
                       >
                         {a.title}
                       </span>
-                      <button onClick={() => cycleStatus(a.id)}>
+                      <button type="button" onClick={() => cycleStatus(a.id)} aria-label={`${a.title}の状態を変更`}>
                         <Badge color={meta.color}>{meta.label}</Badge>
                       </button>
                     </div>

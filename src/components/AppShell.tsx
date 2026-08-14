@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AccountContext } from "@/lib/server/account";
-import { getAvatarLabel } from "@/lib/account-view-model";
+import { getAvatarLabel, safeAccountDisplayName } from "@/lib/account-view-model";
 
 const NAV = [
   { href: "/", label: "ダッシュボード", icon: LayoutDashboard, exact: true },
@@ -34,9 +34,23 @@ export default function AppShell({
   account: AccountContext | null;
 }) {
   const pathname = usePathname();
-  const initials = account ? getAvatarLabel(account.profile.displayName, account.profile.email) : "LL";
+  const displayName = account
+    ? safeAccountDisplayName(account.profile.displayName, account.profile.email)
+    : "";
+  const initials = account ? getAvatarLabel(displayName, account.profile.email) : "LL";
   const classroomName =
     account?.mode === "classroom" ? account.activeClassroom?.name : undefined;
+  const classroomRole =
+    account?.mode === "classroom" ? account.activeClassroom?.role : undefined;
+  const accountContextLabel = classroomName
+    ? `${classroomName} ・ ${
+        classroomRole === "owner"
+          ? "オーナー"
+          : classroomRole === "teacher"
+            ? "先生"
+            : "生徒"
+      }`
+    : "個人利用";
   const nav = account?.mode === "classroom" ? [...NAV, CLASSROOM_NAV] : NAV;
 
   return (
@@ -68,7 +82,7 @@ export default function AppShell({
                     : "text-[var(--muted)] hover:bg-[var(--surface-2)] hover:text-[var(--foreground)]"
                 }`}
               >
-                <Icon size={16} />
+                <Icon size={16} aria-hidden="true" />
                 {item.label}
               </Link>
             );
@@ -80,7 +94,7 @@ export default function AppShell({
             href="/songs/new"
             className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-[13px] text-[var(--muted)] transition-colors hover:text-[var(--foreground)]"
           >
-            <Plus size={15} />
+            <Plus size={15} aria-hidden="true" />
             曲を追加
           </Link>
           <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-2">
@@ -90,15 +104,23 @@ export default function AppShell({
             <div className="leading-tight">
               {account ? (
                 <>
-                  <div className="text-xs">{account.profile.displayName}</div>
+                  <div className="max-w-[160px] truncate text-xs">{displayName}</div>
                   <div className="max-w-[160px] truncate text-[10px] text-[var(--muted)]">{account.profile.email}</div>
                 </>
               ) : (
                 <div className="text-xs text-[var(--muted)]">ログインが必要です</div>
               )}
               <div className="text-[10px] text-[var(--muted)]">
-                {classroomName ?? "個人利用"}
+                {accountContextLabel}
               </div>
+              {account && (
+                <a
+                  href="/.auth/logout?post_logout_redirect_uri=%2F"
+                  className="mt-1 inline-block text-[10px] text-violet-300 hover:underline"
+                >
+                  ログアウト
+                </a>
+              )}
             </div>
           </div>
         </div>
@@ -106,8 +128,23 @@ export default function AppShell({
 
       <div className="min-w-0 flex-1">
         <header className="flex items-center gap-3 border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3 md:hidden">
-          <Music4 size={18} className="text-violet-400" />
-          <span className="text-sm font-bold">Ledger Lines</span>
+          <Music4 size={18} className="text-violet-400" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-sm font-bold">Ledger Lines</span>
+          {account && (
+            <div className="min-w-0 text-right leading-tight">
+              <div className="max-w-[160px] truncate text-xs">{displayName}</div>
+              <div className="max-w-[160px] truncate text-[10px] text-[var(--muted)]">{account.profile.email}</div>
+              <div className="max-w-[160px] truncate text-[10px] text-[var(--muted)]">
+                {accountContextLabel}
+              </div>
+              <a
+                href="/.auth/logout?post_logout_redirect_uri=%2F"
+                className="text-[10px] text-violet-300 hover:underline"
+              >
+                ログアウト
+              </a>
+            </div>
+          )}
         </header>
         <nav className="flex gap-1 overflow-x-auto border-b border-[var(--border)] bg-[var(--surface)] px-2 py-2 md:hidden">
           {nav.map((item) => (
