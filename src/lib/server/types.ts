@@ -219,6 +219,8 @@ export interface ClassroomInvitationReservationDoc {
   generation: number;
   deliveryOwnerToken?: string | null;
   deliveryLeaseExpiresAt?: string | null;
+  deliverySourceGeneration?: number | null;
+  deliverySourceVersion?: string | null;
   createdAt: string;
   leaseExpiresAt: string;
 }

@@ -656,3 +656,22 @@ test("delivery lease fences revoke and resend while the sender is paused", async
   await creating;
   assert.equal(sender.messages.length, 1);
 });
+
+test("concurrent resend leases produce one monotonic generation", async () => {
+  const repository = new LocalRepository();
+  const owner = googleUser(`owner-${Date.now()}`, `owner-${Date.now()}@example.com`);
+  const classroom = await activeClassroom(repository, owner);
+  const sender = new InMemoryEmailSender();
+  const email = `resend-race-${Date.now()}@example.com`;
+  const created = await createClassroomInvitation(classroom.id, owner, { email, role: "teacher" }, repository, sender);
+  const invitationId = (await repository.listClassroomInvitations(classroom.id))[0].id;
+  const results = await Promise.allSettled([
+    resendClassroomInvitation(classroom.id, invitationId, owner.id, repository, sender),
+    resendClassroomInvitation(classroom.id, invitationId, owner.id, repository, sender),
+  ]);
+  const successCount = results.filter((result) => result.status === "fulfilled").length;
+  assert.ok(successCount === 1 || successCount === 2);
+  const current = await repository.getClassroomInvitation(classroom.id, invitationId);
+  assert.equal(current?.generation, (created.invitation as { generation?: number }).generation! + successCount);
+  assert.equal(sender.messages.length, 1 + successCount);
+});
