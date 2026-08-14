@@ -213,10 +213,12 @@ export interface ClassroomInvitationReservationDoc {
   invitationId: string;
   role: Exclude<ClassroomRole, "owner">;
   emailRoleFingerprint: string;
-  state: "creating" | "committing" | "linked" | "pending" | "accepting";
+  state: "creating" | "committing" | "linked" | "pending" | "accepting" | "sending" | "resending";
   ownerToken: string;
   version: string;
   generation: number;
+  deliveryOwnerToken?: string | null;
+  deliveryLeaseExpiresAt?: string | null;
   createdAt: string;
   leaseExpiresAt: string;
 }

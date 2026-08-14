@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:production": "tsx --test scripts/production-check.ts",
-    "test:classroom": "tsx --test src/lib/server/classroom-invitations.test.ts src/app/classroom-invitations/accept/invitation-client.test.ts",
+    "test:classroom": "tsx --test --test-concurrency=1 src/lib/server/classroom-invitations.test.ts src/app/classroom-invitations/accept/invitation-client.test.ts",
     "test:infra": "tsx --test infra/acs-email-identity.test.ts",
     "azure:up": "docker compose -f docker-compose.azure-local.yml up -d",
     "azure:down": "docker compose -f docker-compose.azure-local.yml down",

@@ -224,11 +224,33 @@ class PausingCreatingReservationRepository extends LocalRepository {
         this.releaseRead = resolve;
       });
     }
+
     return record;
   }
 
   releaseCreatingRead(): void {
     this.releaseRead?.();
+  }
+}
+
+class BlockingEmailSender {
+  readonly messages: unknown[] = [];
+  private releaseSend: (() => void) | null = null;
+  private markEntered: (() => void) | null = null;
+  readonly sendStarted = new Promise<void>((resolve) => {
+    this.markEntered = resolve;
+  });
+
+  async send(message: unknown): Promise<void> {
+    this.messages.push(message);
+    this.markEntered?.();
+    await new Promise<void>((resolve) => {
+      this.releaseSend = resolve;
+    });
+  }
+
+  release(): void {
+    this.releaseSend?.();
   }
 }
 
@@ -610,4 +632,27 @@ test("reconciliation finalizes linked preparation without changing its generatio
   const finalized = await repository.getClassroomInvitation(classroom.id, invitationId);
   assert.equal(finalized?.status, "pending");
   assert.equal(finalized?.generation, preparing.generation);
+});
+
+test("delivery lease fences revoke and resend while the sender is paused", async () => {
+  const repository = new LocalRepository();
+  const owner = googleUser(`owner-${Date.now()}`, `owner-${Date.now()}@example.com`);
+  const classroom = await activeClassroom(repository, owner);
+  const sender = new BlockingEmailSender();
+  const email = `delivery-${Date.now()}@example.com`;
+  const creating = createClassroomInvitation(classroom.id, owner, { email, role: "teacher" }, repository, sender);
+  await sender.sendStarted;
+  const invitation = (await repository.listClassroomInvitations(classroom.id))[0];
+  assert.ok(invitation);
+  await assert.rejects(
+    resendClassroomInvitation(classroom.id, invitation.id, owner.id, repository, sender),
+    /delivery is already in progress|lifecycle operation/,
+  );
+  await assert.rejects(
+    revokeClassroomInvitation(classroom.id, invitation.id, owner.id, repository),
+    /delivery is already in progress/,
+  );
+  sender.release();
+  await creating;
+  assert.equal(sender.messages.length, 1);
 });
