@@ -128,7 +128,8 @@ delivery status、送信・再送時刻を持ち、平文tokenは保存しない
 token fingerprint、claim時刻をfenceとして保存する。`accepting` 中は再送・取消・期限切れ
 を許可せず、同じuser/tokenだけが再開できる。教室の
 `invitationReservations` は email/role fingerprintをkeyにしたstructured reservation ledgerで、
-creating/pending/acceptingの状態、invitationId、作成時刻、短いcreation lease期限を持つ。
+creating/committing/pending/acceptingの状態、invitationId、owner token、version、作成時刻、
+短いcreation lease期限を持つ。
 `reservedTeacherSeatCount` は active/provisioning teacher と有効なteacher reservationを
 reconciliationで再計算する。旧 `pendingInvitationKeys` は読み取りせず、migration時に安全に
 削除する。

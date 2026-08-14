@@ -197,7 +197,35 @@ class CrashOnceMemberRepository extends LocalRepository {
       this.failNextProvisioningRead = false;
       throw new Error("simulated crash after invitation claim");
     }
+
     return record;
+  }
+}
+
+class PausingCreatingReservationRepository extends LocalRepository {
+  private pauseNextCreatingRead = true;
+  private releaseRead: (() => void) | null = null;
+  private markEntered: (() => void) | null = null;
+  readonly creatingReadStarted = new Promise<void>((resolve) => {
+    this.markEntered = resolve;
+  });
+
+  async getClassroomRecord(classroomId: string) {
+    const record = await super.getClassroomRecord(classroomId);
+    const hasCreating = Object.values(record?.document.invitationReservations ?? {})
+      .some((reservation) => reservation.state === "creating");
+    if (this.pauseNextCreatingRead && hasCreating) {
+      this.pauseNextCreatingRead = false;
+      this.markEntered?.();
+      await new Promise<void>((resolve) => {
+        this.releaseRead = resolve;
+      });
+    }
+    return record;
+  }
+
+  releaseCreatingRead(): void {
+    this.releaseRead?.();
   }
 }
 
@@ -471,6 +499,8 @@ test("creating reservation protects a missing invitation until its lease expires
         role: "teacher",
         emailRoleFingerprint: key,
         state: "creating",
+        ownerToken: "test-owner",
+        version: "test-version",
         createdAt: new Date(nowValue).toISOString(),
         leaseExpiresAt: new Date(nowValue + 60_000).toISOString(),
       },
@@ -501,4 +531,50 @@ test("creating reservation protects a missing invitation until its lease expires
   );
   assert.ok(created.invitationUrl);
   assert.equal(Object.keys((await repository.getClassroom(classroom.id))?.invitationReservations ?? {}).length, 1);
+});
+
+test("expired creator loses ownership to replacement and cannot send an orphan invite", async () => {
+  const repository = new PausingCreatingReservationRepository();
+  const replacementRepository = new LocalRepository();
+  const owner = googleUser(`owner-${Date.now()}`, `owner-${Date.now()}@example.com`);
+  const classroom = await activeClassroom(repository, owner);
+  const email = `barrier-${Date.now()}@example.com`;
+  const oldSender = new InMemoryEmailSender();
+  const replacementSender = new InMemoryEmailSender();
+  const oldCreate = createClassroomInvitation(
+    classroom.id,
+    owner,
+    { email, role: "teacher" },
+    repository,
+    oldSender,
+  );
+  await repository.creatingReadStarted;
+  const current = await replacementRepository.getClassroomRecord(classroom.id);
+  assert.ok(current?.etag);
+  const reservationEntry = Object.entries(current.document.invitationReservations ?? {})[0];
+  assert.ok(reservationEntry);
+  const [reservationKeyValue, reservation] = reservationEntry;
+  await replacementRepository.upsertClassroom({
+    ...current.document,
+    invitationReservations: {
+      [reservationKeyValue]: {
+        ...reservation,
+        leaseExpiresAt: new Date(Date.now() - 1).toISOString(),
+      },
+    },
+  }, { ifMatch: current.etag });
+  await createClassroomInvitation(
+    classroom.id,
+    owner,
+    { email, role: "teacher" },
+    replacementRepository,
+    replacementSender,
+  );
+  repository.releaseCreatingRead();
+  await assert.rejects(oldCreate, /ownership|reservation/);
+  assert.equal(oldSender.messages.length, 0);
+  assert.equal(replacementSender.messages.length, 1);
+  assert.equal((await replacementRepository.listClassroomInvitations(classroom.id))
+    .filter((invitation) => invitation.normalizedEmail === email).length, 1);
+  assert.equal(Object.keys((await replacementRepository.getClassroom(classroom.id))?.invitationReservations ?? {}).length, 1);
 });
