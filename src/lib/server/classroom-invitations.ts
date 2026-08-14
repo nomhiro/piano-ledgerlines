@@ -1001,6 +1001,7 @@ export async function createClassroomInvitation(
     tokenVersion: TOKEN_VERSION,
     generation,
     reservationVersion,
+    reservationOwnerToken,
     expiresAt,
     createdByUserId: inviter.id,
     acceptedByUserId: null,
@@ -1129,18 +1130,16 @@ async function releasePendingReservation(
 async function releaseInvitationReservation(
   invitation: ClassroomInvitationDoc,
   repository: Repository,
+  expectedOwnerToken: string,
+  expectedVersion: string,
+  expectedGeneration: number,
 ): Promise<void> {
-  const classroom = await repository.getClassroom(invitation.classroomId);
-  const reservation = classroom?.invitationReservations?.[
-    invitationReservationKey(invitation.normalizedEmail, invitation.role)
-  ];
-  if (!reservation || reservation.invitationId !== invitation.id) return;
   await releasePendingReservation(
     invitation,
     repository,
-    reservation.ownerToken,
-    reservation.version,
-    reservation.generation,
+    expectedOwnerToken,
+    expectedVersion,
+    expectedGeneration,
   );
 }
 
@@ -1156,12 +1155,24 @@ async function fenceAcceptingInvitationsForMember(
       if (current.status !== "accepting" || current.claimedByUserId !== userId) return current;
       return { ...current, status: "revoked", updatedAt: now().toISOString() };
     }, repository);
-    if (revoked.status === "revoked") await releaseInvitationReservation(revoked, repository);
+    if (revoked.status === "revoked") await releaseInvitationReservation(
+      revoked,
+      repository,
+      revoked.reservationOwnerToken ?? "",
+      revoked.reservationVersion ?? "",
+      revoked.generation ?? 0,
+    );
   }
 }
 
 async function acceptPendingReservation(invitation: ClassroomInvitationDoc, repository: Repository): Promise<void> {
-  await releaseInvitationReservation(invitation, repository);
+  await releaseInvitationReservation(
+    invitation,
+    repository,
+    invitation.reservationOwnerToken ?? "",
+    invitation.reservationVersion ?? "",
+    invitation.generation ?? 0,
+  );
 }
 
 export async function listClassroomInvitations(
@@ -1277,6 +1288,7 @@ async function rotateResendInvitation(
       tokenVersion: TOKEN_VERSION,
       generation: (current.generation ?? 0) + 1,
       reservationVersion,
+      reservationOwnerToken: current.reservationOwnerToken,
       expiresAt: new Date(now().getTime() + invitationTtlMs()).toISOString(),
       resentAt: now().toISOString(),
       deliveryStatus: "pending",
@@ -1362,7 +1374,13 @@ async function expireInvitation(invitation: ClassroomInvitationDoc, repository: 
     if (current.status !== "pending" || (current.expiresAt && current.expiresAt > now().toISOString())) return current;
     return { ...current, status: "expired", tokenHash: current.tokenHash, updatedAt: now().toISOString() };
   }, repository);
-  if (changed.status === "expired") await releaseInvitationReservation(changed, repository);
+  if (changed.status === "expired") await releaseInvitationReservation(
+    changed,
+    repository,
+    changed.reservationOwnerToken ?? "",
+    changed.reservationVersion ?? "",
+    changed.generation ?? 0,
+  );
   return changed;
 }
 
@@ -1384,7 +1402,13 @@ export async function revokeClassroomInvitation(
     }
     return { ...current, status: "revoked", updatedAt: now().toISOString() };
   }, repository);
-  if (revoked.status === "revoked") await releaseInvitationReservation(revoked, repository);
+  if (revoked.status === "revoked") await releaseInvitationReservation(
+    revoked,
+    repository,
+    revoked.reservationOwnerToken ?? "",
+    revoked.reservationVersion ?? "",
+    revoked.generation ?? 0,
+  );
 }
 
 async function ensureMemberProvisioning(

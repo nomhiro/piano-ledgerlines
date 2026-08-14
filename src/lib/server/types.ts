@@ -281,6 +281,7 @@ export interface ClassroomInvitationDoc {
   tokenVersion?: number;
   generation?: number;
   reservationVersion?: string | null;
+  reservationOwnerToken?: string | null;
   expiresAt: string | null;
   createdByUserId: string;
   acceptedByUserId?: string | null;
