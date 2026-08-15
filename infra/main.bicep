@@ -247,6 +247,9 @@ module communicationEmail './modules/communication-email.bicep' = {
 
 module rbac './modules/rbac.bicep' = {
   name: '${environmentName}-rbac'
+  dependsOn: [
+    communicationEmail
+  ]
   params: {
     storageAccountName: storage.outputs.name
     cosmosAccountName: cosmos.outputs.accountName
