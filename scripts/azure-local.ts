@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 import fs from "node:fs";
 import https from "node:https";
 import net from "node:net";
@@ -40,12 +41,39 @@ async function checkHttp(url: string): Promise<void> {
   });
 }
 
+const execFileAsync = promisify(execFile);
+
+// Next.js自体はワーカーに直接接続しない（Queue経由のみ）ため、ワーカーが
+// 落ちていても起動をブロックする理由はない。ただし
+// LEDGERLINES_DETERMINISTIC_ANALYSIS=false（既定）でワーカーコンテナが
+// 動いていない場合、投入したテイクがQueueに残ったまま誰にも消費されず
+// `queued` で固まる。ここでは警告のみ出す（`docker`未インストール等でも
+// health自体は失敗させない）。
+async function checkWorkerContainer(): Promise<void> {
+  if (process.env.LEDGERLINES_DETERMINISTIC_ANALYSIS === "true") return;
+  try {
+    const { stdout } = await execFileAsync("docker", [
+      "compose", "-f", "docker-compose.azure-local.yml", "ps", "--status", "running", "--services",
+    ]);
+    if (!stdout.split(/\r?\n/).map((line) => line.trim()).includes("worker")) {
+      console.warn(
+        "警告: workerコンテナが起動していません。LEDGERLINES_DETERMINISTIC_ANALYSIS=false のままだと" +
+        "解析ジョブを消費する者がおらず`queued`で止まります。`npm run azure:up`でworkerも起動してください" +
+        "（または一時的に`LEDGERLINES_DETERMINISTIC_ANALYSIS=true`に戻す）。"
+      );
+    }
+  } catch {
+    console.warn("警告: workerコンテナの起動状態を確認できませんでした（dockerが見つからない可能性があります）。");
+  }
+}
+
 async function health(): Promise<void> {
   await checkPort("127.0.0.1", 10000);
   await checkPort("127.0.0.1", 10001);
   await checkPort("127.0.0.1", 8080);
   await checkHttp(process.env.AZURE_COSMOS_ENDPOINT ?? "https://localhost:8081");
   console.log("Azurite and Cosmos emulator are reachable.");
+  await checkWorkerContainer();
 }
 
 async function init(): Promise<void> {

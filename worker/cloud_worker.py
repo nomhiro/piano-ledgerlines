@@ -34,16 +34,42 @@ def required(name: str) -> str:
 
 class CloudStore:
     def __init__(self) -> None:
-        credential = DefaultAzureCredential()
-        self.account_url = required("AZURE_STORAGE_ACCOUNT_URL").rstrip("/")
-        self.queue_url = os.environ.get("AZURE_STORAGE_QUEUE_URL", self.account_url.replace(".blob.", ".queue.")).rstrip("/")
-        self.storage = BlobServiceClient(self.account_url, credential)
-        self.queue = QueueClient(
-            account_url=self.queue_url,
-            queue_name=required("AZURE_ANALYSIS_QUEUE"),
-            credential=credential,
-        )
-        cosmos = CosmosClient(required("AZURE_COSMOS_ENDPOINT"), credential)
+        # TypeScript側 (src/lib/server/config.ts の `azureEmulator`) と同じフラグ・
+        # 同じ判定式を使う。本番パス（下のelse節）はこのフラグが立っていない限り、
+        # DefaultAzureCredentialと通常のTLS検証のまま従来どおり動く。
+        emulator = os.environ.get("LEDGERLINES_AZURE_EMULATOR", "").strip() == "true"
+        if emulator:
+            # Azurite/Cosmosエミュレータは接続文字列・固定キーで認証する
+            # （DefaultAzureCredentialは使えない）。TS側の対応箇所:
+            # blob-storage.ts:104-106 (BlobServiceClient.fromConnectionString)、
+            # queue.ts:36-37 (QueueServiceClient.fromConnectionString)。
+            connection_string = required("AZURE_STORAGE_CONNECTION_STRING")
+            self.storage = BlobServiceClient.from_connection_string(connection_string)
+            self.queue = QueueClient.from_connection_string(
+                connection_string,
+                required("AZURE_ANALYSIS_QUEUE"),
+            )
+            cosmos = CosmosClient(
+                required("AZURE_COSMOS_ENDPOINT"),
+                credential=required("AZURE_COSMOS_KEY"),
+                # Cosmosエミュレータはlocalhost向けの自己署名証明書で応答する。
+                # コンテナネットワーク越しに別ホスト名（例: `cosmos`）で接続すると
+                # ホスト名検証に失敗するため、エミュレータ限定でTLS検証を無効化する。
+                # TS側の対応箇所: cosmos-repository.ts:65-77
+                # （`rejectUnauthorized: false` の https.Agent）と同じ理由・同じ範囲。
+                connection_verify=False,
+            )
+        else:
+            credential = DefaultAzureCredential()
+            self.account_url = required("AZURE_STORAGE_ACCOUNT_URL").rstrip("/")
+            self.queue_url = os.environ.get("AZURE_STORAGE_QUEUE_URL", self.account_url.replace(".blob.", ".queue.")).rstrip("/")
+            self.storage = BlobServiceClient(self.account_url, credential)
+            self.queue = QueueClient(
+                account_url=self.queue_url,
+                queue_name=required("AZURE_ANALYSIS_QUEUE"),
+                credential=credential,
+            )
+            cosmos = CosmosClient(required("AZURE_COSMOS_ENDPOINT"), credential)
         database = cosmos.get_database_client(os.environ.get("AZURE_COSMOS_DATABASE", "ledgerlines"))
         self.takes = database.get_container_client(os.environ.get("AZURE_COSMOS_TAKES_CONTAINER", "takes"))
         self.audio = self.storage.get_container_client(os.environ.get("AZURE_STORAGE_AUDIO_CONTAINER", "audio"))
