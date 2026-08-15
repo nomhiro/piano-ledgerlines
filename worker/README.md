@@ -146,8 +146,11 @@ practice-plan/me/dashboard 等、後続フェーズ）。
 進捗グラフ、AIコーチ、共有、曲/テイク詳細等）を動かしており、実APIより遥かに
 リッチなスキーマ（`period`/`accent`/`difficulty`/`goalDate`/`sharedWithTeacher`、
 非nullの`aiReview`、ピアノロール、テンポ/強弱カーブ、講師コメント等）に依存している。
-縦串フェーズではこれらを全て実データに置き換えるのではなく、**書き込み経路のみ**を
-実APIに接続した。
+縦串フェーズではこれらを全て実データに置き換えるのではなく、書き込み経路（曲登録・録音・
+解析投入）を実APIに接続し、**読み取り側は「実データを表示できる画面」だけをモック
+コンポーネントから切り離した**。切り離しの基準は、モック側の型が`null`（判定保留／測定対象外）を
+表現できるかどうかである ── 表現できない画面はモックのまま据え置いてある。
+以下は画面ごとの現状で、実データが通る／通らないの境界そのものである。
 
 - `src/app/songs/new/page.tsx`: 実際に`POST /api/songs`→`POST /api/songs/{id}/score`
   を呼び出し、本物のMusicXML解析結果（小節数・拍子・調・警告）を表示する。
@@ -158,11 +161,41 @@ practice-plan/me/dashboard 等、後続フェーズ）。
   `POST /api/takes/{id}/submit`→SSE購読（`GET /api/takes/{id}/events`）という
   実フローを通す。モックの曲IDが渡された場合は従来通り疑似シミュレーションのまま。
 - `src/app/takes/real/[takeId]/page.tsx`: 実テイクの結果専用の新規最小ビュー。
-  `GET /api/takes/{id}`のレスポンス（総合スコア・5指標・小節スコア・issues）を
-  そのまま表示する。既存のモック専用`takes/[id]/page.tsx`（ピアノロール・カーブ・
+  `GET /api/takes/{id}`のレスポンス（5指標・小節スコア・issues）を
+  `src/components/TakeEvaluationPanel.tsx`で表示する。指標は値があれば数値バー、
+  無ければ status（判定保留／測定対象外）と保存済みの理由文を出す。
+  **総合スコア欄は現状つねに「判定保留」＋理由文**になる ── 「既知の制約」節の
+  指標別ポリシーのとおり、`pitch`が`withheld`である限り`overallScore`は`null`のままである。
+  既存のモック専用`takes/[id]/page.tsx`（ピアノロール・カーブ・
   AIコーチ講評込みの詳細画面）とは別ルートとして共存させている。
-- ダッシュボード・進捗・コーチ・共有は**意図的に据え置き**（モックデータのまま）。
-  実スキーマがこれらの機能をまだ満たせないため、フル書き換えは後続フェーズの
-  スコープとする。
+- `src/app/progress/page.tsx` と `src/app/share/page.tsx`: 実曲（`song_`で始まるID）を
+  選んだ場合は`ProgressView` / `ShareView`ではなく`TakeEvaluationPanel`を描画する
+  （テイク詳細と同じ正直な評価ビュー）。モックの曲IDを選んだ場合は従来どおり
+  `ProgressView`のまま。理由は型である: モックの`Take.overallScore`は非nullの`number`、
+  `Take.metrics`と`MeasureScore.metrics`は非nullの`Record<MetricKey, number>`（`src/lib/mock/types.ts`）で、
+  `unavailable`／`withheld`を表現できない。実データをそのまま流すと数値を捏造することになる。
+  - **代償**: 実曲では`/progress`のスコア推移グラフとテイクA/B比較が出なくなった。
+    どちらも数値の`overallScore`に対する引き算・`toFixed`を前提としており、
+    `pitch`が`withheld`である間`overallScore`は`null`だからである。
+    テイクは新しい順の一覧として、各テイクの絶対値のみを表示する。
+  - 解析方式（`analysis.pipelineVersion`）が異なるテイクが同一リストに混在する場合は、
+    「テイク間の差は上達を意味しません」という注記を出す
+    （calibration-runbook.md の「異なるversion間の差分を改善量として表示しない」規定）。
+- `src/app/coach/page.tsx`: 実曲でも`CoachView`を使い続けるが、渡すテイクは
+  `real-history.ts`の`toCoachTake`が作る`id` / `label` / `recordedAt` / `aiReview`の
+  4フィールドのみで、スコア系のフィールドを一切含まない（`stagnant`も`[]`固定）。
+- ダッシュボード（`src/app/page.tsx`）は**モック専用のまま**で、実データは通らない
+  （`@/lib/mock/data`からのみimportしている）。スコアを`?? 0`で埋める箇所が残るが、
+  到達するのはモックデータだけである。
 - `songs/page.tsx` と `songs/[id]/page.tsx` は実曲を表示し、実テイクへの導線を提供する。
+  実曲側は`overallScore`が`null`なら「未算出」と出す。同じ`songs/page.tsx`の下部にある
+  モック曲セクションは引き続きモック専用（そちらは`?? 0`のまま）。
   `takes/[id]` は `take_` IDを `/takes/real/[takeId]` へリダイレクトする。
+- 実データ画面から外したPoV版の共有UIについて（`src/components/ShareView.tsx`。
+  この節を書いた時点で参照元は無い）: 固定文字列の共有URLとコピーボタン、
+  送信先を持たない公開範囲チェックボックス、固定の「閲覧済み」バッジ、
+  `useState`のみでリロードすると消えるレッスンノートと課題リスト、
+  そしてスコア表示で構成されていた。バックエンドを持たない飾りか、
+  非nullスコアを要求する部分（＝上記の型の理由で実データを流せない部分）のいずれかであり、
+  唯一の実機能だった曲セレクタは`/share`側に直接置き直してある。
+  この経緯を踏まえずに「共有画面は実装済み」と読まないこと。
