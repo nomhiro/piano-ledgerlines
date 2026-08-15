@@ -1,7 +1,14 @@
 services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:3.35.0
-    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --loose
+    # `--skipApiVersionCheck` が無いと `npm run azure:init` が失敗する。Node側の
+    # Storage SDK（@azure/storage-blob / storage-queue）が送る x-ms-version が
+    # azurite 3.35.0 の対応範囲より新しく、Azuriteが
+    # 「The API version 2026-06-06 is not supported by Azurite」で拒否するため
+    # （実機で確認済み）。Azurite自身がこのフラグを回避手段として案内している。
+    # ワーカー側のPython SDKは対応範囲内のバージョンを送るのでこの問題は出ないが、
+    # 初期化はNode側が行うのでここで許容する必要がある。
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --loose --skipApiVersionCheck
     ports:
       - "10000:10000"
       - "10001:10001"
