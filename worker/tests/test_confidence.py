@@ -13,17 +13,23 @@ from ledgerlines_worker.issues import generate_issues  # noqa: E402
 
 
 class ConfidencePolicyTests(unittest.TestCase):
-    def test_issue_8_diagnostic_is_withheld_without_calibration(self):
+    def _issue8_case(self):
         fixture = json.loads(
             (Path(__file__).parent / "fixtures" / "issue8_take_diagnostic.json").read_text(
                 encoding="utf-8"
             )
         )
+        measure_count = fixture["referenceNotes"] // 12 + 1
         reference = {
             "notes": [
                 {"index": index, "measure": index // 12 + 1}
                 for index in range(fixture["referenceNotes"])
-            ]
+            ],
+            "measures": [
+                {"measure": measure, "tempoExcluded": False}
+                for measure in range(1, measure_count + 1)
+            ],
+            "capabilities": {"dynamics": True, "pedal": True},
         }
         alignment = {
             "pairs": [[index, index] for index in range(fixture["matchedNotes"])],
@@ -35,7 +41,7 @@ class ConfidencePolicyTests(unittest.TestCase):
         raw = fixture["rawScores"]
         result = {
             "overallScore": raw["overallScore"],
-            "metrics": raw["metrics"],
+            "metrics": dict(raw["metrics"]),
             "measureScores": [
                 {
                     "measure": 1,
@@ -43,7 +49,7 @@ class ConfidencePolicyTests(unittest.TestCase):
                     "score": 40,
                     "metrics": {
                         "pitch": 9.99,
-                        "rhythm": 0,
+                        "rhythm": 63.3,
                         "tempo": 95.93,
                         "dynamics": 98.58,
                         "pedal": None,
@@ -51,31 +57,75 @@ class ConfidencePolicyTests(unittest.TestCase):
                 }
             ],
         }
+        return result, reference, alignment
+
+    def test_issue_8_diagnostic_withholds_pitch_only(self):
+        """段2 では pitch だけが保留になり、他4指標は採点される。"""
+        result, reference, alignment = self._issue8_case()
 
         guarded = apply_fail_closed_policy(
-            result, reference, alignment, fixture["transcribedNotes"]
+            result,
+            reference,
+            alignment,
+            1495,
+            None,
+            dynamic_range_db=18.0,
+            pedal_reference_available=False,
+        )
+
+        self.assertEqual(guarded["metricEvaluations"]["pitch"]["status"], "withheld")
+        self.assertEqual(
+            guarded["metricEvaluations"]["pitch"]["reasonCode"], "PITCH_FORMULA_UNVALIDATED"
+        )
+        self.assertEqual(guarded["metricEvaluations"]["rhythm"]["status"], "scored")
+        self.assertEqual(guarded["metricEvaluations"]["tempo"]["status"], "scored")
+        self.assertEqual(guarded["metricEvaluations"]["dynamics"]["status"], "scored")
+        # 参照ペダルが未再生成なので測定対象外
+        self.assertEqual(guarded["metricEvaluations"]["pedal"]["status"], "unavailable")
+        self.assertEqual(
+            guarded["metricEvaluations"]["pedal"]["reasonCode"],
+            "PEDAL_REFERENCE_NOT_REGENERATED",
+        )
+        # rhythm/tempo/dynamics が scored になったことで指摘生成が動くようになる（spec 4.1）
+        issues = generate_issues(guarded["measureScores"])
+        self.assertTrue(any(issue["metric"] == "rhythm" for issue in issues))
+
+    def test_overall_score_is_withheld_while_pitch_is_unvalidated(self):
+        """withheld が1つでも残れば総合点は出さない（spec 4.7）。"""
+        result, reference, alignment = self._issue8_case()
+
+        guarded = apply_fail_closed_policy(
+            result, reference, alignment, 1495, None, dynamic_range_db=18.0
         )
 
         self.assertIsNone(guarded["overallScore"])
-        self.assertIsNone(guarded["metrics"]["pitch"])
-        self.assertEqual(guarded["metrics"]["tempo"], 95.93)
-        self.assertEqual(
-            guarded["evaluation"]["status"], fixture["expected"]["evaluationStatus"]
+        self.assertEqual(guarded["evaluation"]["status"], "withheld")
+
+    def test_agc_makes_dynamics_unavailable(self):
+        result, reference, alignment = self._issue8_case()
+
+        guarded = apply_fail_closed_policy(
+            result, reference, alignment, 1495, None, dynamic_range_db=7.0
         )
-        self.assertEqual(
-            guarded["metricEvaluations"]["pitch"]["status"],
-            fixture["expected"]["pitchStatus"],
+
+        self.assertEqual(guarded["metricEvaluations"]["dynamics"]["status"], "unavailable")
+        self.assertEqual(guarded["metricEvaluations"]["dynamics"]["reasonCode"], "AGC_DETECTED")
+
+    def test_low_match_rate_is_rejected(self):
+        """別の曲の音声が来た場合にスコアを出さない安全網。"""
+        result, reference, alignment = self._issue8_case()
+        alignment["pairs"] = alignment["pairs"][:100]  # matchRate 約 0.08
+
+        guarded = apply_fail_closed_policy(
+            result, reference, alignment, 1495, None, dynamic_range_db=18.0
         )
-        self.assertEqual(
-            guarded["metricEvaluations"]["tempo"]["status"],
-            fixture["expected"]["tempoStatus"],
-        )
-        self.assertEqual(guarded["diagnostics"]["referenceNotes"], 1242)
-        self.assertEqual(guarded["diagnostics"]["transcribedNotes"], 1495)
-        self.assertEqual(guarded["diagnostics"]["matchedNotes"], 974)
-        self.assertEqual(guarded["diagnostics"]["extraNotes"], 521)
-        self.assertNotIn("rawScores", guarded)
-        self.assertEqual(generate_issues(guarded["measureScores"]), [])
+
+        self.assertTrue(guarded["alignmentBelowFloor"])
+        self.assertIsNone(guarded["overallScore"])
+        for key in ("pitch", "rhythm", "tempo", "dynamics", "pedal"):
+            self.assertIn(
+                guarded["metricEvaluations"][key]["status"], {"withheld", "unavailable"}
+            )
 
     def test_alignment_confidence_is_evidence_not_a_release_threshold(self):
         reference = {
@@ -113,7 +163,7 @@ class ConfidencePolicyTests(unittest.TestCase):
         self.assertEqual(guarded["metricConfidence"]["tempo"], 1.0)
         self.assertIsNone(guarded["overallScore"])
         self.assertEqual(
-            guarded["metricEvaluations"]["pitch"]["reasonCode"], "UNCALIBRATED_MODEL"
+            guarded["metricEvaluations"]["pitch"]["reasonCode"], "PITCH_FORMULA_UNVALIDATED"
         )
 
     def test_approved_data_derived_threshold_can_release_tempo_only(self):
@@ -169,7 +219,12 @@ class ConfidencePolicyTests(unittest.TestCase):
         self.assertIsNone(guarded["metrics"]["pitch"])
         self.assertIsNone(guarded["overallScore"])
 
-    def test_failed_calibrated_tempo_threshold_hides_numeric_score(self):
+    def test_tempo_calibration_threshold_no_longer_gates_scoring(self):
+        """M4 実測で tempo は頑健と判定されたため、較正 artifact の
+        thresholds.tempo.minimumConfidence を満たさない（アライメント確信度が低い）
+        場合でも tempo は withheld にならない。この閾値はもはや採点のゲートではない
+        （較正済み教師評価のための記録としては calibration.py 側にそのまま残る）。
+        """
         reference = {
             "notes": [
                 {"index": 0, "measure": 1},
@@ -209,12 +264,12 @@ class ConfidencePolicyTests(unittest.TestCase):
 
         guarded = apply_fail_closed_policy(result, reference, alignment, 1, calibration)
 
-        self.assertEqual(guarded["metricEvaluations"]["tempo"]["status"], "withheld")
+        self.assertEqual(guarded["metricEvaluations"]["tempo"]["status"], "scored")
         self.assertEqual(
-            guarded["metricEvaluations"]["tempo"]["reasonCode"], "LOW_ALIGNMENT_CONFIDENCE"
+            guarded["metricEvaluations"]["tempo"]["reasonCode"], "ROBUSTNESS_VALIDATED"
         )
-        self.assertIsNone(guarded["metrics"]["tempo"])
-        self.assertIsNone(guarded["measureScores"][0]["metrics"]["tempo"])
+        self.assertEqual(guarded["metrics"]["tempo"], 95)
+        self.assertEqual(guarded["measureScores"][0]["metrics"]["tempo"], 95)
 
 
 if __name__ == "__main__":

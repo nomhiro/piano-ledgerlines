@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from .scoring_constants import AGC_DYNAMIC_RANGE_DB, WEIGHTS
+
 METRICS = ("pitch", "rhythm", "tempo", "dynamics", "pedal")
+
+MIN_MATCH_RATE = 0.30  # spec 4.7。別曲の音声を弾いた場合の安全網
 
 REASONS = {
     "UNCALIBRATED_MODEL": "教師評価データによる較正が完了していないため判定を保留しました。",
@@ -20,6 +24,11 @@ REASONS = {
     "CALIBRATED_SCORE": "教師評価データで承認された較正基準を満たしています。",
     "NO_SCORE_DYNAMICS": "参照譜から強弱記号を抽出できていないため測定できません。",
     "NO_SCORE_PEDAL": "参照譜からペダル記号を抽出できていないため測定できません。",
+    "PITCH_FORMULA_UNVALIDATED": "音程の指標式が採譜ノイズに影響されることが判明しているため、式の検証が完了するまで判定を保留します。",
+    "AGC_DETECTED": "自動ゲイン制御がかかった録音のため、強弱を測定できません。",
+    "PEDAL_REFERENCE_NOT_REGENERATED": "この曲の参照譜にペダル位置が含まれていないため測定できません。楽譜を再登録すると測定できます。",
+    "ALIGNMENT_BELOW_FLOOR": "楽譜と演奏の対応付けが成立していないため採点できません。別の曲の録音でないかご確認ください。",
+    "ROBUSTNESS_VALIDATED": "録音条件に対する頑健性が実測で確認されている指標です。",
 }
 
 
@@ -94,12 +103,22 @@ def apply_fail_closed_policy(
     alignment: dict,
     transcribed_note_count: int,
     calibration: dict | None = None,
+    *,
+    dynamic_range_db: float | None = None,
+    pedal_reference_available: bool = False,
 ) -> dict:
-    """Withhold uncalibrated scores while retaining auditable reference data."""
+    """指標ごとに、実測された頑健性に基づいて採点可否を決める。
+
+    m4-report.md 5章の実測（clean 基準の差）:
+        tempo -2.7/-1.9/-3.2、pedal -4.5/-5.0、dynamics -5.7/-9.0/-45.1(AGC)、
+        rhythm -11.8/-6.6/-14.7、pitch -37.7/-37.6/-50.0
+    pitch のみ式が採譜ノイズに支配されるため保留する（段3で対応）。
+    """
     overall_evidence, by_measure = alignment_evidence(reference, alignment)
     diagnostics = {
         **overall_evidence,
         "transcribedNotes": transcribed_note_count,
+        "dynamicRangeDb": dynamic_range_db,
         "calibrationStatus": "approved" if calibration else "missing",
         "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
         "calibrationArtifactHash": calibration.get("artifactHash") if calibration else None,
@@ -110,68 +129,46 @@ def apply_fail_closed_policy(
     }
     capabilities = reference.get("capabilities", {})
     alignment_confidence = overall_evidence["alignmentConfidence"]
-    tempo_threshold = (
-        (calibration.get("thresholds", {}).get("tempo") or {}).get("minimumConfidence")
-        if calibration
-        else None
-    )
-    tempo_is_scored = (
-        raw_scores["metrics"].get("tempo") is not None
-        and alignment_confidence is not None
-        and tempo_threshold is not None
-        and alignment_confidence >= tempo_threshold
-    )
-    if raw_scores["metrics"].get("tempo") is None:
-        tempo_evaluation = _evaluation(
-            "unavailable",
-            "INSUFFICIENT_ALIGNMENT_EVIDENCE",
-            alignment_confidence,
-            diagnostics,
-        )
-    elif calibration is None:
-        tempo_evaluation = _evaluation(
-            "reference",
-            "REFERENCE_ONLY_UNCALIBRATED",
-            alignment_confidence,
-            diagnostics,
-        )
-    elif tempo_is_scored:
-        tempo_evaluation = _evaluation(
-            "scored",
-            "CALIBRATED_SCORE",
-            alignment_confidence,
-            diagnostics,
-        )
-    else:
-        tempo_evaluation = _evaluation(
-            "withheld",
-            "LOW_ALIGNMENT_CONFIDENCE"
-            if tempo_threshold is not None
-            else "UNCALIBRATED_MODEL",
-            alignment_confidence,
-            diagnostics,
-        )
+    below_floor = overall_evidence["matchRate"] < MIN_MATCH_RATE
+    agc = dynamic_range_db is not None and dynamic_range_db < AGC_DYNAMIC_RANGE_DB
 
+    def decide(key: str) -> tuple[str, str]:
+        """(status, reasonCode) を返す。
+
+        指標固有の判定を先に行う。参照譜にペダル位置が無いことや AGC がかかっている
+        ことは素点の有無に関わらず確定しており、「対応付け根拠不足」より具体的な
+        理由だからである。pitch も同様に、素点の有無に関わらず式が未検証である。
+        """
+        if below_floor:
+            return "withheld", "ALIGNMENT_BELOW_FLOOR"
+        if key == "pitch":
+            # pitch は capability の前提を持たないため、採点されない理由は常に
+            # 「式が未検証」である。素点が None でも unavailable にしない。
+            # これにより overallScore が段2 で数値になることを防ぐ。
+            return "withheld", "PITCH_FORMULA_UNVALIDATED"
+        if key == "dynamics":
+            if not capabilities.get("dynamics"):
+                return "unavailable", "NO_SCORE_DYNAMICS"
+            if agc:
+                return "unavailable", "AGC_DETECTED"
+        if key == "pedal":
+            if not capabilities.get("pedal"):
+                return "unavailable", "NO_SCORE_PEDAL"
+            if not pedal_reference_available:
+                return "unavailable", "PEDAL_REFERENCE_NOT_REGENERATED"
+        if raw_scores["metrics"].get(key) is None:
+            return "unavailable", "INSUFFICIENT_ALIGNMENT_EVIDENCE"
+        return "scored", "ROBUSTNESS_VALIDATED"
+
+    decisions = {key: decide(key) for key in METRICS}
     metric_evaluations = {
-        "pitch": _evaluation(
-            "withheld", "UNCALIBRATED_MODEL", None, diagnostics
-        ),
-        "rhythm": _evaluation(
-            "withheld", "UNCALIBRATED_MODEL", None, diagnostics
-        ),
-        "tempo": tempo_evaluation,
-        "dynamics": _evaluation(
-            "withheld" if capabilities.get("dynamics") else "unavailable",
-            "UNCALIBRATED_MODEL" if capabilities.get("dynamics") else "NO_SCORE_DYNAMICS",
-            None,
+        key: _evaluation(
+            status,
+            reason_code,
+            alignment_confidence if status == "scored" else None,
             diagnostics,
-        ),
-        "pedal": _evaluation(
-            "withheld" if capabilities.get("pedal") else "unavailable",
-            "UNCALIBRATED_MODEL" if capabilities.get("pedal") else "NO_SCORE_PEDAL",
-            None,
-            diagnostics,
-        ),
+        )
+        for key, (status, reason_code) in decisions.items()
     }
 
     for measure_score in result["measureScores"]:
@@ -186,102 +183,88 @@ def apply_fail_closed_policy(
                 "alignmentConfidence": 0.0,
             },
         )
-        tempo = measure_score["metrics"].get("tempo")
-        measure_tempo_scored = (
-            tempo is not None
-            and tempo_threshold is not None
-            and evidence["alignmentConfidence"] >= tempo_threshold
-        )
-        measure_tempo_reference = tempo is not None and calibration is None
+        measure_metrics = dict(measure_score["metrics"])
         measure_score["scoreMeasure"] = measure
         measure_score["noteCount"] = measure_score.pop("refNotes", evidence["referenceNotes"])
         measure_score["confidence"] = evidence["alignmentConfidence"]
-        measure_score["score"] = None
         measure_score["metrics"] = {
-            "pitch": None,
-            "rhythm": None,
-            "tempo": tempo if measure_tempo_scored or measure_tempo_reference else None,
-            "dynamics": None,
-            "pedal": None,
+            key: (measure_metrics.get(key) if decisions[key][0] == "scored" else None)
+            for key in METRICS
         }
         measure_score["metricEvaluations"] = {
-            key: (
-                _evaluation(
-                    (
-                        "scored"
-                        if measure_tempo_scored
-                        else "reference"
-                        if measure_tempo_reference
-                        else "withheld"
-                    ),
-                    (
-                        "CALIBRATED_SCORE"
-                        if measure_tempo_scored
-                        else "REFERENCE_ONLY_UNCALIBRATED"
-                        if measure_tempo_reference
-                        else "LOW_ALIGNMENT_CONFIDENCE"
-                        if tempo_threshold is not None
-                        else "UNCALIBRATED_MODEL"
-                    ),
-                    evidence["alignmentConfidence"],
-                    evidence,
-                )
-                if key == "tempo" and tempo is not None
-                else _evaluation(
-                    (
-                        "unavailable"
-                        if key == "tempo"
-                        or (key == "dynamics" and not capabilities.get("dynamics"))
-                        or (key == "pedal" and not capabilities.get("pedal"))
-                        else "withheld"
-                    ),
-                    (
-                        (
-                            "UNCALIBRATED_MODEL"
-                            if capabilities.get("dynamics")
-                            else "NO_SCORE_DYNAMICS"
-                        )
-                        if key == "dynamics"
-                        else (
-                            "UNCALIBRATED_MODEL"
-                            if capabilities.get("pedal")
-                            else "NO_SCORE_PEDAL"
-                        )
-                        if key == "pedal"
-                        else "INSUFFICIENT_ALIGNMENT_EVIDENCE"
-                        if key == "tempo"
-                        else "UNCALIBRATED_MODEL"
-                    ),
-                    None,
-                    evidence,
-                )
+            key: _evaluation(
+                decisions[key][0] if measure_metrics.get(key) is not None else "unavailable",
+                decisions[key][1]
+                if measure_metrics.get(key) is not None
+                else "INSUFFICIENT_ALIGNMENT_EVIDENCE",
+                evidence["alignmentConfidence"] if decisions[key][0] == "scored" else None,
+                evidence,
             )
             for key in METRICS
         }
-
-    result["overallScore"] = None
-    result["metrics"] = {
-        key: (
-            raw_scores["metrics"].get(key)
-            if key == "tempo" and tempo_evaluation["status"] in {"scored", "reference"}
+        scored = {
+            key: weight
+            for key, weight in WEIGHTS.items()
+            if measure_score["metrics"][key] is not None
+        }
+        total = sum(scored.values())
+        measure_score["score"] = (
+            round(
+                sum(measure_score["metrics"][key] * weight for key, weight in scored.items())
+                / total,
+                2,
+            )
+            if total
             else None
         )
+
+    result["metrics"] = {
+        key: (raw_scores["metrics"].get(key) if decisions[key][0] == "scored" else None)
         for key in METRICS
     }
+    has_withheld = any(status == "withheld" for status, _ in decisions.values())
+    scored_weights = {
+        key: weight
+        for key, weight in WEIGHTS.items()
+        if decisions[key][0] == "scored" and result["metrics"][key] is not None
+    }
+    total_weight = sum(scored_weights.values())
+    result["overallScore"] = (
+        None
+        if has_withheld or not total_weight
+        else round(
+            sum(result["metrics"][key] * weight for key, weight in scored_weights.items())
+            / total_weight,
+            2,
+        )
+    )
     result["metricConfidence"] = {
-        key: alignment_confidence if key == "tempo" else None for key in METRICS
+        key: (alignment_confidence if decisions[key][0] == "scored" else None)
+        for key in METRICS
     }
     result["metricEvaluations"] = metric_evaluations
     result["metricsNAReason"] = {
-        key: evaluation["reason"] for key, evaluation in metric_evaluations.items()
+        key: evaluation["reason"]
+        for key, evaluation in metric_evaluations.items()
         if evaluation["status"] != "scored"
     }
-    result["evaluation"] = {
-        "status": "withheld",
-        "confidence": None,
-        "reasonCode": "UNCALIBRATED_MODEL",
-        "reason": REASONS["UNCALIBRATED_MODEL"],
-        "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
-    }
+    result["alignmentBelowFloor"] = below_floor
+    if result["overallScore"] is not None:
+        result["evaluation"] = {
+            "status": "scored",
+            "confidence": alignment_confidence,
+            "reasonCode": "ROBUSTNESS_VALIDATED",
+            "reason": REASONS["ROBUSTNESS_VALIDATED"],
+            "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
+        }
+    else:
+        reason_code = "ALIGNMENT_BELOW_FLOOR" if below_floor else "PITCH_FORMULA_UNVALIDATED"
+        result["evaluation"] = {
+            "status": "withheld",
+            "confidence": alignment_confidence,
+            "reasonCode": reason_code,
+            "reason": REASONS[reason_code],
+            "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
+        }
     result["diagnostics"] = diagnostics
     return result
