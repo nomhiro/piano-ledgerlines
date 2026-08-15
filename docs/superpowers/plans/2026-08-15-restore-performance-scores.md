@@ -572,7 +572,9 @@ import SongSelector from "@/components/SongSelector";
           title={`推移 — ${realSong.title}`}
           description="スコアが算出されたテイクから推移を表示します。判定保留のテイクは理由を表示します。"
         />
-        <SongSelector songs={selectableSongs} current={selectedId} />
+        <Suspense>
+          <SongSelector songs={selectableSongs} current={selectedId} />
+        </Suspense>
         <div className="mt-5 space-y-6">
           {ordered.map((take) => (
             <section key={take.id}>
@@ -591,6 +593,12 @@ import SongSelector from "@/components/SongSelector";
 `SongSelector` のプロップは `{ songs: Song[]; current: string }`
 （`src/components/SongSelector.tsx:6-12`）。`pathname` と `?song=` クエリは
 コンポーネント内部で処理されるので、遷移先の指定は不要である。
+
+**`Suspense` は必須である（Pre-flight Ruling 3）。** `SongSelector` は `"use client"` で
+`useSearchParams` を呼ぶため、Server Component から到達する場合は Suspense 境界が必要になる
+（差し替え前の `/progress` も `ProgressView` を `<Suspense>` で包んでいた）。
+`import { Suspense } from "react";` は既存の import 行に残っていることを確認する。
+現行の Next.js での要件を `node_modules/next/dist/docs/` で確認すること。
 
 - [ ] **Step 5: `/share` の実データ分岐を差し替える**
 
@@ -843,11 +851,14 @@ git commit -m "feat: measure dynamic range for AGC and degraded-recording gates"
 `metrics.py:16` は `DEAD_RHYTHM = 0.03` の固定値で未実装である。
 
 **Files:**
-- Modify: `worker/ledgerlines_worker/metrics.py:16,95-105,168-174`
+- Create: `worker/ledgerlines_worker/scoring_constants.py`（Pre-flight Ruling 1）
+- Modify: `worker/ledgerlines_worker/metrics.py:16,29,95-105,168-174`
 - Modify: `worker/tests/test_metrics.py`
 
 **Interfaces:**
-- Produces: `DEAD_RHYTHM_DEGRADED = 0.045`、`DEGRADED_DYNAMIC_RANGE_DB = 14.0`
+- Produces: `scoring_constants.py` に `WEIGHTS`、`DEAD_RHYTHM = 0.03`、
+  `DEAD_RHYTHM_DEGRADED = 0.045`、`DEGRADED_DYNAMIC_RANGE_DB = 14.0`、
+  `AGC_DYNAMIC_RANGE_DB = 10.0`。Task 8 の `confidence.py` がここから import する
 - Produces: `compute(..., degraded: bool = False)` — 既存呼び出しは後方互換
 
 - [ ] **Step 1: 既存テストの形を確認する**
@@ -929,16 +940,51 @@ Expected: FAIL — `compute()` got an unexpected keyword argument `'degraded'`
 引数 `ref_pedal` は Task 7 で `ref_pedal_beats` に改名する。この Task では現行名のまま
 使い、Task 7 でテストも合わせて更新する。
 
-- [ ] **Step 4: 実装する**
+- [ ] **Step 4: 依存フリーの定数モジュールを作る（Pre-flight Ruling 1）**
 
-`worker/ledgerlines_worker/metrics.py:16` の直後に追加する。
+`confidence.py` は Task 8 で `WEIGHTS` と AGC 閾値を必要とするが、現在は numpy も
+pretty_midi も import しない純粋なモジュールで、`test_confidence.py` はそれらの依存が
+無い環境でも通る。`metrics.py` から import するとこの性質が壊れる。定数を複製するのも
+DRY 違反である。よって両者が import する依存フリーのモジュールを新設する。
+
+Create: `worker/ledgerlines_worker/scoring_constants.py`
 
 ```python
+"""指標の重みと録音品質の閾値。
+
+metrics.py（numpy / pretty_midi に依存）と confidence.py（依存なしの評価ポリシー）の
+両方から参照されるため、重い依存を持たない独立モジュールに置く。
+"""
+
+from __future__ import annotations
+
+# metrics.md 2.5。articulation は M4 検証で削除し 0.12 を再配分済み。
+WEIGHTS = {"pitch": 0.28, "rhythm": 0.28, "tempo": 0.17, "dynamics": 0.17, "pedal": 0.10}
+
 DEAD_RHYTHM = 0.03
 DEAD_RHYTHM_DEGRADED = 0.045  # metrics.md:860 劣化録音時
 DEGRADED_DYNAMIC_RANGE_DB = 14.0  # metrics.md:860
 AGC_DYNAMIC_RANGE_DB = 10.0  # m4-report.md 5.1（AGC はこれ未満で断定できる）
 ```
+
+`worker/ledgerlines_worker/metrics.py` から `DEAD_RHYTHM`（`:16`）と `WEIGHTS`（`:29`）の
+定義を削除し、import に置き換える。他モジュールが `metrics_mod.WEIGHTS` /
+`metrics_mod.DEAD_RHYTHM` を参照している場合も動くよう、名前は再 export される形になる。
+
+```python
+from .scoring_constants import (
+    AGC_DYNAMIC_RANGE_DB,
+    DEAD_RHYTHM,
+    DEAD_RHYTHM_DEGRADED,
+    DEGRADED_DYNAMIC_RANGE_DB,
+    WEIGHTS,
+)
+```
+
+`WEIGHTS` を参照している既存箇所（`:218,227,236`）は変更不要である。
+
+Run: `grep -rn "WEIGHTS\|DEAD_RHYTHM" worker/` で参照箇所を確認し、削除漏れがないことを
+確かめる。
 
 `compute()` のシグネチャ（`:95-101`）に `degraded: bool = False` を追加する。
 
@@ -974,7 +1020,7 @@ Expected: PASS（既存テスト + 新規1件）
 - [ ] **Step 6: コミットする**
 
 ```bash
-git add worker/ledgerlines_worker/metrics.py worker/tests/test_metrics.py
+git add worker/ledgerlines_worker/scoring_constants.py worker/ledgerlines_worker/metrics.py worker/tests/test_metrics.py
 git commit -m "feat: widen rhythm dead zone for degraded recordings"
 ```
 
@@ -1354,8 +1400,10 @@ Expected: FAIL — `apply_fail_closed_policy()` が `dynamic_range_db` を受け
 MIN_MATCH_RATE = 0.30  # spec 4.7。別曲の音声を弾いた場合の安全網
 ```
 
-**AGC 閾値は Task 6 で `metrics.py` に定義した `AGC_DYNAMIC_RANGE_DB` を import して使う。
-`confidence.py` に複製しないこと。** Step 4 で `WEIGHTS` と併せて import する。
+**AGC 閾値と `WEIGHTS` は Task 6 で新設した `scoring_constants.py` から import する
+（Pre-flight Ruling 1）。`confidence.py` に複製せず、`metrics.py` からも import しないこと。**
+`metrics.py` 経由にすると `confidence.py` が numpy / pretty_midi に依存し、
+`test_confidence.py` が依存の無い環境で落ちるようになる。
 
 - [ ] **Step 4: 指標別ポリシーを実装する**
 
@@ -1402,12 +1450,17 @@ def apply_fail_closed_policy(
     def decide(key: str) -> tuple[str, str]:
         """(status, reasonCode) を返す。
 
-        指標固有の「測定対象外」判定を先に行う。参照譜にペダル位置が無いことや
-        AGC がかかっていることは素点の有無に関わらず確定しており、
-        「対応付け根拠不足」より具体的な理由だからである。
+        指標固有の判定を先に行う。参照譜にペダル位置が無いことや AGC がかかっている
+        ことは素点の有無に関わらず確定しており、「対応付け根拠不足」より具体的な
+        理由だからである。pitch も同様に、素点の有無に関わらず式が未検証である。
         """
         if below_floor:
             return "withheld", "ALIGNMENT_BELOW_FLOOR"
+        if key == "pitch":
+            # Pre-flight Ruling 4: pitch は capability の前提を持たないため、
+            # 採点されない理由は常に「式が未検証」である。素点が None でも
+            # unavailable にしない。これにより overallScore が段2 で数値になることを防ぐ。
+            return "withheld", "PITCH_FORMULA_UNVALIDATED"
         if key == "dynamics":
             if not capabilities.get("dynamics"):
                 return "unavailable", "NO_SCORE_DYNAMICS"
@@ -1420,8 +1473,6 @@ def apply_fail_closed_policy(
                 return "unavailable", "PEDAL_REFERENCE_NOT_REGENERATED"
         if raw_scores["metrics"].get(key) is None:
             return "unavailable", "INSUFFICIENT_ALIGNMENT_EVIDENCE"
-        if key == "pitch":
-            return "withheld", "PITCH_FORMULA_UNVALIDATED"
         return "scored", "ROBUSTNESS_VALIDATED"
 
     decisions = {key: decide(key) for key in METRICS}
@@ -1490,7 +1541,7 @@ def apply_fail_closed_policy(
 `WEIGHTS` を `metrics` モジュールから import する。`confidence.py` の先頭に追加する。
 
 ```python
-from .metrics import AGC_DYNAMIC_RANGE_DB, WEIGHTS
+from .scoring_constants import AGC_DYNAMIC_RANGE_DB, WEIGHTS
 ```
 
 総合点の算出（`:262-287`）を spec 4.7 の規則に置き換える。
@@ -1548,9 +1599,14 @@ from .metrics import AGC_DYNAMIC_RANGE_DB, WEIGHTS
     return result
 ```
 
-**注意:** 循環 import に注意する。`metrics.py` は `confidence.py` を import していない
-ことを確認してから `from .metrics import WEIGHTS` を追加する。循環する場合は
-`WEIGHTS` を `confidence.py` 内に複製せず、共通の定数モジュールへ移す。
+**注意:** import は `scoring_constants.py`（Task 6 で新設、依存なし）からのみ行う。
+`metrics.py` からは import しない。`confidence.py` が numpy / pretty_midi 非依存である
+性質を保つためであり、これは `test_confidence.py` が軽量環境で通ることに直結する。
+
+実装後に確認する。
+
+Run: `python -c "import ast,sys; src=open('worker/ledgerlines_worker/confidence.py').read(); print([n.module for n in ast.walk(ast.parse(src)) if isinstance(n, ast.ImportFrom)])"`
+Expected: `['scoring_constants']` のみ（`metrics` が現れないこと）
 
 - [ ] **Step 5: テストを実行して通過を確認する**
 
