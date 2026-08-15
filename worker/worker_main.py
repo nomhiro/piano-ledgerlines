@@ -36,6 +36,17 @@ from pathlib import Path
 # （src/app/progress/page.tsx）。
 PIPELINE_VERSION = "0.3.0-m5-metric-policy"
 
+# 想定外の失敗（INTERNAL / TranscribeError 等）でユーザーに出す文言。
+# 内部のファイルパスや例外文言をそのまま出すと、原因不明なだけでなく
+# 内部実装の詳細が漏れる（このタスクの発端となった不具合そのもの）。
+# 例外の詳細は failure.message ではなく analysis.error（UIは表示しない）へ retain し、
+# ユーザーには一般的で行動可能な文言だけを見せる。再解析は take-state.ts が
+# failed -> queued を許可しており、UI側に再解析ボタンがある前提の文言にする。
+GENERIC_ANALYSIS_FAILURE_MESSAGE = (
+    "解析中にエラーが発生したため、結果を算出できませんでした。"
+    "少し時間を置いてから「再解析」をお試しください。解消しない場合はサポートへご連絡ください。"
+)
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -389,12 +400,32 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
         print(json.dumps({"ok": True, "takeId": take_id, "overallScore": result["overallScore"]}))
         return 0
     except preprocess_mod.PreprocessError as exc:
+        # VALIDATION_FAILED / INVALID_LENGTH / AUDIO_TOO_QUIET はユーザー向けに
+        # 書かれた既存の文言であり、ここでは変更しない。
         update({"status": "failed", "failure": {"code": exc.code, "message": exc.message}})
+        print(json.dumps({"ok": False, "code": exc.code, "error": exc.message}))
+        return 1
+    except transcribe_mod.TranscribeError as exc:
+        # exc.message（チェックポイントのパス等）は運用者向けの診断情報であり、
+        # analysis.error と stdout ログにのみ残す。ユーザーには一般的な文言を出す。
+        update({
+            "status": "failed",
+            "failure": {"code": exc.code, "message": GENERIC_ANALYSIS_FAILURE_MESSAGE},
+            "analysis": {"pipelineVersion": PIPELINE_VERSION, "error": exc.message},
+        })
         print(json.dumps({"ok": False, "code": exc.code, "error": exc.message}))
         return 1
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
-        update({"status": "failed", "failure": {"code": "INTERNAL", "message": str(exc)}})
+        # str(exc) をそのまま failure.message に出すと内部のファイルパスや
+        # ライブラリの例外文言が画面に漏れる（このタスクの発端となった不具合）。
+        # 詳細は traceback.print_exc()（ログ）と analysis.error（テイクドキュメント、
+        # UIは表示しない）に残し、ユーザーには一般的で行動可能な文言だけを見せる。
+        update({
+            "status": "failed",
+            "failure": {"code": "INTERNAL", "message": GENERIC_ANALYSIS_FAILURE_MESSAGE},
+            "analysis": {"pipelineVersion": PIPELINE_VERSION, "error": str(exc)},
+        })
         print(json.dumps({"ok": False, "code": "INTERNAL", "error": str(exc)}))
         return 1
 

@@ -44,7 +44,32 @@ export async function POST(
     if (take.status === "queued" || take.status === "transcribing" || take.status === "aligning" || take.status === "scoring") {
       return jsonResponse({ takeId, status: take.status, estimatedSeconds: Math.max(30, Math.round(take.durationSec * 1.5)) }, request, { status: 202 });
     }
-    await updateTake(takeId, { status: "queued", progress: 0, failure: null }, user.id);
+    // failed -> queued の再解析（item 3）。scoring 段(ALIGN_FAILED)で失敗したテイクは
+    // evaluation/analysis や指標系フィールドが書き込まれたままになっており、
+    // status/progress/failure だけをリセットすると、再解析が終わるまでの間、
+    // 「queued なのに古い evaluation が残る」という誤解を招く表示になる。
+    // ここでリセットする値は createTake() の初期値（src/lib/server/repository.ts）
+    // と揃える ── 解析パイプラインの成功パス（worker/worker_main.py の
+    // completed 分岐）がテイク作成後に書き込むのと同じフィールド集合。
+    await updateTake(
+      takeId,
+      {
+        status: "queued",
+        progress: 0,
+        failure: null,
+        overallScore: null,
+        metrics: null,
+        metricConfidence: { pitch: null, rhythm: null, tempo: null, dynamics: null, pedal: null },
+        metricEvaluations: {},
+        metricsNAReason: {},
+        evaluation: null,
+        measureScores: [],
+        issues: [],
+        aiReview: null,
+        analysis: null,
+      },
+      user.id
+    );
     await getAnalysisQueue().enqueue({
       schemaVersion: 1,
       jobId: randomUUID(),

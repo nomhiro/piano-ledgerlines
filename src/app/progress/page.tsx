@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { songs, getSong, getTakesForSong, findStagnantMeasures } from "@/lib/mock/data";
 import ProgressView from "@/components/ProgressView";
 import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
@@ -56,8 +57,20 @@ export default async function ProgressPage({
         <div className="mt-5 space-y-6">
           {ordered.map((take) => (
             <section key={take.id}>
-              <h2 className="mb-2 text-sm font-semibold">
-                {take.label} ・ {new Date(take.recordedAt).toLocaleString("ja-JP")}
+              <h2 className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold">
+                <span>
+                  {take.label} ・ {new Date(take.recordedAt).toLocaleString("ja-JP")}
+                </span>
+                {/* 解析に失敗したテイクをここから直接見つけても、再解析ボタンは
+                    テイク詳細（/takes/real/{id}）側にしか無い（TakeEvaluationPanel
+                    はフックを持たないServer Component互換のコンポーネントなので
+                    ここには置けない）。この導線が無いと辿り着けなかった。 */}
+                <Link
+                  href={`/takes/real/${take.id}`}
+                  className="shrink-0 text-xs font-normal text-violet-300 underline underline-offset-2"
+                >
+                  テイク詳細を見る
+                </Link>
               </h2>
               <TakeEvaluationPanel take={take} />
             </section>
