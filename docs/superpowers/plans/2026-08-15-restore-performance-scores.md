@@ -888,49 +888,38 @@ Run: `cd worker && sed -n '1,60p' tests/test_metrics.py`
         self.assertGreater(lenient["metrics"]["rhythm"], strict["metrics"]["rhythm"])
 ```
 
-`_rhythm_fixture(offset_beats)` は、参照譜の各音符を `offset_beats` だけ一律にずらさず
-（一律ずれは中央値で吸収されるため）、音符ごとに交互に `±offset_beats` ずらした演奏を
-返すヘルパーとして同じクラス内に実装する。デッドゾーンの差が出るよう、ずれ量は
-0.03 と 0.045 の間の値（0.04）にする。
+**訂正（実装時に判明した本計画の欠陥）:** 当初この計画は「音符ごとに交互に
+`±offset_beats` ずらす」フィクスチャを指定していたが、**それでは信号が出ない**。
 
-```python
-    def _rhythm_fixture(self, offset_beats: float):
-        ref_notes = [
-            {
-                "index": i,
-                "pitch": 60 + (i % 3),
-                "measure": 1,
-                "startBeat": float(i),
-                "dynamicLevel": None,
-            }
-            for i in range(8)
-        ]
-        reference = {
-            "notes": ref_notes,
-            "beatsPerMeasure": 8.0,
-            "measures": [{"measure": 1, "tempoExcluded": False}],
-            "capabilities": {"dynamics": False, "pedal": False},
-        }
-        # 1秒=1拍。奇数番目だけ後ろにずらすと中央値では吸収されない。
-        est_notes = [
-            {
-                "index": i,
-                "pitch": note["pitch"],
-                "start": float(i) + (offset_beats if i % 2 else 0.0),
-                "end": float(i) + 0.5,
-                "velocity": 80,
-            }
-            for i, note in enumerate(ref_notes)
-        ]
-        alignment = {
-            "pairs": [[i, i] for i in range(len(ref_notes))],
-            "missed": [],
-            "extra": [],
-            "retakes": [],
-            "unplayed": [],
-        }
-        return reference, est_notes, alignment
-```
+`estimate_beat_map()` は、リズムループが後で `sec_to_beat()`（= `np.interp(t, secs, beats)`）
+で逆変換するのと同じ対応表を、同じアラインペアから構築する。各 `startBeat` に音符が1つ
+だけだと、その音符の推定時刻が対応表の唯一のノットになる。`np.interp` はノット上では厳密に
+一致する値を返すため、`b_perf` は必ず元の `startBeat` に戻り、`offset_beats` が何であっても
+delta が恒等的に 0 になる。中央値引き算より前の補間段階で打ち消されるため、交互にずらしても
+救えない。実際にこの形で書いたテストは `100.0 not greater than 100.0` で失敗した。
+
+正しい設計は**同一拍に2音の和音を置く**ことである。各拍について、和音の1音目をちょうど拍上、
+2音目を `2 * offset_beats` 遅らせる。すると対応表のその拍のエントリは2音の中央値
+（`beat + offset_beats`）になり、対応表全体が一律 `offset_beats` シフトする。個々の音符を
+逆変換すると残差が `±offset_beats` に分かれ、全音符での中央値引き算（全体では 0 に戻る）でも
+消えずに残る。ずれ量は 0.03 と 0.045 の間の値（0.04）にする。
+
+副作用として `sync_error` が非ゼロになる（各和音の広がりが `2 * offset_beats`、
+`SYNC_WEIGHT = 0.3` で `e_rhythm` に入る）。両方の実行で同一なので差は保たれるが、
+どちらのスコアも 100 にはならない。また `np.interp` はノット範囲外で clamp するため、
+境界の和音に依存するアサーションを書かないこと。
+
+実測値: `degraded=False` で 92.57、`degraded=True` で 96.08。
+
+`offset_beats` は引数として残し、`offset_beats=0.0` でも破綻しないこと（Task 7 がこの
+ヘルパーを `offset_beats=0.0` で再利用する。その場合は和音の2音が一致し 100.0 になる）。
+フィクスチャには「1拍1音では信号が出ない」理由をコメントで明記すること。これがないと
+次に読む人が壊れた形に「単純化」して戻してしまう。
+
+実装された形（`worker/tests/test_metrics.py` の `_rhythm_fixture` を参照）: 8拍、各拍に
+2音の和音（`pitch` は `60 + pitch_offset + (b % 3)`、`pitch_offset` は 0 と 4）、
+`beatsPerMeasure` は 8.0、全音符 1:1 でペア済み。推定側は和音の1音目が拍上、2音目が
+`2 * offset_beats` 遅れ。上の訂正の理由をフィクスチャの docstring に日本語で記載する。
 
 - [ ] **Step 3: テストを実行して失敗を確認する**
 
