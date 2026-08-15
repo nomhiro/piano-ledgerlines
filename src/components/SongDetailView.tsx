@@ -73,6 +73,7 @@ export default function SongDetailView({
                 measureScores={latest.measureScores}
                 onSelectMeasure={setSelected}
                 selected={selected}
+                footnote="※ デモ用サンプル楽譜（16小節）に、分析結果の小節スコアを色で重ねています。本実装ではアップロードされたMusicXMLをそのまま表示します。"
               />
             </div>
           </Card>

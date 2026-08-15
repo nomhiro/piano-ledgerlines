@@ -21,12 +21,15 @@ export default function ScoreView({
   showHeatmap = true,
   onSelectMeasure,
   selected,
+  footnote,
 }: {
   scoreUrl: string;
   measureScores?: readonly MeasureScoreInput[];
   showHeatmap?: boolean;
   onSelectMeasure?: (measure: number) => void;
   selected?: number | null;
+  /** 楽譜の下に出す注記。渡されなければ何も出さない。 */
+  footnote?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [overlays, setOverlays] = useState<Overlay[]>([]);
@@ -116,10 +119,10 @@ export default function ScoreView({
               {overlays.map((o) => (
                 <div
                   key={o.measure}
-                  onClick={() => onSelectMeasure?.(o.measure)}
-                  className={`pointer-events-auto absolute cursor-pointer rounded-sm transition-opacity hover:opacity-70 ${
-                    selected === o.measure ? "ring-2 ring-violet-600" : ""
-                  }`}
+                  onClick={onSelectMeasure ? () => onSelectMeasure(o.measure) : undefined}
+                  className={`pointer-events-auto absolute rounded-sm transition-opacity ${
+                    onSelectMeasure ? "cursor-pointer hover:opacity-70" : ""
+                  } ${selected === o.measure ? "ring-2 ring-violet-600" : ""}`}
                   style={{
                     left: o.x,
                     top: o.y,
@@ -158,10 +161,8 @@ export default function ScoreView({
           </div>
         )}
       </div>
-      {showHeatmap && status === "ready" && (
-        <p className="mt-2 text-[11px] text-[var(--muted)]">
-          ※ デモ用サンプル楽譜（16小節）に、分析結果の小節スコアを色で重ねています。本実装ではアップロードされたMusicXMLをそのまま表示します。
-        </p>
+      {footnote && showHeatmap && status === "ready" && (
+        <p className="mt-2 text-[11px] text-[var(--muted)]">{footnote}</p>
       )}
     </div>
   );
