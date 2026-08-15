@@ -79,6 +79,16 @@ Azurite/Cosmosエミュレータを本番同様のBlob/Queue/Cosmosとして使�
   新しいイメージをビルドしても既存コンテナは古いイメージのまま動き続ける（実際にこれで
   「ビルドは通っているのにコンテナ内にチェックポイントが無い」状態に遭遇した）。
   `docker compose -f docker-compose.azure-local.yml up -d --force-recreate worker` を使うこと。
+- **既知の限界: このプロファイルでは曲を `ready` にできない。** `POST /api/songs/{songId}/score`
+  は `storageBackend === "azure"` のとき 202 を返すだけで、参照譜を生成するのは
+  `LEDGERLINES_AZURE_CLOUD === "true"` の場合のみ（`processCloudScoreLocally`）。この2つのフラグは
+  `config.ts` で排他なので、エミュレータプロファイルでは楽譜をアップロードしても
+  `awaiting_score` で止まる。参照譜生成は music21 が必要でワーカーコンテナには入っているため、
+  当面はワーカーコンテナ内で `python worker_main.py --mode reference` を実行して
+  `reference.json` を `derived` コンテナへ置く、という手動回避で先へ進める。
+  なお参照譜生成が `runReferenceWorker`（ローカルPythonのspawn）に依存している以上、
+  同じ制約は**デプロイ済みWebアプリにも当てはまる**（ルートイメージの `Dockerfile` は
+  `node:20-alpine` でPythonを含まない）。恒久対応は楽譜処理もQueue経由でワーカーに寄せること。
 - Queueは `npm run azure:init` が作成する。それより前にワーカーが起動すると
   `QueueNotFound` で落ちるが、`restart: on-failure` によりQueue作成後に自力で復帰する
   （`cloud_worker.py` の `main()` はトップレベル例外を再試行しないため、プロセス単位で
