@@ -13,4 +13,5 @@ test("ACS email role is scoped to the dedicated sender identity", async () => {
   assert.match(rbac, /emailSenderPrincipalId/);
   assert.match(identity, /emailSenderIdentity/);
   assert.match(main, /emailSenderPrincipalId: identity\.outputs\.emailSenderPrincipalId/);
+  assert.match(main, /module rbac[\s\S]*dependsOn:\s*\[\s*communicationEmail\s*\]/);
 });
