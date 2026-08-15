@@ -20,6 +20,7 @@ TRIM_MARGIN_SEC = 0.3
 MIN_DURATION_SEC = 3.0
 MAX_DURATION_SEC = 15 * 60
 TOO_QUIET_DBFS = -45.0
+DYNAMIC_RANGE_FRAME_SEC = 0.05
 
 
 class PreprocessError(Exception):
@@ -44,6 +45,26 @@ def decode_to_wav(src: Path, dst: Path) -> None:
 
 def _dbfs(rms: float) -> float:
     return 20.0 * float(np.log10(max(rms, 1e-9)))
+
+
+def dynamic_range_db(audio: np.ndarray, sr: int) -> float:
+    """フレームRMSの95/5パーセンタイル差(dB)。
+
+    m4-report.md 5.1 の実測に対応する指標。単発のピークに左右されないよう、
+    peak-rms のクレストファクタではなくフレームRMSの分布から求める。
+    """
+    frame = max(1, int(DYNAMIC_RANGE_FRAME_SEC * sr))
+    usable = len(audio) - (len(audio) % frame)
+    if usable < frame:
+        return 0.0
+    frames = np.asarray(audio[:usable], dtype=np.float64).reshape(-1, frame)
+    rms = np.sqrt(np.mean(np.square(frames), axis=1))
+    voiced = rms[rms > 0.0]
+    if voiced.size == 0:
+        return 0.0
+    high = float(np.percentile(voiced, 95))
+    low = float(np.percentile(voiced, 5))
+    return round(_dbfs(high) - _dbfs(low), 2)
 
 
 def trim_silence(audio: np.ndarray, sr: int) -> tuple[np.ndarray, float]:
@@ -93,6 +114,7 @@ def preprocess(src: Path, work_dir: Path) -> dict[str, Any]:
         "rmsDbfs": round(rms_dbfs, 2),
         "peakDbfs": round(peak_dbfs, 2),
         "clippingRate": round(clipping_rate, 4),
+        "dynamicRangeDb": dynamic_range_db(trimmed, sr),
         "durationSec": round(duration_sec, 2),
         "trimOffsetSec": round(trim_offset_sec, 3),
     }
