@@ -245,6 +245,53 @@ def _build_measures(score, contexts: list[dict], notes: list[dict], default_temp
     return [measures[key] for key in sorted(measures)]
 
 
+def merge_pedal_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """重複・接触する区間を統合する。
+
+    metrics.pedal_ratio() は区間ごとに被覆秒数を単純加算するため、重複区間を
+    統合せずに渡すと同じ時間帯が二重に数えられ、被覆率が1.0を超えて
+    「踏みすぎている」という誤った差分を生む。複数パート/複数ペダル記号が
+    重なりうるため、参照譜側で必ず統合してから返す。
+    """
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _pedal_intervals_beats(score) -> list[tuple[float, float]]:
+    """全パートから sustain ペダルの (開始拍, 終了拍) 区間を集めて統合する。
+
+    music21 は MusicXML の pedal start/stop の組を1つの PedalMark スパナーとして
+    表現し、押している音符群を spannedElements に保持する（wedges と同じ形）。
+    区間の終わりは被覆音符の「開始拍の最大値」ではなく「終了拍の最大値」
+    （開始拍 + 音符の長さ）でなければならない。最後の被覆音符自身の長さの分だけ
+    ペダルはそれより長く踏まれているため。ソステヌート/ソフト等、演奏側の推定
+    （MIDI CC64 = サステインのみ）と対応しない種別は除外する。
+    """
+    from music21 import expressions
+
+    intervals: list[tuple[float, float]] = []
+    for part in score.parts:
+        for item in part.recurse().getElementsByClass(expressions.PedalMark):
+            if item.pedalType != "sustain":
+                continue
+            elements = list(item.getSpannedElements())
+            if not elements:
+                continue
+            start = min(_offset(element, part) for element in elements)
+            end = max(
+                _offset(element, part) + float(element.duration.quarterLength)
+                for element in elements
+            )
+            if end > start:
+                intervals.append((start, end))
+    return merge_pedal_intervals(intervals)
+
+
 def build_reference(musicxml_path: Path, tempo_bpm: float = 96.0) -> dict[str, Any]:
     """Build the versioned reference score consumed by alignment and metrics."""
     from music21 import converter
@@ -309,6 +356,10 @@ def build_reference(musicxml_path: Path, tempo_bpm: float = 96.0) -> dict[str, A
         "notes": out_notes,
         "measures": measures,
         "capabilities": capabilities,
+        "pedalIntervalsBeats": [
+            (round(float(start), 4), round(float(end), 4))
+            for start, end in _pedal_intervals_beats(score)
+        ],
         "source": "musicxml",
         "warnings": [],
     }

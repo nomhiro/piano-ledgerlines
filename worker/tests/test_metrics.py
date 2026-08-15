@@ -51,15 +51,49 @@ class MetricSemanticsTests(unittest.TestCase):
         reference, est_notes, alignment = self._rhythm_fixture(offset_beats=0.04)
 
         strict = compute(
-            reference, est_notes, alignment, est_pedal=[], ref_pedal=[], degraded=False
+            reference, est_notes, alignment, est_pedal=[], ref_pedal_beats=[], degraded=False
         )
         lenient = compute(
-            reference, est_notes, alignment, est_pedal=[], ref_pedal=[], degraded=True
+            reference, est_notes, alignment, est_pedal=[], ref_pedal_beats=[], degraded=True
         )
 
         self.assertIsNotNone(strict["metrics"]["rhythm"])
         self.assertIsNotNone(lenient["metrics"]["rhythm"])
         self.assertGreater(lenient["metrics"]["rhythm"], strict["metrics"]["rhythm"])
+
+    def test_reference_pedal_is_compared_against_played_pedal(self):
+        """参照ペダルと演奏ペダルが一致すれば pedal は高得点になる。"""
+        reference, est_notes, alignment = self._rhythm_fixture(offset_beats=0.0)
+        reference["capabilities"]["pedal"] = True
+
+        # 拍0〜4にペダル。1拍=1秒なので秒でも 0.0〜4.0。
+        result = compute(
+            reference,
+            est_notes,
+            alignment,
+            est_pedal=[(0.0, 4.0)],
+            ref_pedal_beats=[(0.0, 4.0)],
+            degraded=False,
+        )
+
+        self.assertIsNotNone(result["metrics"]["pedal"])
+        self.assertGreater(result["metrics"]["pedal"], 90.0)
+
+    def test_pedal_penalised_when_player_omits_it(self):
+        reference, est_notes, alignment = self._rhythm_fixture(offset_beats=0.0)
+        reference["capabilities"]["pedal"] = True
+
+        result = compute(
+            reference,
+            est_notes,
+            alignment,
+            est_pedal=[],
+            ref_pedal_beats=[(0.0, 4.0)],
+            degraded=False,
+        )
+
+        self.assertIsNotNone(result["metrics"]["pedal"])
+        self.assertLess(result["metrics"]["pedal"], 90.0)
 
     def _rhythm_fixture(self, offset_beats: float):
         """各拍に2音の和音を置いた参照譜と、そのうち片方だけ遅らせた演奏を返す。

@@ -74,6 +74,20 @@ def pedal_intervals(pm: pretty_midi.PrettyMIDI, threshold: int = 64) -> list[tup
     return intervals
 
 
+def pedal_intervals_from_beats(
+    intervals_beats: list[tuple[float, float]], beats: np.ndarray, secs: np.ndarray
+) -> list[tuple[float, float]]:
+    """拍単位のペダル区間をビートマップで秒に変換する。"""
+    out: list[tuple[float, float]] = []
+    for start_beat, end_beat in intervals_beats:
+        t0 = measure_seconds(beats, secs, start_beat)
+        t1 = measure_seconds(beats, secs, end_beat)
+        if np.isnan(t0) or np.isnan(t1) or t1 <= t0:
+            continue
+        out.append((float(t0), float(t1)))
+    return out
+
+
 def pedal_ratio(intervals: list[tuple[float, float]], t0: float, t1: float) -> float:
     if t1 <= t0:
         return 0.0
@@ -96,7 +110,7 @@ def compute(
     est_notes: list[dict],
     alignment: dict,
     est_pedal: list[tuple[float, float]],
-    ref_pedal: list[tuple[float, float]],
+    ref_pedal_beats: list[tuple[float, float]],
     degraded: bool = False,
 ) -> dict:
     ref_notes = reference["notes"]
@@ -104,6 +118,7 @@ def compute(
     bpm_measure = reference["beatsPerMeasure"]
     pairs = [(int(a), int(b)) for a, b in alignment["pairs"]]
     beats, secs = estimate_beat_map(pairs, ref_notes, est_notes)
+    ref_pedal = pedal_intervals_from_beats(ref_pedal_beats, beats, secs)
 
     ref_by_measure: dict[int, list[dict]] = {}
     for n in ref_notes:
