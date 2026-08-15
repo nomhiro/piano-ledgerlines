@@ -252,6 +252,7 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
     from ledgerlines_worker import preprocess as preprocess_mod
     from ledgerlines_worker import transcribe as transcribe_mod
     from ledgerlines_worker.issues import generate_issues
+    from ledgerlines_worker.scoring_constants import DEGRADED_DYNAMIC_RANGE_DB
 
     take = read_json(take_path(data_dir, take_id))
     song_id = take["songId"]
@@ -287,11 +288,46 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
         update({"status": "scoring", "progress": 0.8})
 
         est_notes_full, est_pedal = metrics_mod.load_est(midi_path)
-        result = metrics_mod.compute(reference, est_notes_full, alignment, est_pedal, ref_pedal=[])
+        dynamic_range_db = pre.get("dynamicRangeDb")
+        degraded = (
+            dynamic_range_db is not None
+            and dynamic_range_db < DEGRADED_DYNAMIC_RANGE_DB
+        )
+        ref_pedal_beats = reference.get("pedalIntervalsBeats") or []
+        result = metrics_mod.compute(
+            reference,
+            est_notes_full,
+            alignment,
+            est_pedal,
+            ref_pedal_beats=ref_pedal_beats,
+            degraded=degraded,
+        )
         calibration = calibration_mod.load_calibration()
         result = confidence_mod.apply_fail_closed_policy(
-            result, reference, alignment, len(est_notes_full), calibration
+            result,
+            reference,
+            alignment,
+            len(est_notes_full),
+            calibration,
+            dynamic_range_db=dynamic_range_db,
+            pedal_reference_available=bool(ref_pedal_beats),
         )
+
+        if result.get("alignmentBelowFloor"):
+            update({
+                "status": "failed",
+                "failure": {
+                    "code": "ALIGN_FAILED",
+                    "message": result["evaluation"]["reason"],
+                },
+                "analysis": {
+                    "pipelineVersion": "0.3.0-m5-metric-policy",
+                    "diagnostics": result["diagnostics"],
+                },
+            })
+            print(json.dumps({"ok": False, "code": "ALIGN_FAILED", "takeId": take_id}))
+            return 1
+
         issues = generate_issues(result["measureScores"])
 
         update({
@@ -308,7 +344,7 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
             "failure": None,
             "aiReview": None,  # S6 (Microsoft Foundry) は未実装。後続フェーズで差し込む。
             "analysis": {
-                "pipelineVersion": "0.2.0-m5-confidence-guard",
+                "pipelineVersion": "0.3.0-m5-metric-policy",
                 "preprocess": {**pre, "path": str(pre["path"])},
                 "baseTempo": result["baseTempo"],
                 "takes": alignment.get("takes"),
