@@ -4,7 +4,7 @@ import fs from "node:fs";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
-import { CosmosClient } from "@azure/cosmos";
+import { CosmosClient, PartitionKeyKind } from "@azure/cosmos";
 import { BlobServiceClient } from "@azure/storage-blob";
 import { QueueServiceClient } from "@azure/storage-queue";
 
@@ -94,7 +94,16 @@ async function init(): Promise<void> {
     [process.env.AZURE_COSMOS_SONGS_CONTAINER ?? "songs", "/userId"],
     [process.env.AZURE_COSMOS_TAKES_CONTAINER ?? "takes", "/userId"],
   ] as const) {
-    await database.containers.createIfNotExists({ id, partitionKey: { paths: [partitionKey] } });
+    // `kind: "Hash"` は infra/modules/cosmos.bicep と揃えるために必須。省略すると
+    // Cosmos emulator(vnext) はパーティションキー定義を送られたまま
+    // （`kind` 無しで）保存し、Python SDK が `partitionKeyDefinition["kind"]` を
+    // 読む箇所で `KeyError: 'kind'` になる（実機で確認済み）。Node SDK は
+    // `kind` を参照しないので気付きにくいが、`cloud_worker.py` の
+    // `replace_item`（テイクの状態更新）が全て失敗し解析が完了できなくなる。
+    await database.containers.createIfNotExists({
+      id,
+      partitionKey: { paths: [partitionKey], kind: PartitionKeyKind.Hash },
+    });
   }
   const connection = process.env.AZURE_STORAGE_CONNECTION_STRING!;
   const blobs = BlobServiceClient.fromConnectionString(connection);
@@ -122,7 +131,14 @@ async function start(): Promise<void> {
   await health();
   await init();
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const child = spawn(npm, ["run", "dev"], { stdio: "inherit", env: process.env });
+  // Windowsでは `shell: true` が必須。Node 18.20 / 20.12 以降のセキュリティ修正で
+  // `.cmd` / `.bat` を shell 無しで spawn すると EINVAL になり、この行が
+  // `Error: spawn EINVAL` で即死する（Node 22.17 / Windows 11 で確認済み）。
+  const child = spawn(npm, ["run", "dev"], {
+    stdio: "inherit",
+    env: process.env,
+    shell: process.platform === "win32",
+  });
   child.once("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 }
 
