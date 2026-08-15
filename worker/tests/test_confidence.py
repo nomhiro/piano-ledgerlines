@@ -86,6 +86,18 @@ class ConfidencePolicyTests(unittest.TestCase):
             guarded["metricEvaluations"]["pedal"]["reasonCode"],
             "PEDAL_REFERENCE_NOT_REGENERATED",
         )
+        # 小節レベルでも take レベルの具体的な理由がそのまま伝播すること（汎用の
+        # INSUFFICIENT_ALIGNMENT_EVIDENCE に上書きされない）。この小節の pedal 素点は
+        # None だが、take レベルの pedal は「scored」ではなく「参照譜未再生成で
+        # unavailable」なので、小節側も同じ理由を引き継ぐ。
+        measure_pedal = guarded["measureScores"][0]["metricEvaluations"]["pedal"]
+        self.assertEqual(measure_pedal["status"], "unavailable")
+        self.assertEqual(measure_pedal["reasonCode"], "PEDAL_REFERENCE_NOT_REGENERATED")
+        # measureScores[0]["score"] は WEIGHTS を pitch/pedal 除外後に再正規化した
+        # 加重平均になる（手計算での導出、report に記載）:
+        #   (63.3*0.28 + 95.93*0.17 + 98.58*0.17) / (0.28+0.17+0.17)
+        #   = 50.7907 / 0.62 = 81.92048... -> round(.., 2) = 81.92
+        self.assertEqual(guarded["measureScores"][0]["score"], 81.92)
         # rhythm/tempo/dynamics が scored になったことで指摘生成が動くようになる（spec 4.1）
         issues = generate_issues(guarded["measureScores"])
         self.assertTrue(any(issue["metric"] == "rhythm" for issue in issues))
@@ -123,9 +135,49 @@ class ConfidencePolicyTests(unittest.TestCase):
         self.assertTrue(guarded["alignmentBelowFloor"])
         self.assertIsNone(guarded["overallScore"])
         for key in ("pitch", "rhythm", "tempo", "dynamics", "pedal"):
-            self.assertIn(
-                guarded["metricEvaluations"][key]["status"], {"withheld", "unavailable"}
+            # below_floor は decide() の最初の分岐で確定するため、常に withheld
+            # （unavailable に落ちる経路は存在しない）。
+            self.assertEqual(guarded["metricEvaluations"][key]["status"], "withheld")
+            self.assertEqual(guarded["metricEvaluations"][key]["reasonCode"], "ALIGNMENT_BELOW_FLOOR")
+            # 小節レベルも同じ withheld を継承する（take と食い違わない）。
+            self.assertEqual(
+                guarded["measureScores"][0]["metricEvaluations"][key]["status"], "withheld"
             )
+
+    def test_matchrate_exactly_at_floor_boundary_is_not_below_floor(self):
+        """MIN_MATCH_RATE の判定は `<` なので、ちょうど0.30ならフロア未満ではない。"""
+        reference = {"notes": [{"index": i, "measure": 1} for i in range(10)]}
+        alignment = {
+            "pairs": [[0, 0], [1, 1], [2, 2]],  # matchRate = 3/10 = 0.30 ちょうど
+            "missed": list(range(3, 10)),
+            "extra": [],
+            "retakes": [],
+            "unplayed": [],
+        }
+        result = {
+            "overallScore": 50,
+            "metrics": {"pitch": 50, "rhythm": 50, "tempo": 50, "dynamics": None, "pedal": None},
+            "measureScores": [
+                {
+                    "measure": 1,
+                    "refNotes": 10,
+                    "score": 50,
+                    "metrics": {
+                        "pitch": 50,
+                        "rhythm": 50,
+                        "tempo": 50,
+                        "dynamics": None,
+                        "pedal": None,
+                    },
+                }
+            ],
+        }
+
+        guarded = apply_fail_closed_policy(result, reference, alignment, 3)
+
+        self.assertFalse(guarded["alignmentBelowFloor"])
+        self.assertEqual(guarded["metricEvaluations"]["rhythm"]["status"], "scored")
+        self.assertEqual(guarded["metricEvaluations"]["tempo"]["status"], "scored")
 
     def test_alignment_confidence_is_evidence_not_a_release_threshold(self):
         reference = {

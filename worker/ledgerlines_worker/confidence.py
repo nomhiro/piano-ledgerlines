@@ -17,11 +17,7 @@ METRICS = ("pitch", "rhythm", "tempo", "dynamics", "pedal")
 MIN_MATCH_RATE = 0.30  # spec 4.7。別曲の音声を弾いた場合の安全網
 
 REASONS = {
-    "UNCALIBRATED_MODEL": "教師評価データによる較正が完了していないため判定を保留しました。",
-    "REFERENCE_ONLY_UNCALIBRATED": "録音条件に比較的頑健な参考値です。教師評価による較正前のため採点には使用しません。",
     "INSUFFICIENT_ALIGNMENT_EVIDENCE": "対応付けの根拠が不足しているため判定を保留しました。",
-    "LOW_ALIGNMENT_CONFIDENCE": "較正済みの安全基準を満たす対応付け根拠がないため判定を保留しました。",
-    "CALIBRATED_SCORE": "教師評価データで承認された較正基準を満たしています。",
     "NO_SCORE_DYNAMICS": "参照譜から強弱記号を抽出できていないため測定できません。",
     "NO_SCORE_PEDAL": "参照譜からペダル記号を抽出できていないため測定できません。",
     "PITCH_FORMULA_UNVALIDATED": "音程の指標式が採譜ノイズに影響されることが判明しているため、式の検証が完了するまで判定を保留します。",
@@ -191,16 +187,34 @@ def apply_fail_closed_policy(
             key: (measure_metrics.get(key) if decisions[key][0] == "scored" else None)
             for key in METRICS
         }
+
+        def measure_decision(key: str) -> tuple[str, str]:
+            """この小節における (status, reasonCode)。
+
+            take レベルの判定 (`decisions[key]`) が原則そのまま通る。唯一の例外は
+            take レベルが `scored`（この指標は全体としては採点可能）なのに、この
+            小節自身には素点が無い場合——その場合だけ「この小節の対応付け根拠が
+            不足している」という小節固有の理由に置き換える。take レベルが
+            `withheld`/`unavailable` のとき（例: pitch や below_floor、AGC、参照
+            ペダル未登録）はその具体的な理由をそのまま伝播する。汎用理由で
+            上書きすると、同じ応答内で take レベルより曖昧、あるいは矛盾した
+            status になってしまう（例: below_floor 時に一部の小節だけ
+            unavailable になる）。
+            """
+            take_status, take_reason = decisions[key]
+            if take_status == "scored" and measure_metrics.get(key) is None:
+                return "unavailable", "INSUFFICIENT_ALIGNMENT_EVIDENCE"
+            return take_status, take_reason
+
+        measure_decisions = {key: measure_decision(key) for key in METRICS}
         measure_score["metricEvaluations"] = {
             key: _evaluation(
-                decisions[key][0] if measure_metrics.get(key) is not None else "unavailable",
-                decisions[key][1]
-                if measure_metrics.get(key) is not None
-                else "INSUFFICIENT_ALIGNMENT_EVIDENCE",
-                evidence["alignmentConfidence"] if decisions[key][0] == "scored" else None,
+                status,
+                reason_code,
+                evidence["alignmentConfidence"] if status == "scored" else None,
                 evidence,
             )
-            for key in METRICS
+            for key, (status, reason_code) in measure_decisions.items()
         }
         scored = {
             key: weight
