@@ -289,10 +289,16 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
 
         est_notes_full, est_pedal = metrics_mod.load_est(midi_path)
         dynamic_range_db = pre.get("dynamicRangeDb")
+        # ここで使う DEGRADED_DYNAMIC_RANGE_DB(14.0) は「rhythm のデッドゾーンを広げるか」
+        # だけを決める閾値。AGC_DYNAMIC_RANGE_DB(10.0) とは別物で、AGC 判定は
+        # confidence.apply_fail_closed_policy が dynamic_range_db を受け取って内部で
+        # 独自に行う（ここでは AGC を判定しない）。2つを混同しないこと。
         degraded = (
             dynamic_range_db is not None
             and dynamic_range_db < DEGRADED_DYNAMIC_RANGE_DB
         )
+        # 旧 reference.json（pedalIntervalsBeats 追加前に生成されたもの）ではキーが
+        # 存在しないため、欠損時は空リストに degrade する（採点自体は落とさない）。
         ref_pedal_beats = reference.get("pedalIntervalsBeats") or []
         result = metrics_mod.compute(
             reference,
@@ -313,6 +319,10 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
             pedal_reference_available=bool(ref_pedal_beats),
         )
 
+        # 対応付けの成立率が下限（MIN_MATCH_RATE）を割った場合、指標を欠損値のまま
+        # completed にするのではなく、別の曲を録音した可能性が高いとみなして
+        # ここで failed に落とす。generate_issues 以降は measureScores 前提の処理なので、
+        # 採点が成立していないここで return し、後続には進めない。
         if result.get("alignmentBelowFloor"):
             update({
                 "status": "failed",
@@ -322,6 +332,11 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
                 },
                 "analysis": {
                     "pipelineVersion": "0.3.0-m5-metric-policy",
+                    # completed 分岐と同じ診断情報を残す。ALIGN_FAILED は「別の曲を弾いた」
+                    # だけでなく「録音が小さすぎた」「テンポ検出が外れた」場合にも起こるため、
+                    # preprocess/baseTempo が無いと failed 後の原因調査ができない。
+                    "preprocess": {**pre, "path": str(pre["path"])},
+                    "baseTempo": result["baseTempo"],
                     "diagnostics": result["diagnostics"],
                 },
             })
