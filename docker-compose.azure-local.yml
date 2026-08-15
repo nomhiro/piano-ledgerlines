@@ -9,7 +9,12 @@ services:
     volumes:
       - azurite-data:/data
     healthcheck:
-      test: ["CMD", "sh", "-c", "wget -q -O- http://127.0.0.1:10000/devstoreaccount1?comp=list >/dev/null 2>&1 || exit 1"]
+      # 元は `wget` でBlobのList Containersを叩いていたが、認証なしの呼び出しは
+      # Azuriteが（正しく）403/400を返すため常にunhealthyになり、下のworkerの
+      # `depends_on: condition: service_healthy` がいつまでもブロックされていた
+      # （実機で確認済み）。認証結果ではなく単に接続できるかだけを見ればよいので
+      # TCP到達性チェックに変更する。
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 10000 && nc -z 127.0.0.1 10001 || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -28,6 +33,45 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+
+  # 解析ワーカー（worker/cloud_worker.py）。ビルドはCDワークフロー
+  # (.github/workflows/azure-container-apps-cd.yml) と同じ
+  # `docker build -f worker/Dockerfile .`（コンテキストはリポジトリルート）。
+  # 本番と同じイメージ・同じコードで、認証先だけがエミュレータに切り替わる
+  # （worker/cloud_worker.py の `LEDGERLINES_AZURE_EMULATOR` 分岐）。
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    # `npm run azure:up` は `npm run azure:init`（Queue/コンテナ作成）より前に
+    # 呼ばれてよい想定なので、workerがQueue未作成のまま先に起動し
+    # `QueueNotFound`で終了することがある（実機で確認済み）。`cloud_worker.py`の
+    # main()はトップレベルの例外を再試行しないため、再起動ポリシーで
+    # プロセス自体をリトライさせる（本番のContainer Apps Jobsが再試行するのと
+    # 同じ考え方）。
+    restart: on-failure
+    depends_on:
+      azurite:
+        condition: service_healthy
+      cosmos:
+        condition: service_healthy
+    environment:
+      LEDGERLINES_AZURE_EMULATOR: "true"
+      # コンテナネットワーク内なのでホストは `azurite` / `cosmos`。
+      # .env.local.azure.example の値はNext.jsをホスト側で動かす前提の
+      # 127.0.0.1/localhost なので、ここでは別途サービス名で上書きする。
+      AZURE_COSMOS_ENDPOINT: https://cosmos:8081
+      AZURE_COSMOS_KEY: C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==
+      AZURE_COSMOS_DATABASE: ledgerlines
+      AZURE_COSMOS_TAKES_CONTAINER: takes
+      # Azuriteの唯一の既知アカウントキー（.env.local.azure.exampleのコメント参照）。
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;"
+      AZURE_STORAGE_SCORES_CONTAINER: scores
+      AZURE_STORAGE_AUDIO_CONTAINER: audio
+      AZURE_STORAGE_DERIVED_CONTAINER: derived
+      AZURE_ANALYSIS_QUEUE: analysis-jobs
+      WORKER_POLLING_SECONDS: "5"
+      WORKER_VISIBILITY_TIMEOUT_SECONDS: "1800"
 
 volumes:
   azurite-data:

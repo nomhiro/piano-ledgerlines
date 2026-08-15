@@ -32,7 +32,7 @@ C:\llpoc\venv\Scripts\pip install torch librosa mir_eval pretty_midi soundfile p
 > `TranscribeError("MODEL_CHECKPOINT_MISSING", ...)` を投げる（`worker_main.py` は
 > これを `failure.code: "MODEL_CHECKPOINT_MISSING"` としてテイクへ記録する）。
 
-## 実行（ローカル Web アプリから呼ばれる想定）
+## 実行（`LEDGERLINES_REPOSITORY=local` などローカルバックエンド、ローカル Web アプリから呼ばれる想定）
 
 ```powershell
 C:\llpoc\venv\Scripts\python.exe worker_main.py --data-dir ..\.data --song-id <songId> --take-id <takeId>
@@ -46,6 +46,51 @@ Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeW
 から `child_process.spawn` でこのCLIを起動する（Pythonインタプリタは
 `WORKER_PYTHON` 環境変数、未設定時は `C:\llpoc\venv\Scripts\python.exe` の存在確認、
 それも無ければ `python` にフォールバック）。
+
+## Azureエミュレータでのローカル実行（`LEDGERLINES_REPOSITORY=azure` + `LEDGERLINES_AZURE_EMULATOR=true`）
+
+`npm run azure:up`（`docker-compose.azure-local.yml`）で Azurite・Cosmosエミュレータに加えて、
+この `worker` サービス（`worker/Dockerfile` からビルド）も起動する。Next.js側は
+Azurite/Cosmosエミュレータを本番同様のBlob/Queue/Cosmosとして使い、この節の
+ワーカーコンテナが本番と**同じイメージ・同じコード**でQueueを消費するため、
+「Azureで実行するときと同じ状態」をコード差異なしでローカル再現できる。
+上のローカルバックエンド節（`worker_main.py` を venv から直接実行する方法）とは別経路で、
+どちらもモデル推論自体は本物である。
+
+- 認証: `cloud_worker.py` の `CloudStore.__init__` は `LEDGERLINES_AZURE_EMULATOR=true` のとき、
+  `DefaultAzureCredential` の代わりに接続文字列／固定キー（Azurite・Cosmosエミュレータの
+  公開されている既定資格情報）で各クライアントを構築する。フラグが立っていない限り
+  本番パス（`DefaultAzureCredential`・通常のTLS検証）は変わらない。
+- TLS: Cosmosエミュレータの証明書は `localhost` 向けの自己署名証明書のため、
+  コンテナネットワーク越しに `cosmos` という別ホスト名で接続すると証明書検証に失敗する。
+  そのため `CosmosClient(..., connection_verify=False)` でエミュレータ限定でTLS検証を無効化する
+  （TS側 `cosmos-repository.ts` が `rejectUnauthorized: false` で行っているのと同じ対処）。
+- `.env.local.azure.example` は `LEDGERLINES_DETERMINISTIC_ANALYSIS=false` が既定になっている。
+  ワーカーコンテナが立っている前提であれば、解析結果はスタブ（固定値 overallScore 79）ではなく
+  本物の採譜・アライメント・スコアリングになる。ワーカーコンテナを起動せずUI側だけを
+  素早く触りたい場合や実推論の待ち時間を避けたい場合は `true` に戻せる
+  （`src/lib/server/queue.ts` の `runDeterministicAnalysis`）。
+- ローカルへのPythonインストールもモデルのダウンロードも不要 ── ワーカーはコンテナ内で
+  動き、採譜モデルのチェックポイントは `worker/Dockerfile` がビルド時にイメージへ
+  同梱する（下の「採譜モデルのチェックポイント」節）。初回の `npm run azure:up` は
+  そのダウンロード（約164MiB）を含むため時間がかかるが、以降はレイヤーキャッシュに乗る。
+- **`worker/Dockerfile` を更新した後は `--build` だけでは不十分**。ワーカーが
+  `restart: on-failure` で再起動ループに入っていると、`docker compose up -d --build worker` が
+  新しいイメージをビルドしても既存コンテナは古いイメージのまま動き続ける（実際にこれで
+  「ビルドは通っているのにコンテナ内にチェックポイントが無い」状態に遭遇した）。
+  `docker compose -f docker-compose.azure-local.yml up -d --force-recreate worker` を使うこと。
+- Queueは `npm run azure:init` が作成する。それより前にワーカーが起動すると
+  `QueueNotFound` で落ちるが、`restart: on-failure` によりQueue作成後に自力で復帰する
+  （`cloud_worker.py` の `main()` はトップレベル例外を再試行しないため、プロセス単位で
+  リトライさせている）。ログに `QueueNotFound` が数回出るのは異常ではない。
+
+```powershell
+copy .env.local.azure.example .env.local.azure   # 初回のみ。値は編集不要（既知の公開資格情報）
+npm run azure:up                                  # azurite / cosmos / worker を起動（初回はworkerのビルドが走る）
+npm run azure:start                               # 疎通確認・Cosmosコンテナ/Azuriteコンテナ作成・Next.js起動
+```
+
+`npm run azure:down` で停止する。ワーカーのログは `docker compose -f docker-compose.azure-local.yml logs -f worker` で確認できる。
 
 ## Azure 本番ワーカー
 
