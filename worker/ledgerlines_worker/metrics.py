@@ -10,10 +10,17 @@ from __future__ import annotations
 import numpy as np
 import pretty_midi
 
+from .scoring_constants import (
+    AGC_DYNAMIC_RANGE_DB,
+    DEAD_RHYTHM,
+    DEAD_RHYTHM_DEGRADED,
+    DEGRADED_DYNAMIC_RANGE_DB,
+    WEIGHTS,
+)
+
 W_MISS = 1.0
 W_EXTRA = 0.7
 TAU_PITCH = 0.15
-DEAD_RHYTHM = 0.03
 TAU_RHYTHM = 0.12
 DEAD_TEMPO = 0.03
 TAU_TEMPO = 0.10
@@ -25,8 +32,6 @@ RANGE_PENALTY = 0.30
 DEAD_PEDAL = 0.10
 TAU_PEDAL = 0.30
 SYNC_WEIGHT = 0.3
-
-WEIGHTS = {"pitch": 0.28, "rhythm": 0.28, "tempo": 0.17, "dynamics": 0.17, "pedal": 0.10}
 
 
 def decay(e: float, tau: float, k: float = 1.0) -> float:
@@ -98,8 +103,10 @@ def compute(
     alignment: dict,
     est_pedal: list[tuple[float, float]],
     ref_pedal: list[tuple[float, float]],
+    degraded: bool = False,
 ) -> dict:
     ref_notes = reference["notes"]
+    dead_rhythm = DEAD_RHYTHM_DEGRADED if degraded else DEAD_RHYTHM
     bpm_measure = reference["beatsPerMeasure"]
     pairs = [(int(a), int(b)) for a, b in alignment["pairs"]]
     beats, secs = estimate_beat_map(pairs, ref_notes, est_notes)
@@ -167,7 +174,7 @@ def compute(
                 deltas.append(b_perf - n["startBeat"])
         if len(deltas) >= 2:
             d = np.array(deltas) - float(np.median(deltas))
-            e_rhythm = float(np.sqrt(np.mean(np.maximum(0.0, np.abs(d) - DEAD_RHYTHM) ** 2)))
+            e_rhythm = float(np.sqrt(np.mean(np.maximum(0.0, np.abs(d) - dead_rhythm) ** 2)))
             e_sync = sync_error(notes, pair_by_ref, est_notes)
             scores["rhythm"] = decay(e_rhythm + SYNC_WEIGHT * e_sync, TAU_RHYTHM, 2.0)
         else:
