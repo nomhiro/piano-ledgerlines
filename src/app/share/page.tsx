@@ -1,7 +1,6 @@
-import { Suspense } from "react";
-import ShareView from "@/components/ShareView";
 import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
-import { toHistorySong, toHistoryTake } from "@/lib/real-history";
+import { toHistorySong } from "@/lib/real-history";
+import TakeEvaluationPanel from "@/components/TakeEvaluationPanel";
 import { getAccountContextForLayout } from "@/lib/server/account";
 
 export default async function SharePage({
@@ -33,7 +32,7 @@ export default async function SharePage({
 
   if (selectedId.startsWith("song_")) {
     const realSong = await getRealSong(selectedId);
-    const takes = realSong ? (await listTakesBySong(selectedId)).map(toHistoryTake) : [];
+    const takes = realSong ? await listTakesBySong(selectedId) : [];
     if (!realSong || takes.length === 0) {
       return (
         <div className="space-y-3">
@@ -43,18 +42,20 @@ export default async function SharePage({
       );
     }
 
+    const latest = [...takes].sort(
+      (a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime(),
+    )[0];
+
     return (
-      <Suspense>
-        <ShareView
-          songs={selectableSongs}
-          song={toHistorySong(realSong)}
-          takes={takes}
-          comments={[]}
-          assignments={[]}
-          viewerDisplayName={account?.profile.displayName}
-          classroomName={account?.activeClassroom?.name}
-        />
-      </Suspense>
+      <div className="space-y-4">
+        <h1 className="text-2xl font-bold">{realSong.title} の共有</h1>
+        <p className="text-sm text-[var(--muted)]">
+          {account?.activeClassroom
+            ? `共有先: ${account.activeClassroom.name}`
+            : "共有先未設定（個人利用）"}
+        </p>
+        <TakeEvaluationPanel take={latest} />
+      </div>
     );
   }
 

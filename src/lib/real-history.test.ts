@@ -70,3 +70,10 @@ test("toCoachTake never fabricates a score field", () => {
   assert.strictEqual("metrics" in result, false);
   assert.strictEqual("measureScores" in result, false);
 });
+
+test("real-history no longer exposes a score-fabricating adapter", async () => {
+  const mod: Record<string, unknown> = await import("./real-history");
+
+  assert.strictEqual("toHistoryTake" in mod, false);
+  assert.strictEqual("metricsFromDoc" in mod, false);
+});
