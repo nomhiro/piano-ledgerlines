@@ -26,8 +26,16 @@ URL = (
 # transcribe.py が既定で探すパスは `note_F1=0.9677_pedal_F1=0.9186.pth`
 # （`CRNN_` 接頭辞なし）。保存名をそのまま変えているのはtypoではなく、
 # ライブラリ側の既定値に合わせるため（m4-report.md 8章のcurlコマンドと同じ処理）。
-DEST = pathlib.Path(
-    "/root/piano_transcription_inference_data/note_F1=0.9677_pedal_F1=0.9186.pth"
+#
+# 保存先は `transcribe.DEFAULT_CHECKPOINT` と同じ導出（`Path.home()` 起点）にする。
+# 現在のイメージは root で動くのでどちらも `/root/...` に解決されるが、パスを
+# 直書きすると実行ユーザーが変わったときに transcribe.py 側とだけずれ、
+# 「ビルドは通るのに実行時にチェックポイントが見つからない」という、
+# この仕組みが防ぐはずの失敗をそのまま再現してしまう。
+DEST = (
+    pathlib.Path.home()
+    / "piano_transcription_inference_data"
+    / "note_F1=0.9677_pedal_F1=0.9186.pth"
 )
 # Zenodoのレスポンスヘッダー(oc-checksum)から取得した、この配布ファイル自体のMD5。
 # サイズ下限だけではHTMLのエラー/リダイレクトページがたまたま下限を超える余地を
@@ -39,30 +47,42 @@ EXPECTED_MD5 = "22b961b77c1878239fec963362097045"
 MIN_SIZE_BYTES = 150 * 1024 * 1024
 
 
+def verify(path: pathlib.Path) -> str | None:
+    """検証に通れば None、失敗すれば理由を返す。"""
+    size = path.stat().st_size
+    if size < MIN_SIZE_BYTES:
+        return (
+            f"size {size} bytes is below the {MIN_SIZE_BYTES} floor - "
+            "likely an HTML error/redirect page, not the model file"
+        )
+    digest = hashlib.md5(path.read_bytes()).hexdigest()
+    if digest != EXPECTED_MD5:
+        return f"MD5 mismatch: expected {EXPECTED_MD5}, got {digest}"
+    return None
+
+
 def main() -> int:
+    # 既に正しいファイルがあれば再取得しない。イメージビルドでは毎回新しい層なので
+    # 通常ヒットしないが、ローカル開発でこのスクリプトを何度も実行しても
+    # 164MBを取り直さずに済む。壊れたファイルが残っている場合は取り直す。
+    if DEST.exists():
+        problem = verify(DEST)
+        if problem is None:
+            print(f"checkpoint already present and verified at {DEST}")
+            return 0
+        print(f"existing checkpoint at {DEST} is unusable ({problem}); re-downloading")
+
     DEST.parent.mkdir(parents=True, exist_ok=True)
     print(f"downloading checkpoint from {URL}")
     urllib.request.urlretrieve(URL, DEST)
 
-    size = DEST.stat().st_size
-    print(f"downloaded {size} bytes")
-    if size < MIN_SIZE_BYTES:
-        print(
-            f"checkpoint download too small ({size} bytes) - "
-            "likely an HTML error/redirect page, not the model file",
-            file=sys.stderr,
-        )
+    print(f"downloaded {DEST.stat().st_size} bytes")
+    problem = verify(DEST)
+    if problem is not None:
+        print(f"checkpoint download failed verification: {problem}", file=sys.stderr)
         return 1
 
-    digest = hashlib.md5(DEST.read_bytes()).hexdigest()
-    if digest != EXPECTED_MD5:
-        print(
-            f"checkpoint MD5 mismatch: expected {EXPECTED_MD5}, got {digest}",
-            file=sys.stderr,
-        )
-        return 1
-
-    print("checkpoint MD5 verified")
+    print(f"checkpoint MD5 verified at {DEST}")
     return 0
 
 
