@@ -1,5 +1,5 @@
 import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
-import { toHistorySong } from "@/lib/real-history";
+import { toHistorySong, sortByRecordedAtDesc } from "@/lib/real-history";
 import TakeEvaluationPanel from "@/components/TakeEvaluationPanel";
 import { getAccountContextForLayout } from "@/lib/server/account";
 
@@ -42,9 +42,7 @@ export default async function SharePage({
       );
     }
 
-    const latest = [...takes].sort(
-      (a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime(),
-    )[0];
+    const latest = sortByRecordedAtDesc(takes)[0];
 
     return (
       <div className="space-y-4">

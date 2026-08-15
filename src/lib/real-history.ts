@@ -6,6 +6,10 @@ export function sortByRecordedAt<T extends { recordedAt: string }>(items: T[]): 
   return [...items].sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime());
 }
 
+export function sortByRecordedAtDesc<T extends { recordedAt: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
+}
+
 function measuresRangeFromTake(take: TakeDoc): [number, number] {
   if (take.playedMeasureRange) return take.playedMeasureRange;
   if (take.requestedMeasureRange.length === 2) return take.requestedMeasureRange;
