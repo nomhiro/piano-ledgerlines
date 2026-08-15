@@ -1,5 +1,6 @@
 import type { AiReview, IssueType, MetricKey, Song, Take } from "@/lib/mock/types";
 import type { SongDoc, TakeDoc } from "@/lib/server/types";
+import type { CoachTake } from "@/components/CoachView";
 
 export function sortByRecordedAt<T extends { recordedAt: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime());
@@ -126,6 +127,15 @@ export function toHistorySong(song: SongDoc): Song {
     targetTempo: song.targetTempo ?? song.detectedTempo ?? 120,
     currentTempo: song.detectedTempo ?? song.targetTempo ?? 120,
     sharedWithTeacher: false,
+  };
+}
+
+export function toCoachTake(take: TakeDoc): CoachTake {
+  return {
+    id: take.id,
+    label: take.label,
+    recordedAt: take.recordedAt,
+    aiReview: normalizeCoachReview(take.aiReview, take),
   };
 }
 
