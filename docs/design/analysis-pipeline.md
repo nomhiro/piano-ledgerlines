@@ -480,9 +480,13 @@ anchorQuality(m) = min(1, matched数 / 3)   … アンカー3点以上で満点
 
 | 条件 | 結果 |
 |---|---|
-| Stage 1 の DTW 正規化コストが閾値超過 | `ALIGN_FAILED` |
-| 全体の `matchRate` が `MIN_MATCH_RATE` 未満 | `ALIGN_FAILED`（→ [6.4](#64-信頼度の算出)の `MIN_MATCH_RATE = 0.30`。実装済みなのはこの条件だけで、`TOO_MANY_ERRORS` というコードは存在しない） |
-| `playedRange` が 2小節未満 | `ALIGN_FAILED` |
+| Stage 1 の DTW 正規化コストが閾値超過 | **未実装の設計仮説**。`align.py` は閾値判定も例外もせず、常にペア/missed/extra等を返す |
+| 全体の `matchRate` が `MIN_MATCH_RATE` 未満 | `ALIGN_FAILED`（→ [6.4](#64-信頼度の算出)の `MIN_MATCH_RATE = 0.30`。`confidence.py` が判定し、`worker_main.py` がそれを受けて `failed` にする。**実装済みなのはこの条件だけ**） |
+| `playedRange` が 2小節未満 | **未実装の設計仮説**。`align.py` にそのようなチェックはない |
+
+> 上の2行（DTW正規化コスト、`playedRange` 2小節未満）は M3 時点の設計仮説のまま残しており、
+> 削除はしないが現在の失敗判定ではない。`worker_main.py` が `ALIGN_FAILED` を出す条件は
+> `matchRate < MIN_MATCH_RATE` の1つだけで、`TOO_MANY_ERRORS` というコードは存在しない。
 
 失敗時も採譜結果（ピアノロール）と音声は保存し、UI で提示する。
 

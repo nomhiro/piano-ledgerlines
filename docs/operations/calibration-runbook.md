@@ -11,6 +11,18 @@
   artifactの検証（`approved`/gate合格/`datasetHash`/`calibrationVersion`の整合性）を
   今も行うが、その結果は診断情報にのみ記録される。フェイルクローズという言葉が指すのは
   `pitch`が式未検証のため保留され続けることであり、artifactの有無で切り替わる挙動ではない。
+- **`releasedMetrics`に指標を追加しても、それだけで採点対象（`scored`/`withheld`/`unavailable`）が
+  変わることはない**——それを決めるのは録音条件への頑健性とコード定数であり、artifactの
+  内容ではない。**しかし、artifactが検証に失敗すると「劣化」ではなく「全滅」する。**
+  `releasedMetrics`が空・重複・`tempo`を含まない、または`thresholds.tempo.minimumConfidence`が
+  `[0,1]`の数値でない場合、`calibration.py`（`load_calibration()`）は`CalibrationError`を
+  投げる（`releasedMetrics`検証・`tempo`必須チェックは`calibration.py:39-49`）。この例外は
+  `run_analyze`のどこでも捕捉されず、汎用の`except Exception`（`worker_main.py:375-378`）まで
+  伝播し、**そのartifactが設定されている間に解析される全テイクが`failed`（コード`INTERNAL`）
+  になる**——一部の指標が採点されないのではなく、解析そのものが止まる。原因がartifactだと
+  示すヒントはログの例外メッセージ（`str(exc)`）だけで、`reasonCode`のような専用コードは
+  付かない。配備前に必ず`calibration.py`の検証をローカルまたはstagingで通してから
+  `LEDGERLINES_CALIBRATION_FILE`を本番に向けること。
 - 音声・MIDI・教師の自由記述はGitに置かない。
 - `approved: true`、release gate合格、dataset hash、calibration versionが揃わない
   artifactをworkerは拒否する。
@@ -33,14 +45,17 @@ artifact schemaは`1.1`。`releasedMetrics` にない指標は公開しない。
 ## 配備
 
 1. artifactの`datasetHash`と評価レポートをレビューする。
-2. artifactを読み取り専用Secret/Volumeへ配備する。
-3. `LEDGERLINES_CALIBRATION_FILE`をそのパスへ設定する。
-4. stagingで`calibration.py`がartifactを検証エラーなく読み込み、対象テイクの
+2. **配備前に`calibration.py`の`load_calibration(path)`をローカルで実行し、
+   `CalibrationError`が出ないことを確認する。** ここで失敗するartifactを本番に
+   向けると、解析中の全テイクが`failed`/`INTERNAL`になる（→ 安全原則）。
+3. artifactを読み取り専用Secret/Volumeへ配備する。
+4. `LEDGERLINES_CALIBRATION_FILE`をそのパスへ設定する。
+5. stagingで`--mode analyze`を1件以上流し、`failed`/`INTERNAL`が出ないこと、対象テイクの
    `evaluation.calibrationVersion`が期待どおり記録されることを確認する。
    指標の`scored`/`withheld`/`unavailable`判定はこのartifactに依存しないため、
    有効化の前後で保留率が変化しないことも確認する（変化した場合は本ランブックの
    前提—安全原則を参照—が崩れているので配備を止める）。
-5. `LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`をstaging、その後productionで設定する。
+6. `LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`をstaging、その後productionで設定する。
 
 ## 監視
 
