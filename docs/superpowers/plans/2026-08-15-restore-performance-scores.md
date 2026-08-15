@@ -961,14 +961,14 @@ AGC_DYNAMIC_RANGE_DB = 10.0  # m4-report.md 5.1（AGC はこれ未満で断定�
 `metrics_mod.DEAD_RHYTHM` を参照している場合も動くよう、名前は再 export される形になる。
 
 ```python
-from .scoring_constants import (
-    AGC_DYNAMIC_RANGE_DB,
-    DEAD_RHYTHM,
-    DEAD_RHYTHM_DEGRADED,
-    DEGRADED_DYNAMIC_RANGE_DB,
-    WEIGHTS,
-)
+from .scoring_constants import DEAD_RHYTHM, DEAD_RHYTHM_DEGRADED, WEIGHTS
 ```
+
+`metrics.py` が import するのは実際に使う3つだけにする。`AGC_DYNAMIC_RANGE_DB` と
+`DEGRADED_DYNAMIC_RANGE_DB` は `metrics.py` では一切参照しないため、再 export 目的で
+import すると未使用 import（pyflakes F401 相当）になる。それぞれの利用側
+（Task 8 の `confidence.py`、Task 9 の `worker_main.py`）が `scoring_constants` から
+直接 import する。
 
 `WEIGHTS` を参照している既存箇所（`:218,227,236`）は変更不要である。
 
@@ -1634,12 +1634,21 @@ git commit -m "feat: score metrics individually by measured robustness"
 
 `:286-295` を次に置き換える。
 
+閾値は `scoring_constants` から直接 import する。`metrics_mod` 経由の再 export に頼らない
+（Task 6 のレビューで、使われない再 export が `metrics.py` に残るという指摘が出たため。
+各モジュールが実際に使うものだけを import する形にする）。`worker_main.py` の該当の
+import ブロックに追加する。
+
+```python
+    from ledgerlines_worker.scoring_constants import DEGRADED_DYNAMIC_RANGE_DB
+```
+
 ```python
         est_notes_full, est_pedal = metrics_mod.load_est(midi_path)
         dynamic_range_db = pre.get("dynamicRangeDb")
         degraded = (
             dynamic_range_db is not None
-            and dynamic_range_db < metrics_mod.DEGRADED_DYNAMIC_RANGE_DB
+            and dynamic_range_db < DEGRADED_DYNAMIC_RANGE_DB
         )
         pedal_events = reference.get("pedalEvents")
         ref_pedal_beats = (
