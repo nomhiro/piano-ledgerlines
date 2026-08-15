@@ -12,6 +12,9 @@ export interface ApiSong {
   timeSignature: string | null;
   keySignature: string | null;
   detectedTempo: number | null;
+  scoreSource: "musicxml" | "midi" | "pdf" | null;
+  /** OSMD で描ける MusicXML プレビューのファイル名。null なら楽譜を描けない。 */
+  previewScoreFileName: string | null;
   warnings: { code: string; message: string; measures?: number[] }[];
 }
 
@@ -51,6 +54,8 @@ export interface ApiTakeDetail {
   } | null;
   measureScores: {
     measure: number;
+    /** 楽譜上の小節番号（docs/spec/api.md:72）。繰り返しが無い曲では measure と一致する。 */
+    scoreMeasure: number;
     score: number | null;
     confidence: number | null;
     metrics: Record<string, number | null>;

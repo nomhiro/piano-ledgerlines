@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui";
 import { getTake, submitTake, type ApiTakeDetail } from "@/lib/api/client";
 import TakeEvaluationPanel from "@/components/TakeEvaluationPanel";
+import TakeScoreCard from "@/components/TakeScoreCard";
 
 export default function RealTakeResultPage() {
   const params = useParams<{ takeId: string }>();
@@ -76,6 +77,8 @@ export default function RealTakeResultPage() {
       />
 
       <TakeEvaluationPanel take={take} />
+
+      <TakeScoreCard songId={take.songId} measureScores={take.measureScores} />
 
       {take.status === "failed" && (
         <div className="mt-5 flex items-center gap-3">
