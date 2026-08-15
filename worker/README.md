@@ -70,17 +70,19 @@ Azurite/Cosmosエミュレータを本番同様のBlob/Queue/Cosmosとして使�
   本物の採譜・アライメント・スコアリングになる。ワーカーコンテナを起動せずUI側だけを
   素早く触りたい場合や実推論の待ち時間を避けたい場合は `true` に戻せる
   （`src/lib/server/queue.ts` の `runDeterministicAnalysis`）。
-- ローカルへのPythonインストールは不要 ── ワーカーはコンテナ内で動く。
-- **既知の制約（このブランチ時点）**: 現在の `worker/Dockerfile` はビルド時に
-  採譜モデルのチェックポイントを取得しない（`fetch_checkpoint.py` は別PR
-  `fix-worker-transcription-checkpoint` で追加作業中で、まだmainに無い）。
-  そのため `ledgerlines_worker/transcribe.py` の `DEFAULT_CHECKPOINT` はコンテナ内に
-  存在せず、`PianoTranscription` がチェックポイント無しで初期化されて自動取得
-  （wget）を試みるが、本番ベースイメージ（`python:3.11-slim`）にはwgetが無いため
-  実際にジョブを処理する段（採譜）で失敗する。ワーカーの起動・Queue疎通・認証は
-  この制約と無関係で問題なく動く（本README執筆時に確認済み）が、上記の
-  チェックポイント配置PRがマージされるまで、エミュレータ経由の実ジョブは
-  採譜ステップで失敗する。
+- ローカルへのPythonインストールもモデルのダウンロードも不要 ── ワーカーはコンテナ内で
+  動き、採譜モデルのチェックポイントは `worker/Dockerfile` がビルド時にイメージへ
+  同梱する（下の「採譜モデルのチェックポイント」節）。初回の `npm run azure:up` は
+  そのダウンロード（約164MiB）を含むため時間がかかるが、以降はレイヤーキャッシュに乗る。
+- **`worker/Dockerfile` を更新した後は `--build` だけでは不十分**。ワーカーが
+  `restart: on-failure` で再起動ループに入っていると、`docker compose up -d --build worker` が
+  新しいイメージをビルドしても既存コンテナは古いイメージのまま動き続ける（実際にこれで
+  「ビルドは通っているのにコンテナ内にチェックポイントが無い」状態に遭遇した）。
+  `docker compose -f docker-compose.azure-local.yml up -d --force-recreate worker` を使うこと。
+- Queueは `npm run azure:init` が作成する。それより前にワーカーが起動すると
+  `QueueNotFound` で落ちるが、`restart: on-failure` によりQueue作成後に自力で復帰する
+  （`cloud_worker.py` の `main()` はトップレベル例外を再試行しないため、プロセス単位で
+  リトライさせている）。ログに `QueueNotFound` が数回出るのは異常ではない。
 
 ```powershell
 copy .env.local.azure.example .env.local.azure   # 初回のみ。値は編集不要（既知の公開資格情報）
