@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
+# 未較正の設計値。教師評価データによる較正は行われていない（metrics.md 8.2 は「未」）ので、
+# 「40点未満は重大」という区切りには実測の裏付けが無い。指標別ポリシーで rhythm/tempo/
+# dynamics/pedal が scored になったことでこの閾値が初めて実効化された。指標そのものの
+# 頑健性を指す `ROBUSTNESS_VALIDATED`（confidence.py）とは別物であり、こちらは未検証。
 SEVERITY_THRESHOLDS = [(40.0, "high"), (65.0, "medium"), (80.0, "low")]
 
 METRIC_ISSUE_KIND = {
@@ -71,10 +75,12 @@ def generate_issues(measure_scores: list[dict[str, Any]]) -> list[dict[str, Any]
                     else f"{run[0]}小節目の{METRIC_LABEL[metric]}が{avg:.0f}点です。",
                     "metric": metric,
                     "confidence": round(min(run_confidence), 4) if run_confidence else None,
+                    # 「較正済み」と書いてはならない。教師評価データによる較正は存在せず
+                    # （metrics.md 8.2）、採点の根拠は録音条件への頑健性の実測である。
                     "observation": (
-                        f"{METRIC_LABEL[metric]}の較正済みスコアが連続して低下しています。"
+                        f"{METRIC_LABEL[metric]}のスコアが連続して低下しています。"
                         if len(run) > 1
-                        else f"{METRIC_LABEL[metric]}の較正済みスコアが低下しています。"
+                        else f"{METRIC_LABEL[metric]}のスコアが低下しています。"
                     ),
                     "evidence": {
                         "averageScore": round(avg, 2),

@@ -100,16 +100,47 @@ practice-plan/me/dashboard 等、後続フェーズ）。
 - MusicXMLの繰り返し記号展開は未実装（m5-prep-report.md 4.4で指摘済みの既知課題）。
 - AI講評（S6, Microsoft Foundry）は未実装。`aiReview: null` を返す。
 - 非ピアノ音混入対策（録音UIガイダンス）はUI側の別タスク。
-- `reference.py` はMusicXMLからペダル記号を抽出していないため、`pedal`指標は常に
-  `null`（`metricsNAReason.pedal`に理由を記載）として扱う。
+- `reference.py` はMusicXMLからペダル記号を抽出し、`pedalIntervalsBeats`として
+  参照譜に出力する（サステインペダルのみ。区間の終端は被覆音符の終了拍まで含める）。
+  `worker_main.py`はこれを`ref_pedal_beats`として`metrics.compute()`に渡し、
+  `pedal_ratio`の参照側として使う。**過去のバグ**: `reference.py`自体は以前から
+  ペダル記号を抽出していたが、その値が参照譜の戻り値から欠落しており、
+  `worker_main.py`側も`ref_pedal=[]`を固定で渡していたため、ペダル記号のある楽譜でも
+  「ペダルを一切使わない演奏」と比較されていた（踏んだ分がそのまま誤りとして減点）。
+  既存曲の`reference.json`は`pedalIntervalsBeats`追加前に生成されたものが多く、
+  そのままでは`pedal`は`unavailable`（理由コード`PEDAL_REFERENCE_NOT_REGENERATED`、
+  「測定対象外」表示）になる。`pedal`を測定するには楽譜を再登録し、
+  `reference.json`を再生成する必要がある。
+  再生成済み（キーが存在する）なのに区間が空の場合は別の状態である ──
+  `capabilities.pedal`は`hasPedalMark`だけを見て種別を絞らないのに区間抽出はサステインのみ
+  拾うため、楽譜のペダル記号が全てソステヌート/ソフトだとこうなる。ただし
+  `reference.py`の`_pedal_intervals_beats`が空リストを返す原因はこれだけではなく、
+  `getSpannedElements()`が空になる場合や終了拍が開始拍以下になる退化区間の場合も
+  同じ空リストになる。後者2つは楽譜側にサステイン記号があり得るため、「サステイン以外」
+  と断定する理由文は嘘になる。この場合は再登録しても結果が変わらないので、理由コードは
+  `NO_MEASURABLE_PEDAL_INTERVALS`（「この楽譜のペダル記号から測定可能なサステイン区間を
+  抽出できなかったため測定対象外です。」）を返し、再登録を案内しない。
 - 教師評価・採譜正解による較正成果物は未作成で、採譜モデルの音符単位 confidence も
-  MIDIへ保存されていない。このため現在はフェイルクローズとし、総合点と
-  `pitch` / `rhythm` / `dynamics` / `pedal` を判定保留にする。`tempo` は
-  M4で録音条件への頑健性を確認済みの参考値としてのみ表示し、指摘やAI講評には使わない。
-- 較正済み値を有効化するには、release gateを通ったartifactのパスを
-  `LEDGERLINES_CALIBRATION_FILE`に設定したうえで、
-  `LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`を明示する。運用手順は
-  `docs/operations/calibration-runbook.md`を参照。
+  MIDIへ保存されていない。かつては（Issue #8）これを理由に総合点と5指標すべてを
+  一律で判定保留にしていたが、M4 5章で録音条件への指標別の頑健性を実測できたことを
+  受けて、指標別の判断に置き換えた（`ledgerlines_worker/confidence.py`の
+  `apply_fail_closed_policy`、`pipelineVersion: "0.3.0-m5-metric-policy"`）。
+  現在は`pitch`だけが`withheld`（理由コード`PITCH_FORMULA_UNVALIDATED`。式が
+  採譜ノイズ＝余剰音に支配されるため）で、`rhythm` / `tempo` / `dynamics` / `pedal`
+  の4指標は採点する（`dynamics`はAGC検出時のみ`unavailable`）。`pitch`が常に
+  `withheld`であるため、`overallScore`は現段階でも`null`のまま返す
+  （`unavailable`は加重平均から除外して再配分するが、`withheld`が残っていれば
+  総合点自体を出さない）。これは講師評価との較正が完了したという意味ではなく、
+  録音条件への頑健性が実測で確認されたという、より狭い主張である
+  （→ `docs/spec/metrics.md` 7.2 / 8.2）。
+- `calibration.py`（release gate・アーティファクトの検証）は変更していない。
+  release gateを通ったartifactのパスを`LEDGERLINES_CALIBRATION_FILE`に設定したうえで
+  `LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`を明示すると読み込まれ、
+  `evaluation.calibrationVersion`や診断情報に記録される。**ただし、この段以降は
+  どのartifactが読み込まれても指標の`scored`/`withheld`/`unavailable`判定は変わらない**
+  （以前は`thresholds.tempo.minimumConfidence`が`tempo`を採点するかどうかのゲートだったが、
+  M4の頑健性実測により無条件で`scored`にしたため、このゲートは外れている）。
+  運用手順は`docs/operations/calibration-runbook.md`を参照。
 - `status: reviewing`（architecture.md のシーケンス図にある、AI講評待ちの中間状態）は
   未導入。S6が無いため `scoring` → 直接 `completed` に遷移する。
 
@@ -119,8 +150,11 @@ practice-plan/me/dashboard 等、後続フェーズ）。
 進捗グラフ、AIコーチ、共有、曲/テイク詳細等）を動かしており、実APIより遥かに
 リッチなスキーマ（`period`/`accent`/`difficulty`/`goalDate`/`sharedWithTeacher`、
 非nullの`aiReview`、ピアノロール、テンポ/強弱カーブ、講師コメント等）に依存している。
-縦串フェーズではこれらを全て実データに置き換えるのではなく、**書き込み経路のみ**を
-実APIに接続した。
+縦串フェーズではこれらを全て実データに置き換えるのではなく、書き込み経路（曲登録・録音・
+解析投入）を実APIに接続し、**読み取り側は「実データを表示できる画面」だけをモック
+コンポーネントから切り離した**。切り離しの基準は、モック側の型が`null`（判定保留／測定対象外）を
+表現できるかどうかである ── 表現できない画面はモックのまま据え置いてある。
+以下は画面ごとの現状で、実データが通る／通らないの境界そのものである。
 
 - `src/app/songs/new/page.tsx`: 実際に`POST /api/songs`→`POST /api/songs/{id}/score`
   を呼び出し、本物のMusicXML解析結果（小節数・拍子・調・警告）を表示する。
@@ -131,11 +165,42 @@ practice-plan/me/dashboard 等、後続フェーズ）。
   `POST /api/takes/{id}/submit`→SSE購読（`GET /api/takes/{id}/events`）という
   実フローを通す。モックの曲IDが渡された場合は従来通り疑似シミュレーションのまま。
 - `src/app/takes/real/[takeId]/page.tsx`: 実テイクの結果専用の新規最小ビュー。
-  `GET /api/takes/{id}`のレスポンス（総合スコア・5指標・小節スコア・issues）を
-  そのまま表示する。既存のモック専用`takes/[id]/page.tsx`（ピアノロール・カーブ・
+  `GET /api/takes/{id}`のレスポンス（5指標・小節スコア・issues）を
+  `src/components/TakeEvaluationPanel.tsx`で表示する。指標は値があれば数値バー、
+  無ければ status（判定保留／測定対象外）と保存済みの理由文を出す。
+  **総合スコア欄は現状つねに「判定保留」＋理由文**になる ── 「既知の制約」節の
+  指標別ポリシーのとおり、`pitch`が`withheld`である限り`overallScore`は`null`のままである。
+  既存のモック専用`takes/[id]/page.tsx`（ピアノロール・カーブ・
   AIコーチ講評込みの詳細画面）とは別ルートとして共存させている。
-- ダッシュボード・進捗・コーチ・共有は**意図的に据え置き**（モックデータのまま）。
-  実スキーマがこれらの機能をまだ満たせないため、フル書き換えは後続フェーズの
-  スコープとする。
+- `src/app/progress/page.tsx` と `src/app/share/page.tsx`: 実曲（`song_`で始まるID）を
+  選んだ場合は`ProgressView` / `ShareView`ではなく`TakeEvaluationPanel`を描画する
+  （テイク詳細と同じ正直な評価ビュー）。モックの曲IDを選んだ場合は従来どおり
+  `ProgressView`のまま。理由は型である: モックの`Take.overallScore`は非nullの`number`、
+  `Take.metrics`と`MeasureScore.metrics`は非nullの`Record<MetricKey, number>`（`src/lib/mock/types.ts`）で、
+  `unavailable`／`withheld`を表現できない。実データをそのまま流すと数値を捏造することになる。
+  - **代償**: 実曲では`/progress`のスコア推移グラフとテイクA/B比較が出なくなった。
+    どちらも数値の`overallScore`に対する引き算・`toFixed`を前提としており、
+    `pitch`が`withheld`である間`overallScore`は`null`だからである。
+    テイクは新しい順の一覧として、各テイクの絶対値のみを表示する。
+  - 解析方式（`analysis.pipelineVersion`）が異なるテイクが同一リストに混在する場合は、
+    「テイク間の差は上達を意味しません」という注記を出す
+    （calibration-runbook.md の「異なるversion間の差分を改善量として表示しない」規定）。
+- `src/app/coach/page.tsx`: 実曲でも`CoachView`を使い続けるが、渡すテイクは
+  `real-history.ts`の`toCoachTake`が作る`id` / `label` / `recordedAt` / `aiReview`の
+  4フィールドのみで、スコア系のフィールドを一切含まない（`stagnant`も`[]`固定）。
+- ダッシュボード（`src/app/page.tsx`）は**モック専用のまま**で、実データは通らない
+  （`@/lib/mock/data`からのみimportしている）。スコアを`?? 0`で埋める箇所が残るが、
+  到達するのはモックデータだけである。
 - `songs/page.tsx` と `songs/[id]/page.tsx` は実曲を表示し、実テイクへの導線を提供する。
+  実曲側は`overallScore`が`null`なら「未算出」と出す。同じ`songs/page.tsx`の下部にある
+  モック曲セクションは引き続きモック専用（そちらは`?? 0`のまま）。
   `takes/[id]` は `take_` IDを `/takes/real/[takeId]` へリダイレクトする。
+- 実データ画面から外したPoV版の共有UIについて（`src/components/ShareView.tsx`。
+  コミット`50c038c`以前には存在し、この節を書いた時点では未使用のため後に削除した）:
+  固定文字列の共有URLとコピーボタン、
+  送信先を持たない公開範囲チェックボックス、固定の「閲覧済み」バッジ、
+  `useState`のみでリロードすると消えるレッスンノートと課題リスト、
+  そしてスコア表示で構成されていた。バックエンドを持たない飾りか、
+  非nullスコアを要求する部分（＝上記の型の理由で実データを流せない部分）のいずれかであり、
+  唯一の実機能だった曲セレクタは`/share`側に直接置き直してある。
+  この経緯を踏まえずに「共有画面は実装済み」と読まないこと。

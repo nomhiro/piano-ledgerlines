@@ -18,6 +18,8 @@ const SUGGESTIONS = [
 const CANNED_REPLY =
   "分析データを参照して回答します。\n\n直近3テイクの傾向では、あなたは「新しい箇所の譜読みは速いが、一度身についた癖の修正に時間がかかる」タイプです。したがって、練習時間の配分は\n\n・弱点の分解練習：50%\n・通し練習：30%\n・新しい箇所：20%\n\nを推奨します。特に停滞小節（19・20小節）は、通し練習の中では改善しません。必ず単独で、テンポを大きく落として取り出してください。\n\n※ このモックでは固定の応答を返しています。本実装では Azure AI Foundry のモデルに、あなたの分析指標・テイク履歴・楽譜情報をコンテキストとして渡して生成します。";
 
+export type CoachTake = Pick<Take, "id" | "label" | "recordedAt" | "aiReview">;
+
 export default function CoachView({
   songs,
   song,
@@ -27,7 +29,7 @@ export default function CoachView({
 }: {
   songs: Song[];
   song: Song;
-  take: Take;
+  take: CoachTake;
   seed: ChatMessage[];
   stagnant: { measure: number; delta: number; score: number }[];
 }) {

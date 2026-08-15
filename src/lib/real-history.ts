@@ -1,18 +1,13 @@
-import type { AiReview, IssueType, MetricKey, Song, Take } from "@/lib/mock/types";
+import type { AiReview, Song } from "@/lib/mock/types";
 import type { SongDoc, TakeDoc } from "@/lib/server/types";
+import type { CoachTake } from "@/components/CoachView";
 
 export function sortByRecordedAt<T extends { recordedAt: string }>(items: T[]): T[] {
   return [...items].sort((a, b) => new Date(a.recordedAt).getTime() - new Date(b.recordedAt).getTime());
 }
 
-function metricsFromDoc(metrics: Record<MetricKey, number | null> | null | undefined): Record<MetricKey, number> {
-  return {
-    pitch: metrics?.pitch ?? 0,
-    rhythm: metrics?.rhythm ?? 0,
-    tempo: metrics?.tempo ?? 0,
-    dynamics: metrics?.dynamics ?? 0,
-    pedal: metrics?.pedal ?? 0,
-  };
+export function sortByRecordedAtDesc<T extends { recordedAt: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime());
 }
 
 function measuresRangeFromTake(take: TakeDoc): [number, number] {
@@ -129,48 +124,11 @@ export function toHistorySong(song: SongDoc): Song {
   };
 }
 
-export function toHistoryTake(take: TakeDoc): Take {
-  const metrics = metricsFromDoc(take.metrics);
-  const measureScores = take.measureScores.map((measureScore) => ({
-    measure: measureScore.measure,
-    score: measureScore.score ?? 0,
-    metrics: {
-      pitch: measureScore.metrics?.pitch ?? 0,
-      rhythm: measureScore.metrics?.rhythm ?? 0,
-      tempo: measureScore.metrics?.tempo ?? 0,
-      dynamics: measureScore.metrics?.dynamics ?? 0,
-      pedal: measureScore.metrics?.pedal ?? 0,
-    },
-  }));
-
+export function toCoachTake(take: TakeDoc): CoachTake {
   return {
     id: take.id,
-    songId: take.songId,
     label: take.label,
     recordedAt: take.recordedAt,
-    durationSec: take.durationSec,
-    measureRange: take.playedMeasureRange ?? take.requestedMeasureRange,
-    tempoBpm: take.requestedTempo ?? 120,
-    overallScore: take.overallScore ?? 0,
-    metrics,
-    measureScores,
-    issues: take.issues.map((issue) => ({
-      id: issue.id,
-      measure: issue.measures[0] ?? 0,
-      beat: 1,
-      type: issue.metric as IssueType,
-      severity: issue.severity,
-      title: issue.summary,
-      detail: issue.observation ?? issue.summary,
-    })),
-    tempoCurve: [],
-    dynamicsCurve: [],
-    roll: [],
     aiReview: normalizeCoachReview(take.aiReview, take),
-    memo: take.memo,
   };
-}
-
-export function getSongListWithRealSongs(realSongs: SongDoc[], fallbackSongs: Song[]): Song[] {
-  return [...realSongs.map(toHistorySong), ...fallbackSongs];
 }

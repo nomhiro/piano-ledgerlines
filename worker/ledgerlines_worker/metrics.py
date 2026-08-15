@@ -10,10 +10,11 @@ from __future__ import annotations
 import numpy as np
 import pretty_midi
 
+from .scoring_constants import DEAD_RHYTHM, DEAD_RHYTHM_DEGRADED, WEIGHTS
+
 W_MISS = 1.0
 W_EXTRA = 0.7
 TAU_PITCH = 0.15
-DEAD_RHYTHM = 0.03
 TAU_RHYTHM = 0.12
 DEAD_TEMPO = 0.03
 TAU_TEMPO = 0.10
@@ -25,8 +26,6 @@ RANGE_PENALTY = 0.30
 DEAD_PEDAL = 0.10
 TAU_PEDAL = 0.30
 SYNC_WEIGHT = 0.3
-
-WEIGHTS = {"pitch": 0.28, "rhythm": 0.28, "tempo": 0.17, "dynamics": 0.17, "pedal": 0.10}
 
 
 def decay(e: float, tau: float, k: float = 1.0) -> float:
@@ -75,6 +74,20 @@ def pedal_intervals(pm: pretty_midi.PrettyMIDI, threshold: int = 64) -> list[tup
     return intervals
 
 
+def pedal_intervals_from_beats(
+    intervals_beats: list[tuple[float, float]], beats: np.ndarray, secs: np.ndarray
+) -> list[tuple[float, float]]:
+    """拍単位のペダル区間をビートマップで秒に変換する。"""
+    out: list[tuple[float, float]] = []
+    for start_beat, end_beat in intervals_beats:
+        t0 = measure_seconds(beats, secs, start_beat)
+        t1 = measure_seconds(beats, secs, end_beat)
+        if np.isnan(t0) or np.isnan(t1) or t1 <= t0:
+            continue
+        out.append((float(t0), float(t1)))
+    return out
+
+
 def pedal_ratio(intervals: list[tuple[float, float]], t0: float, t1: float) -> float:
     if t1 <= t0:
         return 0.0
@@ -97,12 +110,15 @@ def compute(
     est_notes: list[dict],
     alignment: dict,
     est_pedal: list[tuple[float, float]],
-    ref_pedal: list[tuple[float, float]],
+    ref_pedal_beats: list[tuple[float, float]],
+    degraded: bool = False,
 ) -> dict:
     ref_notes = reference["notes"]
+    dead_rhythm = DEAD_RHYTHM_DEGRADED if degraded else DEAD_RHYTHM
     bpm_measure = reference["beatsPerMeasure"]
     pairs = [(int(a), int(b)) for a, b in alignment["pairs"]]
     beats, secs = estimate_beat_map(pairs, ref_notes, est_notes)
+    ref_pedal = pedal_intervals_from_beats(ref_pedal_beats, beats, secs)
 
     ref_by_measure: dict[int, list[dict]] = {}
     for n in ref_notes:
@@ -167,7 +183,7 @@ def compute(
                 deltas.append(b_perf - n["startBeat"])
         if len(deltas) >= 2:
             d = np.array(deltas) - float(np.median(deltas))
-            e_rhythm = float(np.sqrt(np.mean(np.maximum(0.0, np.abs(d) - DEAD_RHYTHM) ** 2)))
+            e_rhythm = float(np.sqrt(np.mean(np.maximum(0.0, np.abs(d) - dead_rhythm) ** 2)))
             e_sync = sync_error(notes, pair_by_ref, est_notes)
             scores["rhythm"] = decay(e_rhythm + SYNC_WEIGHT * e_sync, TAU_RHYTHM, 2.0)
         else:

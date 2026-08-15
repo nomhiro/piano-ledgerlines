@@ -8,7 +8,7 @@ import {
   findStagnantMeasures,
 } from "@/lib/mock/data";
 import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
-import { toHistorySong, toHistoryTake } from "@/lib/real-history";
+import { toHistorySong, toCoachTake } from "@/lib/real-history";
 import CoachView from "@/components/CoachView";
 
 export default async function CoachPage({
@@ -27,7 +27,7 @@ export default async function CoachPage({
 
   if (selectedId.startsWith("song_")) {
     const realSong = await getRealSong(selectedId);
-    const takes = realSong ? (await listTakesBySong(selectedId)).map(toHistoryTake) : [];
+    const takes = realSong ? (await listTakesBySong(selectedId)).map(toCoachTake) : [];
     if (!realSong || takes.length === 0) notFound();
 
     const song = toHistorySong(realSong);

@@ -468,13 +468,25 @@ anchorQuality(m) = min(1, matched数 / 3)   … アンカー3点以上で満点
 教師評価・採譜正解で較正されたポリシーがない状態では、この値に暫定閾値を当てず、
 総合点と採譜依存指標を保留する。`tempo` は M4 の頑健性実測に基づく参考値としてのみ残す。
 
+上記の未較正な閾値とは別に、**実装済みの安全網**として `MIN_MATCH_RATE`
+（`worker/ledgerlines_worker/confidence.py`、`= 0.30`）がある。全体の `matchRate`
+（対応付けられた音符数 / 参照音符数）がこれを下回ると、テイクを `failed (ALIGN_FAILED)`
+にする。これは「別の曲の音声を投稿した」ケースの検出であり、[spec/metrics.md 7.3]
+(../spec/metrics.md#73-テイク全体の信頼度) が仮説として挙げる `takeConfidence < 0.5` を
+実装したものではない（`matchRate` と `takeConfidence` は別の値で、`0.30` は `0.5` より
+保守的だが仕様の代替ではない）。
+
 ### 6.5 失敗判定
 
 | 条件 | 結果 |
 |---|---|
-| Stage 1 の DTW 正規化コストが閾値超過 | `ALIGN_FAILED` |
-| 全体の matchRate < 0.35 | `TOO_MANY_ERRORS` |
-| `playedRange` が 2小節未満 | `ALIGN_FAILED` |
+| Stage 1 の DTW 正規化コストが閾値超過 | **未実装の設計仮説**。`align.py` は閾値判定も例外もせず、常にペア/missed/extra等を返す |
+| 全体の `matchRate` が `MIN_MATCH_RATE` 未満 | `ALIGN_FAILED`（→ [6.4](#64-信頼度の算出)の `MIN_MATCH_RATE = 0.30`。`confidence.py` が判定し、`worker_main.py` がそれを受けて `failed` にする。**実装済みなのはこの条件だけ**） |
+| `playedRange` が 2小節未満 | **未実装の設計仮説**。`align.py` にそのようなチェックはない |
+
+> 上の2行（DTW正規化コスト、`playedRange` 2小節未満）は M3 時点の設計仮説のまま残しており、
+> 削除はしないが現在の失敗判定ではない。`worker_main.py` が `ALIGN_FAILED` を出す条件は
+> `matchRate < MIN_MATCH_RATE` の1つだけで、`TOO_MANY_ERRORS` というコードは存在しない。
 
 失敗時も採譜結果（ピアノロール）と音声は保存し、UI で提示する。
 
@@ -538,10 +550,24 @@ def score_take(ref: ReferenceScore, perf: Performance, align: AlignmentResult) -
     return aggregate(measures, ref)
 ```
 
-本番実装は較正成果物が欠ける場合、上の `0.5` を通過条件に使わずフェイルクローズにする。
-この場合、小節とテイクには `withheld`、指標には `withheld` / `unavailable` /
-`reference` を付け、理由コードと観測 evidence を保存する。低信頼な指標を除外して
-残りの重みで総合点を再計算することはしない。
+本番実装は較正成果物が欠ける場合、上の `0.5` を通過条件に使わない。当初（Issue #8）は
+これを一律のフェイルクローズとし、`overallScore` と `pitch`/`rhythm`/`dynamics`/`pedal`
+すべてを判定保留にしていた——教師較正も音符単位 confidence もない状態での安全策として、
+その判断自体は当時正しかった。
+
+M4 5章で同一演奏を録音条件別に再解析し、指標ごとの頑健性を実測できたことで、この
+一律の判断を指標別の判断に置き換えた（`worker/ledgerlines_worker/confidence.py`）。
+指標には `scored` / `withheld` / `unavailable` / `reference` のいずれかを付け、理由コード
+と観測 evidence を保存する。総合点の扱いは次の2つの規則に従う。
+
+- `unavailable`（測定対象が存在しない。楽譜に強弱記号がない、AGC 検出、ペダル参照
+  未登録など）は**総合点の加重平均から除外し、残りの指標の重みで再配分する**。
+- `withheld`（測定できるが信頼できない。現時点では `pitch` のみ）が**1つでも残っていれば
+  総合点そのものを `null` にする**。除外して残りだけで点数を出す対象ではない。
+
+`pitch` は式が採譜ノイズ（余剰音）に支配されることが判明したため常に `withheld`
+（`PITCH_FORMULA_UNVALIDATED`）であり、この段では `overallScore` は数値化されない
+（→ [spec/metrics.md 7.2](../spec/metrics.md#72-閾値と挙動)）。
 
 ### 7.2 テスト戦略
 

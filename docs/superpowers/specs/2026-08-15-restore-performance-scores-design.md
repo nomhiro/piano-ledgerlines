@@ -1,0 +1,341 @@
+# 演奏スコアの復帰 — 設計
+
+- 日付: 2026-08-15
+- 対象: `worker/ledgerlines_worker/`（metrics / align / confidence / preprocess）、`worker/worker_main.py`、`src/lib/real-history.ts`、`/progress` `/coach` `/share`
+- 関連: `docs/poc/m4-report.md` 5章、`docs/spec/metrics.md` 3.1/3.2/7.2、`docs/design/analysis-pipeline.md` 6.4/7.1
+
+## 1. 目的
+
+Issue #8 のフェイルクローズ（commit `5361cbf` / `c444c8f`）以降、`overallScore` と
+`pitch` / `rhythm` / `dynamics` / `pedal` が常に判定保留になっている。これを、指標ごとに
+測定された頑健性に基づいて再び採点できる状態に戻す。
+
+## 2. 現状の問題
+
+### 2.1 フェイルクローズが指標ごとの差を無視している
+
+`confidence.py:262` は `result["overallScore"] = None` を無条件に実行し、`pitch` /
+`rhythm` / `dynamics` / `pedal` を一律 `withheld` にする。較正 artifact を配備しても
+`overallScore` を数値に戻すコードパスは存在しない（artifact が影響するのは `tempo` のみ）。
+
+一方 `m4-report.md` 5章は、同一演奏を録音条件だけ変えて測った結果を指標別に記録している
+（clean を基準にした差）。
+
+| 指標 | clean | room | phone | phone_agc |
+|---|---|---|---|---|
+| tempo | 92.4 | -2.7 | -1.9 | -3.2 |
+| pedal | 94.9 | -4.5 | -5.0 | -13.5 |
+| dynamics | 91.2 | -5.7 | -9.0 | -45.1 |
+| rhythm | 87.0 | -11.8 | -6.6 | -14.7 |
+| pitch | 85.2 | -37.7 | -37.6 | -50.0 |
+
+問題は pitch にほぼ集約されており、`dynamics` の崩壊は AGC 条件に限定される。一律保留は
+この測定結果を捨てている。
+
+### 2.2 pitch 式が採譜ノイズに支配されている
+
+```
+e_pitch = (W_MISS × missed + W_EXTRA × extra) / refNotes     W_MISS=1.0, W_EXTRA=0.7
+pitch   = 100 × exp(−e_pitch / TAU_PITCH)                    TAU_PITCH=0.15
+```
+
+`worker/tests/fixtures/issue8_take_diagnostic.json`（refNotes 1242 / matched 974 /
+missed 268 / extra 521 / 採譜音符 1495）で分解すると:
+
+| 条件 | e_pitch | pitch |
+|---|---|---|
+| 現状 | 0.509 | 約 3〜10点 |
+| extra を完全に除去 | 0.216 | 23.7点 |
+| W_EXTRA を 0.35 に半減 | 0.363 | 8.9点 |
+| extra 完全除去 ＋ TAU_PITCH 0.30 | 0.216 | 48.7点 |
+
+余剰音が誤りの 58% を占めるが、**それを全て消しても 24 点にしか戻らない**。`TAU_PITCH = 0.15`
+が支配的である。`metrics.md:330` の「15% 外すと約 37 点」は式の意味の説明であり、測定根拠ではない。
+`metrics.md:922` は τ の較正手段を「講師3名のランク付けとの順位相関」と定め、状態を **未** と
+記録している。
+
+### 2.3 UI が null を 0 点として描画している
+
+`src/lib/real-history.ts` が保留（null）を 0 に潰している（`:10-14` の `metricsFromDoc`、
+`:136-143` の `measureScores`、`:154` の `overallScore`）。この値が `ScoreRing` に渡り、
+`/progress` `/coach` `/share` で「0点」として表示される。`/takes/real/[takeId]` と
+`/songs`（実データ側）は正しく「判定保留」「未算出」を出しており、扱いが不統一である。
+
+### 2.4 ペダル参照が配線されていない
+
+`reference.py:86-98, 199-244` は MusicXML から `pedalEvents`（拍位置と種別）と
+`hasPedalMark` を抽出している。しかし `worker_main.py:290` が `ref_pedal=[]` を
+ハードコードしているため、`pedal_ratio` の参照側が常に空になり、楽譜にペダル記号がある曲では
+「ペダルを踏むほど減点される」計算になっている。`worker/README.md` の
+「`reference.py` はMusicXMLからペダル記号を抽出していない」という記述は commit `c444c8f`
+の `reference.py` 改修（+313行）以降、事実と合っていない。
+
+## 3. 非目標
+
+- 教師評価データセットの作成。`poc/evaluation/manifest.json` は全項目 `missing` /
+  `pending_external_annotation` のままとし、`metrics.md:922`（τ の教師較正）は **未** で残す。
+- 教師視点の高度評価（演奏順位、worst-5 一致、意図的表現の判定）の公開。
+  `calibration.py` の artifact 経路と `advancedEvaluationPassed` ゲートは現状のまま維持する。
+- `articulation` 指標の追加（M4 で offset が信頼できないと結論済み）。
+- モック UI（`src/lib/mock/`）側の変更。
+
+## 4. 設計
+
+### 4.1 指標ごとの扱い
+
+`confidence.py` に、式の頑健性が本設計のハーネスで検証された指標の集合を持たせる。
+較正 artifact（教師評価由来）とは独立した概念として扱い、両者を混同しない。
+
+| 指標 | 新しい status | 条件 |
+|---|---|---|
+| tempo | `scored` | `tempoExcluded` でない小節が存在する。現状の `reference` から昇格 |
+| rhythm | `scored` | 劣化録音時のデッドゾーン緩和（4.4）を適用 |
+| dynamics | `scored` / `unavailable` | `capabilities.dynamics` が真かつ AGC 未検出。AGC 検出時は `unavailable` |
+| pedal | `scored` / `unavailable` | `capabilities.pedal` が真かつ `ref_pedal` を構築できた場合（4.6） |
+| pitch | `scored` | extra 分類（4.2）と τ 再校正（4.3）の適用後 |
+
+いずれの指標も、テイク全体が 4.7 のアライメント下限を満たさない場合は採点しない。
+
+この表は最終状態（5.4 の段3 完了時）である。段2 完了時点での pitch の扱いは 5.4 を参照。
+
+### 4.2 pitch — extra 音符の分類
+
+`align.py` の `extra` は「マッチしなかった採譜音符」を単一の集合として返している。これを
+2つに分割し、`alignment` に別キーで格納する。
+
+`extraNoise`（採譜アーティファクト。誤りに計上しない）— 以下のいずれかに該当するもの:
+
+1. マッチ済み音符と同一ピッチで、onset 差が 50 ms 以内（二重検出）
+2. マッチ済み音符の ±12 半音で、onset 差が 50 ms 以内かつ velocity がその音符の 50% 未満（倍音ゴースト）
+3. duration が 60 ms 未満かつ velocity が 40 未満（スプリアス）
+4. 採譜側のペダル区間内にあり、同一ペダル区間内でそれより前にマッチした音符と同ピッチで、velocity がその音符の 50% 未満（残響）
+
+`extraPlayed` — 上記に該当しないもの。実際の弾き間違いはここに残る。
+
+`metrics.py` の `e_pitch` は `extraPlayed` のみを計上する。`extraNoise` は件数と分類内訳を
+`diagnostics` に保存し、監査可能性を維持する。
+
+**閾値（50 ms / 60 ms / velocity 50% / velocity 40）は暫定値である。** フェーズ1では
+弁別力を壊さないことの確認のみに使い、フェーズ2で MAESTRO の clean と room を比較して
+「clean には存在せず room で増える extra」の特徴分布から確定する。フェーズ2完了までは
+コード内に暫定値であることをコメントで明示する。
+
+判定 1 と 2 は「マッチ済み音符」を参照するため、`align()` が `final` を確定した後に実行する。
+
+### 4.3 pitch — τ の再校正と根拠の限界
+
+`TAU_PITCH` と `W_EXTRA` を、`poc/scripts/perturb.py` が生成する既知の摂動に対する応答と、
+`poc/scripts/degrade.py` による録音条件不変性から決める。合格条件は 5.1 / 5.2 に定める。
+
+**この根拠は教師較正の代替ではない。** 摂動応答は「音符を N% 落としたら点が下がる」ことを
+保証するが、「人が良い演奏と感じるか」は測っていない。`metrics.md` には根拠が摂動応答と
+録音条件不変性であることを明記し、教師較正の項目は未のまま残す。
+
+### 4.4 rhythm — 劣化録音時のデッドゾーン
+
+`metrics.md:860` は劣化録音時に `d_r` を 0.03 → 0.045 拍に緩めると定めているが、
+`metrics.py:16` は `DEAD_RHYTHM = 0.03` の固定値で未実装である。
+
+`preprocess` が返す品質指標で切り替える。判定条件は `metrics.md:860` の
+`dynamicRangeDb < 14` を用いる。
+
+### 4.5 dynamics — AGC ゲート
+
+`preprocess.py` の戻り値に `dynamicRangeDb` を追加する（現在は `rmsDbfs` / `peakDbfs` /
+`clippingRate` のみ）。`m4-report.md` 5.1 は clean/room/phone が 16 dB 以上、phone_agc が
+7 dB 以下で明確に分離し、「ダイナミックレンジが 10 dB を下回れば AGC とみなしてよい」と
+実測している。
+
+閾値は用途ごとに分ける。**混同しないこと。**
+
+| 判定 | 閾値 | 用途 | 根拠 |
+|---|---|---|---|
+| AGC 検出 | `dynamicRangeDb < 10` | `dynamics` を `unavailable`（`AGC_DETECTED`）にする | `m4-report.md` 5.1 の実測（7 dB 以下 vs 16 dB 以上で分離） |
+| 劣化録音 | `dynamicRangeDb < 14` | `rhythm` のデッドゾーンを緩める（4.4） | `metrics.md:860` |
+
+`dynamicRangeDb` の算出は、フレーム RMS の 95 パーセンタイルと 5 パーセンタイルの差
+（dB）とする。`peakDbfs − rmsDbfs`（クレストファクタ）は単発のピークに左右されるため使わない。
+
+### 4.6 pedal — 参照区間の構築
+
+`reference.py` の `pedalEvents`（拍位置と種別）から参照ペダル区間を構築し、
+`worker_main.py:290` の `ref_pedal=[]` を置き換える。
+
+`pedalEvents` の位置は拍単位、`pedal_ratio` は秒単位を期待するため、`metrics.py` が
+既に持つ `measure_seconds(beats, secs, beat)` で変換する。ビートマップが確定するのは
+`compute()` の内部なので、`compute()` が拍単位の参照ペダルイベントを受け取り、内部で
+秒に変換する形に引数を変更する。
+
+`capabilities.pedal` が偽（楽譜にペダル記号がない）場合は従来どおり `unavailable`
+（`NO_SCORE_PEDAL`）を維持する。
+
+### 4.7 overallScore の再計算規則
+
+`confidence.py` の無条件 `None` 代入を廃止し、次の規則で算出する。
+
+- `unavailable` な指標は加重平均から除外し、残りの重みを再配分する
+- `withheld` な指標が1つでも残っている場合、`overallScore` は `null`
+- 全指標が `scored` または `unavailable` の場合、`scored` な指標の加重平均を `overallScore` とする
+
+`unavailable`（測る対象が楽譜に無い＝欠測）と `withheld`（測れるが信頼できない）を区別する
+のがこの規則の要点である。`analysis-pipeline.md:541-545` は「低信頼な指標を除外して残りの
+重みで総合点を再計算しない」と両者を区別せず禁じているため、この区別を導入する形で改訂する。
+
+本設計の適用後、通常の解析経路では `withheld` は発生しない（4.1 の全指標が `scored` か
+`unavailable` に落ち、アライメント不足は `failed` になる）。`withheld` は次の2つのために
+残す規定であり、死んだ分岐ではない。
+
+- 教師較正を要する高度評価（演奏順位、worst-5 一致など。`calibration.py` の artifact 経路）
+- 今後追加され、まだ頑健性を検証していない指標
+
+**アライメント下限**: `diagnostics.matchRate < 0.30` の場合、テイクを
+`failed (ALIGN_FAILED)` として扱い、いずれの指標も採点しない。別の曲の音声が投稿された場合に
+スコアを出さないための安全網である。`metrics.md:830-833` は `takeConfidence < 0.5` で
+`failed` とする規定を持つが未実装で、その 0.5 は未較正の設計仮説である。ここでは
+より保守的な 0.30 を採り、値の妥当性はフェーズ2で確認する（issue8 のテイクは 0.784 で通過する）。
+
+### 4.8 UI / API
+
+`src/lib/real-history.ts` の `?? 0` を廃止し、`Take` 型の該当フィールドを nullable にする。
+`/progress` `/coach` `/share` は `/takes/real/[takeId]` と同じ扱いに揃える。
+
+- `overallScore` が null かつ `evaluation.status === "withheld"` → 「判定保留」＋理由文
+- 指標が null → `metricEvaluations[key].status` に応じて「判定保留」/「算出不可」＋理由文
+- 小節ヒートマップの null → グレー＋斜線ハッチング（`/takes/real/[takeId]:176-181` と同じ表現）
+
+`/coach` はスコアが出ない場合に AI 講評を要求しない（現状の
+`/api/takes/[takeId]/coach` の 400 応答をユーザーに露出させない）。
+
+前回比の差分表示は、両テイクの `overallScore` がともに数値のときだけ出す。片方が保留の
+場合は「比較できません」とする。異なる `pipelineVersion` 間の差分を改善量として表示しない
+（`calibration-runbook.md` 46-51行の規定）。
+
+## 5. 検証
+
+合格条件は**頑健性と弁別力の両方**である。片方だけなら自明に達成できてしまう（τ を無限に
+広げれば録音条件不変だが全ての演奏が満点になる）。
+
+### 5.1 フェーズ1 — 弁別力（音声不要）
+
+`poc/scripts/perturb.py` は ground truth MIDI を直接加工し、採譜を経由しない。MAESTRO の
+MIDI zip のみで実行でき、torch も採譜チェックポイントも不要である。
+
+必要な入力: MAESTRO MIDI zip（約 84 MB）、`prepare_dataset.py` / `make_reference.py` /
+`align.py` / `compute_metrics.py` / `summarize_metrics.py`。
+
+合格条件:
+
+1. `perturbation=none`（完璧な演奏）で pitch ≥ 90。ここで満点にならない分は参照譜の量子化など
+   指標側の系統誤差であり、`perturb.py` の docstring が明示している検査項目である
+2. `drop 5%` と `drop 10%` が分離する（前者の方が高い）
+3. `add 5%`（隣接半音の誤打）で pitch が低下する。すなわち extra 分類が実際の弾き間違いを
+   `extraNoise` に誤分類しない
+4. 摂動率を上げるほど pitch が下がる（`drop` と `add` それぞれについて、摂動率で並べたとき
+   pitch が単調非増加）
+
+条件 3 が本フェーズの主眼である。extra 分類は採譜アーティファクトのみを除外すべきで、
+弾き間違いを許してはならない。
+
+**フェーズ1が通らない限りフェーズ2に進まない。**
+
+### 5.2 フェーズ2 — 頑健性（音声必要、ゲート付き）
+
+必要な入力: MAESTRO 音声（TFRecord シャード）、採譜チェックポイント
+（Zenodo、約 170 MB）、ffmpeg、torch。`m4-report.md` 8章の再現手順に従う。採譜は RTF 1.2
+のため相当の実行時間がかかる。
+
+合格条件:
+
+1. 同一演奏の clean と room / phone の pitch 差が 10 点以内（現状 -37.7 / -37.6）
+2. phone_agc では `dynamics` が `unavailable` に落ちる
+3. `rhythm` の clean と劣化条件の差が 10 点以内
+4. フェーズ1の合格条件が引き続き成立する
+5. extra 分類の閾値を、clean と room の extra 特徴分布から確定する
+6. `matchRate` 下限 0.30 の妥当性を、別曲の音声を投稿した場合の `matchRate` 分布で確認する
+
+phone_agc の pitch は対象外とする（M4 で -50.0、AGC は dynamics だけでなく採譜自体を
+壊すため）。AGC 検出時の pitch の扱いはフェーズ2の測定結果を見て決める。
+
+### 5.3 既存テストへの影響
+
+`worker/tests/test_confidence.py` は「較正なしなら保留」を assert しており、本設計で
+前提が変わる。issue8 のフィクスチャ（`issue8_take_diagnostic.json`）は残し、期待値を
+次の2段階で更新する。
+
+1. フェーズ1完了時 — `pitch` の status が `scored` になり、`overallScore` が数値になること、
+   および pitch が変更前の 9.99 より高いことを assert する。具体値は τ が確定していないため
+   固定しない
+2. τ 確定後 — フィクスチャに確定値を記録し、回帰テストとして固定値で assert する
+
+`test_metrics.py` / `test_calibration.py` / `test_teacher_metrics.py` は較正 artifact
+経路のテストなので変更しない。
+
+`npm run test:production` と `scripts/azure-local-smoke.ts` がスコアの null を前提に
+していないか確認する。
+
+### 5.4 実装の段階分け
+
+MAESTRO への依存度が異なるため、3段に分ける。各段は独立して価値を出し、前段だけで
+マージ可能な状態にする。
+
+| 段 | 内容 | MAESTRO 依存 |
+|---|---|---|
+| 1 | UI の null 処理（4.8）。保留・算出不可を全画面で正しく表示する。スコアの値は変えない | なし |
+| 2 | 指標別 status（4.1）、rhythm デッドゾーン（4.4）、AGC ゲート（4.5）、ペダル配線（4.6）、`overallScore` 算出（4.7）、`matchRate` 下限 | なし（M4 の既存測定に基づく） |
+| 3 | pitch の extra 分類（4.2）と τ 再校正（4.3） | フェーズ1で MIDI、フェーズ2で音声 |
+
+段2 の時点で pitch は `withheld`（理由コード `PITCH_FORMULA_UNVALIDATED`）のままとする。
+pitch は測定可能だが式が未検証という状態であり、`unavailable`（測る対象が楽譜に無い）では
+ないためである。
+
+したがって 4.7 の規則により、**段2 完了時点では `overallScore` は null のまま**である。
+pitch の重みは 0.28 で5指標中最大なので、これを除いた加重平均を「総合点」として提示すると
+別の数字を同じ名前で見せることになる。総合点の復帰は段3 の完了条件とする。
+
+段2 が出す価値は、`tempo` / `rhythm` / `dynamics` / `pedal` が個別に採点され、pitch の
+保留理由が正しく表示されることである。段1 と合わせて「0点」表示は段2 の時点で解消する。
+
+## 6. 文書の改訂
+
+| 文書 | 箇所 | 内容 |
+|---|---|---|
+| `docs/spec/metrics.md` | 3.1 pitch | extra の分類と `W_EXTRA` / `TAU_PITCH` の新しい値、根拠が摂動応答であること |
+| `docs/spec/metrics.md` | 3.2 rhythm | 劣化録音時デッドゾーンの実装と判定条件 |
+| `docs/spec/metrics.md` | 3.4 dynamics | AGC 検出の実装と `dynamicRangeDb` の定義 |
+| `docs/spec/metrics.md` | 7.2 | Issue #8 の安全策を、指標別の扱いに置き換え |
+| `docs/spec/metrics.md` | 7.3 | `matchRate` 下限 0.30 の実装。0.5 は未較正仮説として据え置き |
+| `docs/spec/metrics.md` | 9 / 922行 | τ の教師較正は **未** のまま維持することを明記 |
+| `docs/spec/api.md` | 1章 | `unavailable` と `withheld` の区別と総合点への影響 |
+| `docs/design/analysis-pipeline.md` | 6.4 / 7.1 | 総合点の再計算禁止条項を、`unavailable` / `withheld` の区別を含む形に改訂 |
+| `worker/README.md` | 制約一覧 | ペダル抽出済みという事実に更新。フェイルクローズの記述を差し替え |
+| `docs/poc/m4-report.md` | — | 変更しない（実験記録） |
+
+## 7. 影響ファイル
+
+worker:
+- `ledgerlines_worker/align.py` — extra の分類
+- `ledgerlines_worker/metrics.py` — `e_pitch` の入力変更、`TAU_PITCH` / `W_EXTRA`、`DEAD_RHYTHM` の切り替え、参照ペダル区間の受け取り
+- `ledgerlines_worker/preprocess.py` — `dynamicRangeDb`
+- `ledgerlines_worker/confidence.py` — 指標別 status 判定、`overallScore` 算出、`matchRate` 下限
+- `worker_main.py` — `ref_pedal` の構築、品質指標の受け渡し
+- `cloud_worker.py` — 同期するフィールドの確認
+- `tests/test_confidence.py` — 期待値の更新
+
+Next.js:
+- `src/lib/server/types.ts`、`src/lib/api/client.ts` — 型（`AGC_DETECTED` 理由コードの追加）
+- `src/lib/real-history.ts` — `?? 0` の廃止、nullable 化
+- `src/app/progress/page.tsx`、`src/app/coach/page.tsx`、`src/app/share/page.tsx`
+- `src/components/ProgressView.tsx`、`src/components/SongDetailView.tsx`、`src/components/TakeAnalysisView.tsx`、`src/components/ShareView.tsx`
+
+## 8. リスクと未解決事項
+
+- **τ の根拠が摂動応答に留まる。** 教師評価との順位相関は測れないため、「この点数が妥当か」は
+  依然として未検証である。spec に明記し、教師データが揃った時点で再較正する。
+- **extra 分類の閾値がフェーズ2まで暫定。** フェーズ1完了時点でマージする場合、閾値に
+  実測根拠がない状態が一時的に残る。コード内にその旨を明記する。
+- **MAESTRO は初中級者の演奏を含まない。** `m4-report.md` 7章が「最も重要な未検証項目」と
+  している。止まる・弾き直す演奏での挙動は本設計の検証範囲外である。
+- **phone_agc での pitch の扱いが未定。** フェーズ2の測定後に決める。
+- `pedal` の参照区間構築は `pedalEvents` の種別（`start` / `stop` 等、music21 の
+  `PedalMark` に依存）の解釈に依存する。実装時に MusicXML サンプル
+  （`worker/tests/fixtures/semantic-score.musicxml`）で確認する。
