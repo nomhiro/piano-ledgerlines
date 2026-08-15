@@ -18,6 +18,20 @@ DEFAULT_CHECKPOINT = Path.home() / "piano_transcription_inference_data" / (
 )
 
 
+class TranscribeError(Exception):
+    """S2（採譜）に固有の失敗。
+
+    `preprocess.PreprocessError`（S0の入力起因の失敗）とは別の層・別の原因の
+    失敗なので使い分ける ── ここでの失敗は録音の良し悪しとは無関係な、
+    モデルの提供不備（チェックポイント未配置など）を表す。
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 def transcribe(preprocessed_wav: Path, out_midi: Path, checkpoint_path: Path | None = None) -> None:
     """前処理済みWAVをMIDIに採譜する。"""
     from piano_transcription_inference import PianoTranscription
@@ -27,10 +41,18 @@ def transcribe(preprocessed_wav: Path, out_midi: Path, checkpoint_path: Path | N
         raise ValueError(f"expected {SR}Hz input, got {sr}")
 
     ckpt = checkpoint_path or DEFAULT_CHECKPOINT
-    kwargs = {"device": "cpu"}
-    if ckpt and Path(ckpt).exists():
-        kwargs["checkpoint_path"] = str(ckpt)
+    if not Path(ckpt).exists():
+        # ここでチェックポイント欠落を素通りさせると、ライブラリ既定の wget
+        # 自動取得が走る。本番イメージには wget が無いため必ず失敗し、
+        # 「[Errno 2] No such file or directory: <path>」という、運用者にも
+        # 原因が伝わらない汎用エラーになる（このバグの発生源）。ここで検出し、
+        # 専用コードで落とすことで worker_main.py 側が failure.code を
+        # INTERNAL ではなく操作可能な値にできる。
+        raise TranscribeError(
+            "MODEL_CHECKPOINT_MISSING",
+            f"transcription checkpoint not found at {ckpt}",
+        )
 
-    model = PianoTranscription(**kwargs)
+    model = PianoTranscription(checkpoint_path=str(ckpt), device="cpu")
     out_midi.parent.mkdir(parents=True, exist_ok=True)
     model.transcribe(audio, str(out_midi))

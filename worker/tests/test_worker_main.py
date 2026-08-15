@@ -104,6 +104,7 @@ class RunAnalyzeWiringTests(unittest.TestCase):
         alignment: dict,
         est_pedal: list[tuple[float, float]],
         dynamic_range_db: float,
+        transcribe_error: Exception | None = None,
     ):
         with tempfile.TemporaryDirectory(prefix="ll-worker-main-test-") as tmp:
             root = Path(tmp)
@@ -126,10 +127,15 @@ class RunAnalyzeWiringTests(unittest.TestCase):
                 "path": data_dir / "work" / take_id / "clean.wav",
                 "dynamicRangeDb": dynamic_range_db,
             }
+            transcribe_kwargs = (
+                {"side_effect": transcribe_error}
+                if transcribe_error is not None
+                else {"return_value": None}
+            )
             with mock.patch(
                 "ledgerlines_worker.preprocess.preprocess", return_value=stub_pre
             ), mock.patch(
-                "ledgerlines_worker.transcribe.transcribe", return_value=None
+                "ledgerlines_worker.transcribe.transcribe", **transcribe_kwargs
             ), mock.patch(
                 "ledgerlines_worker.align.load_est", return_value=est_notes
             ), mock.patch(
@@ -290,6 +296,61 @@ class RunAnalyzeWiringTests(unittest.TestCase):
         現在の値も併せて固定し、意図しない変更に気づけるようにする。
         """
         self.assertEqual(worker_main.PIPELINE_VERSION, "0.3.0-m5-metric-policy")
+
+    def test_missing_checkpoint_raises_actionable_failure_code(self):
+        """S2（transcribe.transcribe）が TranscribeError を投げた場合、INTERNAL に
+        丸めず専用の failure.code を書く。かつ内部パスなどの詳細を
+        failure.message に出さず、analysis.error にのみ残す
+        （デプロイ直後に実際に起きた不具合の再発防止）。
+        """
+        from ledgerlines_worker.transcribe import TranscribeError
+
+        reference, est_notes, matched, _below_floor = _fixture()
+        secret_path = (
+            "/root/piano_transcription_inference_data/"
+            "note_F1=0.9677_pedal_F1=0.9186.pth"
+        )
+
+        code, doc = self._run(
+            reference,
+            est_notes,
+            matched,
+            est_pedal=[(0.0, 4.0)],
+            dynamic_range_db=20.0,
+            transcribe_error=TranscribeError(
+                "MODEL_CHECKPOINT_MISSING",
+                f"transcription checkpoint not found at {secret_path}",
+            ),
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(doc["status"], "failed")
+        self.assertEqual(doc["failure"]["code"], "MODEL_CHECKPOINT_MISSING")
+        self.assertNotIn(secret_path, doc["failure"]["message"])
+        self.assertIn(secret_path, doc["analysis"]["error"])
+
+    def test_unexpected_exception_hides_internal_detail_from_user_message(self):
+        """想定外の例外（catch-all）は failure.message に str(exc) を
+        そのまま出さない。詳細は analysis.error に残し、failure.code は
+        INTERNAL のまま（TranscribeError のような専用コードを持たない失敗である）。
+        """
+        reference, est_notes, matched, _below_floor = _fixture()
+        secret = "/root/some/internal/implementation/detail.pth"
+
+        code, doc = self._run(
+            reference,
+            est_notes,
+            matched,
+            est_pedal=[(0.0, 4.0)],
+            dynamic_range_db=20.0,
+            transcribe_error=RuntimeError(secret),
+        )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(doc["status"], "failed")
+        self.assertEqual(doc["failure"]["code"], "INTERNAL")
+        self.assertNotIn(secret, doc["failure"]["message"])
+        self.assertIn(secret, doc["analysis"]["error"])
 
 
 if __name__ == "__main__":

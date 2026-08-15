@@ -25,8 +25,12 @@ C:\llpoc\venv\Scripts\pip install torch librosa mir_eval pretty_midi soundfile p
 `%USERPROFILE%\piano_transcription_inference_data\note_F1=0.9677_pedal_F1=0.9186.pth`
 に配置してください（`poc/README.md` 参照）。
 
-> 本番実装ではモデルをコンテナイメージに同梱し、ローカルパス依存を解消する
-> （architecture.md 4.1 案A）。ここではローカル検証用にこのパスを既定値にしている。
+> 本番（`Dockerfile`）ではモデルをコンテナイメージに同梱済みで、ローカルパス依存が
+> 無い（下記「Azure 本番ワーカー」節、architecture.md 4.1 案A）。ここで手動配置が
+> 必要なのはローカル検証時のみ。配置を忘れると `piano_transcription_inference` が
+> 既定の wget 自動取得を試みて失敗し、`ledgerlines_worker/transcribe.py` は
+> `TranscribeError("MODEL_CHECKPOINT_MISSING", ...)` を投げる（`worker_main.py` は
+> これを `failure.code: "MODEL_CHECKPOINT_MISSING"` としてテイクへ記録する）。
 
 ## 実行（ローカル Web アプリから呼ばれる想定）
 
@@ -49,6 +53,19 @@ Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeW
 (`analysis-jobs`) を消費する本番イメージです。`cloud_worker.py` は Queue のジョブを
 受け取り、Blob の音声・参照譜を一時領域へ同期して既存の解析パイプラインを実行し、
 進捗・結果を Cosmos DB、採譜結果を Blob Storage へ保存します。
+
+採譜モデルのチェックポイント（`note_F1=0.9677_pedal_F1=0.9186.pth`、約164MiB）は
+`Dockerfile` 内の独立した `RUN` レイヤーでビルド時に Zenodo から取得し、
+`/root/piano_transcription_inference_data/` に配置してイメージへ同梱する
+（`piano_transcription_inference` / `ledgerlines_worker/transcribe.py` の既定パスと
+同じ場所）。ライブラリ既定の wget 自動取得は本番イメージ（`wget` 未インストール）では
+必ず失敗するため、`urllib`（標準ライブラリ）で取得し、ダウンロード後にサイズ下限
+（150MiB）とMD5（Zenodoの`oc-checksum`レスポンスヘッダーから取得した値と一致するか）
+を検証してビルドを失敗させる。これはHTMLのエラー/リダイレクトページを本物の
+チェックポイントとして誤ってイメージに焼き込む事故を防ぐためで、実際に初回デプロイで
+チェックポイント未配置による解析全滅が発生した経緯がある。このレイヤーは
+`requirements.txt` や `COPY worker/*` より前に置いてあるため、通常のコード変更で
+170MB超の再ダウンロードは発生しない。
 
 ```powershell
 docker login ghcr.io
