@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from azure.cosmos import CosmosClient
 from azure.core.exceptions import ResourceNotFoundError
@@ -32,6 +34,40 @@ def required(name: str) -> str:
     return value
 
 
+# LEDGERLINES_AZURE_EMULATOR=true が選ぶ分岐は接続文字列・固定キーで認証し、かつ
+# Cosmosの証明書検証を無効化する（下のconnection_verify=False）。これはローカルの
+# Azurite/Cosmosエミュレータ向けの既知の対処であり、本物のAzureエンドポイントに
+# 対して行うと資格情報の質・TLS保護の両方を落とす。
+# TS側 (config.ts) はNODE_ENV==="production"を見て起動時に弾くが、このワーカーに
+# 相当する実行時シグナルは無く、無理に模倣すると仕組みだけを真似た形になる。
+# 危険の実体はもっと狭い ── 「エミュレータ用の認証・TLS無効化を、実在のAzure
+# エンドポイントに向けて送ってしまうこと」なので、それを直接防ぐために接続先の
+# ホスト名そのものを検査する。infra/modules/analysis-worker.bicep が
+# LEDGERLINES_AZURE_EMULATOR を設定しない、という前提には依存しない
+# （IaCの記述ミスや将来の変更に関わらず、ここでホスト名を見て弾く）。
+_LOCAL_EMULATOR_HOSTS = frozenset({
+    "localhost", "127.0.0.1",  # .env.local.azure.example（ホストで動くNext.js向け）
+    "azurite", "cosmos",       # docker-compose.azure-local.yml のサービス名（ワーカー用）
+})
+
+
+def _assert_emulator_endpoints_are_local(cosmos_endpoint: str, storage_connection_string: str) -> None:
+    hosts: set[str | None] = {urlparse(cosmos_endpoint).hostname}
+    for endpoint_key in ("BlobEndpoint", "QueueEndpoint"):
+        match = re.search(rf"{endpoint_key}=([^;]+)", storage_connection_string)
+        if match:
+            hosts.add(urlparse(match.group(1)).hostname)
+    unrecognized = sorted(h for h in hosts if h and h.lower() not in _LOCAL_EMULATOR_HOSTS)
+    if unrecognized:
+        raise RuntimeError(
+            "LEDGERLINES_AZURE_EMULATOR=true ですが、ローカルエミュレータ以外の"
+            f"ホストが設定に含まれています: {unrecognized}。この設定はTLS証明書検証を"
+            "無効化するため、本物のAzureエンドポイントに向けて使うのは危険です。"
+            f"AZURE_COSMOS_ENDPOINT / AZURE_STORAGE_CONNECTION_STRING を確認してください"
+            f"（許可ホスト: {sorted(_LOCAL_EMULATOR_HOSTS)}）。"
+        )
+
+
 class CloudStore:
     def __init__(self) -> None:
         # TypeScript側 (src/lib/server/config.ts の `azureEmulator`) と同じフラグ・
@@ -44,13 +80,15 @@ class CloudStore:
             # blob-storage.ts:104-106 (BlobServiceClient.fromConnectionString)、
             # queue.ts:36-37 (QueueServiceClient.fromConnectionString)。
             connection_string = required("AZURE_STORAGE_CONNECTION_STRING")
+            cosmos_endpoint = required("AZURE_COSMOS_ENDPOINT")
+            _assert_emulator_endpoints_are_local(cosmos_endpoint, connection_string)
             self.storage = BlobServiceClient.from_connection_string(connection_string)
             self.queue = QueueClient.from_connection_string(
                 connection_string,
                 required("AZURE_ANALYSIS_QUEUE"),
             )
             cosmos = CosmosClient(
-                required("AZURE_COSMOS_ENDPOINT"),
+                cosmos_endpoint,
                 credential=required("AZURE_COSMOS_KEY"),
                 # Cosmosエミュレータはlocalhost向けの自己署名証明書で応答する。
                 # コンテナネットワーク越しに別ホスト名（例: `cosmos`）で接続すると
