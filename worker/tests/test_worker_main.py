@@ -199,7 +199,7 @@ class RunAnalyzeWiringTests(unittest.TestCase):
             "この曲の参照譜にペダル位置が含まれていないため測定できません。楽譜を再登録すると測定できます。",
         )
 
-    def test_empty_pedal_intervals_key_reports_no_sustain_instead_of_re_registration(self):
+    def test_empty_pedal_intervals_key_reports_unmeasurable_instead_of_re_registration(self):
         """キーはあるが sustain 区間が空（楽譜が sostenuto/soft のみ）の場合。
 
         `pedal_reference_regenerated=` の配線を押さえる。渡し忘れると既定 False で
@@ -217,7 +217,7 @@ class RunAnalyzeWiringTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(doc["status"], "completed")
         self.assertEqual(
-            doc["metricEvaluations"]["pedal"]["reasonCode"], "NO_SUSTAIN_PEDAL_IN_SCORE"
+            doc["metricEvaluations"]["pedal"]["reasonCode"], "NO_MEASURABLE_PEDAL_INTERVALS"
         )
         self.assertNotIn("再登録", doc["metricsNAReason"]["pedal"])
 

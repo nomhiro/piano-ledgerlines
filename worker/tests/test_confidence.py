@@ -170,7 +170,7 @@ class ConfidencePolicyTests(unittest.TestCase):
 
         pedal = guarded["metricEvaluations"]["pedal"]
         self.assertEqual(pedal["status"], "unavailable")
-        self.assertEqual(pedal["reasonCode"], "NO_SUSTAIN_PEDAL_IN_SCORE")
+        self.assertEqual(pedal["reasonCode"], "NO_MEASURABLE_PEDAL_INTERVALS")
         self.assertNotIn("再登録", pedal["reason"])
 
     def test_low_match_rate_is_rejected(self):

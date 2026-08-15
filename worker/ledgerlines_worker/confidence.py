@@ -23,7 +23,11 @@ REASONS = {
     "PITCH_FORMULA_UNVALIDATED": "音程の指標式が採譜ノイズに影響されることが判明しているため、式の検証が完了するまで判定を保留します。",
     "AGC_DETECTED": "自動ゲイン制御がかかった録音のため、強弱を測定できません。",
     "PEDAL_REFERENCE_NOT_REGENERATED": "この曲の参照譜にペダル位置が含まれていないため測定できません。楽譜を再登録すると測定できます。",
-    "NO_SUSTAIN_PEDAL_IN_SCORE": "この楽譜のペダル記号はサステイン以外のため測定対象外です。",
+    # reference.py の _pedal_intervals_beats が区間を空で返す原因は複数あり
+    # （pedalType が sustain 以外／getSpannedElements が空／end<=start の退化区間）、
+    # どの原因でもここに来る。「サステイン以外」と断定すると後者2つで嘘になるため、
+    # 3パターンいずれでも真になる「区間を抽出できなかった」という結果面の表現にする。
+    "NO_MEASURABLE_PEDAL_INTERVALS": "この楽譜のペダル記号から測定可能なサステイン区間を抽出できなかったため測定対象外です。",
     "ALIGNMENT_BELOW_FLOOR": "楽譜と演奏の対応付けが成立していないため採点できません。別の曲の録音でないかご確認ください。",
     "ROBUSTNESS_VALIDATED": "録音条件に対する頑健性が実測で確認されている指標です。",
 }
@@ -164,7 +168,7 @@ def apply_fail_closed_policy(
                 # 抽出は sustain のみを拾う。よって「記号はあるが sustain が無い」と
                 # 「参照譜が旧形式」の2状態が両方ここに来る。再登録で直るのは後者だけ。
                 if pedal_reference_regenerated:
-                    return "unavailable", "NO_SUSTAIN_PEDAL_IN_SCORE"
+                    return "unavailable", "NO_MEASURABLE_PEDAL_INTERVALS"
                 return "unavailable", "PEDAL_REFERENCE_NOT_REGENERATED"
         if raw_scores["metrics"].get(key) is None:
             return "unavailable", "INSUFFICIENT_ALIGNMENT_EVIDENCE"

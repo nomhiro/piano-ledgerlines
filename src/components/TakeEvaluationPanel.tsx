@@ -55,7 +55,11 @@ export default function TakeEvaluationPanel({ take }: { take: TakeEvaluationData
         <Card className="flex flex-col items-center justify-center gap-3 p-8 lg:col-span-1">
           {take.overallScore !== null ? (
             <ScoreRing score={take.overallScore} label="総合スコア" size={140} />
-          ) : take.evaluation?.status === "withheld" ? (
+          ) : take.evaluation?.status === "withheld" && !take.failure ? (
+            // failure がある場合（例: ALIGN_FAILED）は evaluation.reason と
+            // failure.message が同じ文になり得るため、下の失敗ボックスに一本化する。
+            // 文字列同士を比較すると片方の文言が変わった瞬間に判定が崩れるので、
+            // 「failure の有無」という構造的な条件で出し分ける。
             <div className="space-y-2 text-center">
               <div className="text-lg font-semibold text-amber-300">判定保留</div>
               <p className="max-w-xs text-xs leading-relaxed text-[var(--muted)]">
