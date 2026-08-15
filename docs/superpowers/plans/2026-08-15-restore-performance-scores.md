@@ -1017,6 +1017,35 @@ git commit -m "feat: widen rhythm dead zone for degraded recordings"
 
 ### Task 7: 参照ペダル区間を配線する
 
+> **訂正（実装時の実測で判明した本計画の誤り）。以下 Step 1〜6 の設計は置き換わった。**
+>
+> `music21` の `expressions.PedalMark` は **Spanner** であり、`dynamics.DynamicWedge` と同じ
+> 実装である。start/stop のペアに対して**要素は1個**しか返らず、`type` 属性は**存在しない**。
+> `pedalType` はペダルの**種別**（`sustain` / `sostenuto` / `soft` / `silent`）で、
+> `"start"` / `"stop"` という文字列はどこにも現れない。よって当初設計の
+> `PEDAL_ON_KINDS` / `PEDAL_OFF_KINDS` による文字列ペア化（Step 6）は**実装不能**であり、
+> `pedal_intervals_from_events` も不要である。データが元から区間形なので、区間として出す。
+>
+> 確定した設計:
+>
+> 1. `reference.py` は返却辞書に `pedalIntervalsBeats: list[tuple[float, float]]` を追加する
+>    （キー名は保持する単位を明示するため。秒への変換は `metrics.py` 側で行う）。
+> 2. **区間の終端は最後の被スパン音符の offset ＋ その音価**とする。`_spanner_range` が返す
+>    `max(offset)` は最後の音符の発音位置なので、その音符が鳴っている間を取りこぼす。
+>    実測: フィクスチャの被スパン音符は C(offset 0.0, 音価 2.0) と D(offset 4.0, 音価 4.0) で、
+>    `_spanner_range` は `(0.0, 4.0)` を返すが、正しい区間は `(0.0, 8.0)` である。
+> 3. **サステインのみに限定する。** 採譜側 `metrics.pedal_intervals` は CC64（サステイン）
+>    しか検出しないため、`sostenuto` / `soft` を参照側に含めると検出され得ないペダルとの
+>    比較になり、偽の不一致を作る。
+> 4. **重なる区間は union にマージする。** `pedal_ratio` は区間を重複排除せず合算するため、
+>    重なりがあると被覆率が 1.0 を超え、どう弾いてもペダル不足と判定される。
+>    `build_reference` は全パートを走査するので重なりは現実的に起こる。
+> 5. `_part_context` の `pedal_events` は**変更しない**（note 単位の `pedalMark`、measure 単位の
+>    `pedalMarks` / `hasPedalMark` が依存し、`teacher_metrics.py` がそれを読む）。採点は新しい
+>    区間リストから行うため、measure 単位メタデータを触る必要がない。
+>
+> 以下の記述は経緯として残す。
+
 `reference.py:86-98` は MusicXML から `pedalEvents`（拍位置と種別）を取り出しているが、
 返却する参照譜（`:302-314`）には含めていない。`measures[].pedalMarks` は種別の集合のみで
 位置情報を失っている。一方 `worker_main.py:290` は `ref_pedal=[]` をハードコードしており、
@@ -1627,7 +1656,8 @@ git commit -m "feat: score metrics individually by measured robustness"
 - Modify: `worker/cloud_worker.py`（`process_job` の該当箇所）
 
 **Interfaces:**
-- Consumes: `preprocess()` の `dynamicRangeDb`（Task 5）、`reference["pedalEvents"]`（Task 7）、
+- Consumes: `preprocess()` の `dynamicRangeDb`（Task 5）、
+  `reference["pedalIntervalsBeats"]`（Task 7）、
   `apply_fail_closed_policy` の新しいキーワード引数（Task 8）
 
 - [ ] **Step 1: `worker_main.py` を書き換える**
@@ -1650,10 +1680,7 @@ import ブロックに追加する。
             dynamic_range_db is not None
             and dynamic_range_db < DEGRADED_DYNAMIC_RANGE_DB
         )
-        pedal_events = reference.get("pedalEvents")
-        ref_pedal_beats = (
-            metrics_mod.pedal_intervals_from_events(pedal_events) if pedal_events else []
-        )
+        ref_pedal_beats = reference.get("pedalIntervalsBeats") or []
         result = metrics_mod.compute(
             reference,
             est_notes_full,
@@ -1670,7 +1697,7 @@ import ブロックに追加する。
             len(est_notes_full),
             calibration,
             dynamic_range_db=dynamic_range_db,
-            pedal_reference_available=bool(pedal_events),
+            pedal_reference_available=bool(ref_pedal_beats),
         )
 ```
 
