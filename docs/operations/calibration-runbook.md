@@ -16,13 +16,17 @@
   内容ではない。**しかし、artifactが検証に失敗すると「劣化」ではなく「全滅」する。**
   `releasedMetrics`が空・重複・`tempo`を含まない、または`thresholds.tempo.minimumConfidence`が
   `[0,1]`の数値でない場合、`calibration.py`（`load_calibration()`）は`CalibrationError`を
-  投げる（`releasedMetrics`検証・`tempo`必須チェックは`calibration.py:39-49`）。この例外は
-  `run_analyze`のどこでも捕捉されず、汎用の`except Exception`（`worker_main.py:375-378`）まで
-  伝播し、**そのartifactが設定されている間に解析される全テイクが`failed`（コード`INTERNAL`）
-  になる**——一部の指標が採点されないのではなく、解析そのものが止まる。原因がartifactだと
-  示すヒントはログの例外メッセージ（`str(exc)`）だけで、`reasonCode`のような専用コードは
-  付かない。配備前に必ず`calibration.py`の検証をローカルまたはstagingで通してから
-  `LEDGERLINES_CALIBRATION_FILE`を本番に向けること。
+  投げる（`releasedMetrics`検証・`tempo`必須チェックは`calibration.py:39-49`）。**これは
+  `LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`のときだけ起こる。** `load_calibration()`は
+  明示`path`が無く、かつこのフラグが`true`でなければ、artifactを一切開かずに`None`を返す
+  （`calibration.py:19`）——フラグが無効なら`CalibrationError`も`INTERNAL`も発生しない。
+  フラグが有効な状態で不正なartifactを設定すると、この例外は`run_analyze`のどこでも捕捉
+  されず、汎用の`except Exception`（`worker_main.py:375-378`）まで伝播し、**そのartifactが
+  設定されフラグが有効な間に解析される全テイクが`failed`（コード`INTERNAL`）になる**——
+  一部の指標が採点されないのではなく、解析そのものが止まる。原因がartifactだと示すヒントは
+  ログの例外メッセージ（`str(exc)`）だけで、`reasonCode`のような専用コードは付かない。
+  配備前に必ず`calibration.py`の検証をローカルで（下記「配備」手順2のように、明示`path`を
+  渡して）通してから、フラグを有効化すること。
 - 音声・MIDI・教師の自由記述はGitに置かない。
 - `approved: true`、release gate合格、dataset hash、calibration versionが揃わない
   artifactをworkerは拒否する。
@@ -45,17 +49,22 @@ artifact schemaは`1.1`。`releasedMetrics` にない指標は公開しない。
 ## 配備
 
 1. artifactの`datasetHash`と評価レポートをレビューする。
-2. **配備前に`calibration.py`の`load_calibration(path)`をローカルで実行し、
-   `CalibrationError`が出ないことを確認する。** ここで失敗するartifactを本番に
-   向けると、解析中の全テイクが`failed`/`INTERNAL`になる（→ 安全原則）。
+2. **配備前に`calibration.py`の`load_calibration(path)`を、明示`path`引数を渡して
+   ローカルで実行し、`CalibrationError`が出ないことを確認する。** 明示`path`を渡すと
+   `LEDGERLINES_ENABLE_CALIBRATED_SCORES`フラグの状態に関わらず検証が走る
+   （`calibration.py:19`）ため、フラグをまだ有効化していないこの時点でも検証できる。
+   ここで失敗するartifactをこの後の手順に進めてはならない。
 3. artifactを読み取り専用Secret/Volumeへ配備する。
 4. `LEDGERLINES_CALIBRATION_FILE`をそのパスへ設定する。
-5. stagingで`--mode analyze`を1件以上流し、`failed`/`INTERNAL`が出ないこと、対象テイクの
+5. **`LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`をstagingで設定する。**
+   （フラグが無効なままでは`calibration.py`がartifactを一切読まないため、次の手順6の
+   検証はフラグを有効にした状態で行わないと意味がない。）
+6. stagingで`--mode analyze`を1件以上流し、`failed`/`INTERNAL`が出ないこと、対象テイクの
    `evaluation.calibrationVersion`が期待どおり記録されることを確認する。
    指標の`scored`/`withheld`/`unavailable`判定はこのartifactに依存しないため、
-   有効化の前後で保留率が変化しないことも確認する（変化した場合は本ランブックの
+   フラグ有効化の前後で保留率が変化しないことも確認する（変化した場合は本ランブックの
    前提—安全原則を参照—が崩れているので配備を止める）。
-6. `LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`をstaging、その後productionで設定する。
+7. 手順6の確認が終わったら、`LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`をproductionで設定する。
 
 ## 監視
 
