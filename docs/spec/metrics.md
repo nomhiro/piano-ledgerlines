@@ -917,6 +917,19 @@ takeConfidence = mean_m( confidence(m) )
 dynamicRangeDb = percentile95( frameRmsDb ) - percentile5( frameRmsDb )
 ```
 
+**この式は窓長を決めないと値が定まらない。** 下表の 10 dB / 14 dB は
+`poc/scripts/estimate_quality.py` の推定量で実測された値なので、次の4点は閾値と一体である
+（実装は `worker/ledgerlines_worker/preprocess.py` の `dynamic_range_db`）。
+
+| パラメータ | 値 | 理由 |
+|---|---|---|
+| 窓長 | 2048 サンプル（16 kHz で **128 ms**） | 短い窓は1音のアタック/減衰を分解してレンジを系統的に大きく出す。AGC の時定数は数十〜数百 ms なので、短い窓では AGC 録音でも起伏が残り、ゲートを通り抜ける |
+| ホップ | 512 サンプル（**32 ms**、窓の1/4＝重なりあり） | 同上。非重複フレームにすると実効的な窓長が変わる |
+| パーセンタイルの領域 | **dB 領域**（`frameRmsDb` に対して取る） | 線形 RMS でパーセンタイルを取ってから dB 変換した値とは一致しない |
+| トリム | **無音トリム後**（`trim_silence()` の出力） | 先頭・末尾の無音は p5 を押し下げてレンジを過大に見せる。M4 のハーネスはトリム前に適用しているので、この1点だけが意図的な差 |
+
+フレーム RMS は `sqrt(mean(x²) + 1e-10)` で、EPS がフロアになるため無音フレームも除外しない。
+
 | 判定 | 条件 | 挙動 |
 |---|---|---|
 | **AGC あり** | `dynamicRangeDb < 10` | `dynamics` を N/A にする。ユーザーに AGC の無効化を促す |

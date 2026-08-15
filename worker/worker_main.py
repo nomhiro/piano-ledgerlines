@@ -30,6 +30,13 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# analysis.pipelineVersion に書く値。completed / ALIGN_FAILED の両分岐と
+# tests/test_worker_main.py が参照するため、片方だけ上がる事故を防ぐために
+# 1箇所で持つ。UI はこの値でテイクの解析方式の混在を検出する
+# （src/app/progress/page.tsx）。
+PIPELINE_VERSION = "0.3.0-m5-metric-policy"
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -299,7 +306,12 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
         )
         # 旧 reference.json（pedalIntervalsBeats 追加前に生成されたもの）ではキーが
         # 存在しないため、欠損時は空リストに degrade する（採点自体は落とさない）。
-        ref_pedal_beats = reference.get("pedalIntervalsBeats") or []
+        # キーの有無と中身の有無は別の状態として confidence 層へ渡す。両方を
+        # bool(ref_pedal_beats) だけで表すと、「楽譜のペダル記号が全て sostenuto/soft で
+        # sustain 区間が空」の場合にも「楽譜を再登録すれば測定できます」と案内して
+        # しまう（再登録しても永久に同じ結果になる）。
+        ref_pedal_intervals = reference.get("pedalIntervalsBeats")
+        ref_pedal_beats = ref_pedal_intervals or []
         result = metrics_mod.compute(
             reference,
             est_notes_full,
@@ -317,6 +329,7 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
             calibration,
             dynamic_range_db=dynamic_range_db,
             pedal_reference_available=bool(ref_pedal_beats),
+            pedal_reference_regenerated=ref_pedal_intervals is not None,
         )
 
         # 対応付けの成立率が下限（MIN_MATCH_RATE）を割った場合、指標を欠損値のまま
@@ -330,8 +343,15 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
                     "code": "ALIGN_FAILED",
                     "message": result["evaluation"]["reason"],
                 },
+                # 評価は算出済み（全指標が ALIGNMENT_BELOW_FLOOR で withheld）なので
+                # 保存する。これが無いと総合スコア欄が「総合スコア未算出」になり、
+                # 保留の理由がテイク詳細から読めない。metrics は書かない ── 素点は
+                # 保留されており、5指標カードに数値を出してはならない。
+                "evaluation": result["evaluation"],
+                "metricEvaluations": result["metricEvaluations"],
+                "metricsNAReason": result["metricsNAReason"],
                 "analysis": {
-                    "pipelineVersion": "0.3.0-m5-metric-policy",
+                    "pipelineVersion": PIPELINE_VERSION,
                     # completed 分岐と同じ診断情報を残す。ALIGN_FAILED は「別の曲を弾いた」
                     # だけでなく「録音が小さすぎた」「テンポ検出が外れた」場合にも起こるため、
                     # preprocess/baseTempo が無いと failed 後の原因調査ができない。
@@ -359,7 +379,7 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
             "failure": None,
             "aiReview": None,  # S6 (Microsoft Foundry) は未実装。後続フェーズで差し込む。
             "analysis": {
-                "pipelineVersion": "0.3.0-m5-metric-policy",
+                "pipelineVersion": PIPELINE_VERSION,
                 "preprocess": {**pre, "path": str(pre["path"])},
                 "baseTempo": result["baseTempo"],
                 "takes": alignment.get("takes"),

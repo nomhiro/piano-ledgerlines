@@ -36,8 +36,13 @@ from ledgerlines_worker import align, metrics  # noqa: E402,F401
 # 気づけるはずである（サイレントに no-op 化はしない）。
 
 
-def _fixture(n_beats: int = 8):
-    """参照譜と、参照と完全一致する演奏（拍=秒の単純対応）を返す。"""
+def _fixture(n_beats: int = 8, dynamics_capable: bool = False):
+    """参照譜と、参照と完全一致する演奏（拍=秒の単純対応）を返す。
+
+    `dynamics_capable` は capabilities.dynamics を立てる。既定を False にしているのは
+    ref_notes の dynamicLevel が全て None（＝強弱の素点が出ない）ためで、AGC ゲートの
+    配線を見るテストだけがこれを True にする。
+    """
     ref_notes = [
         {
             "index": b,
@@ -62,7 +67,7 @@ def _fixture(n_beats: int = 8):
         "notes": ref_notes,
         "beatsPerMeasure": float(n_beats),
         "measures": [{"measure": 1, "tempoExcluded": False}],
-        "capabilities": {"dynamics": False, "pedal": True},
+        "capabilities": {"dynamics": dynamics_capable, "pedal": True},
         "pedalIntervalsBeats": [[0.0, 4.0]],
     }
     alignment_matched = {
@@ -158,12 +163,21 @@ class RunAnalyzeWiringTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(doc["status"], "failed")
         self.assertEqual(doc["failure"]["code"], "ALIGN_FAILED")
-        self.assertEqual(doc["analysis"]["pipelineVersion"], "0.3.0-m5-metric-policy")
+        self.assertEqual(doc["analysis"]["pipelineVersion"], worker_main.PIPELINE_VERSION)
         # Minor 2: failed 分岐も completed 分岐と同じ診断情報（preprocess/baseTempo）を持つ。
         self.assertIn("preprocess", doc["analysis"])
         self.assertIn("baseTempo", doc["analysis"])
         self.assertIn("diagnostics", doc["analysis"])
         self.assertNotIn("issues", doc)
+        # 算出済みの evaluation を保存する（これが無いとテイク詳細の総合スコア欄が
+        # 「総合スコア未算出」になり、保留の理由が読めない）。素点は保留されている
+        # ので metrics は書かない。
+        self.assertEqual(doc["evaluation"]["status"], "withheld")
+        self.assertEqual(doc["evaluation"]["reasonCode"], "ALIGNMENT_BELOW_FLOOR")
+        self.assertEqual(
+            doc["metricEvaluations"]["rhythm"]["reasonCode"], "ALIGNMENT_BELOW_FLOOR"
+        )
+        self.assertNotIn("metrics", doc)
 
     def test_missing_pedal_intervals_key_degrades_without_raising(self):
         """旧 reference.json（pedalIntervalsBeats 追加前）を想定した回帰テスト。"""
@@ -176,7 +190,7 @@ class RunAnalyzeWiringTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(doc["status"], "completed")
-        self.assertEqual(doc["analysis"]["pipelineVersion"], "0.3.0-m5-metric-policy")
+        self.assertEqual(doc["analysis"]["pipelineVersion"], worker_main.PIPELINE_VERSION)
         # ref_pedal_beats=[] に degrade され、pedal_reference_available=False として
         # confidence 層に伝わるため、pedal は測定不能扱いになる。
         self.assertIsNone(doc["metrics"]["pedal"])
@@ -184,6 +198,28 @@ class RunAnalyzeWiringTests(unittest.TestCase):
             doc["metricsNAReason"]["pedal"],
             "この曲の参照譜にペダル位置が含まれていないため測定できません。楽譜を再登録すると測定できます。",
         )
+
+    def test_empty_pedal_intervals_key_reports_no_sustain_instead_of_re_registration(self):
+        """キーはあるが sustain 区間が空（楽譜が sostenuto/soft のみ）の場合。
+
+        `pedal_reference_regenerated=` の配線を押さえる。渡し忘れると既定 False で
+        PEDAL_REFERENCE_NOT_REGENERATED に落ち、
+        test_missing_pedal_intervals_key_degrades_without_raising と区別できないため
+        見逃す（再登録しても直らない状態に「再登録してください」と案内してしまう）。
+        """
+        reference, est_notes, matched, _below_floor = _fixture()
+        reference["pedalIntervalsBeats"] = []
+
+        code, doc = self._run(
+            reference, est_notes, matched, est_pedal=[(0.0, 4.0)], dynamic_range_db=20.0
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(doc["status"], "completed")
+        self.assertEqual(
+            doc["metricEvaluations"]["pedal"]["reasonCode"], "NO_SUSTAIN_PEDAL_IN_SCORE"
+        )
+        self.assertNotIn("再登録", doc["metricsNAReason"]["pedal"])
 
     def test_completed_path_sets_pipeline_version_and_scores_pedal(self):
         reference, est_notes, matched, _below_floor = _fixture()
@@ -194,7 +230,7 @@ class RunAnalyzeWiringTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(doc["status"], "completed")
-        self.assertEqual(doc["analysis"]["pipelineVersion"], "0.3.0-m5-metric-policy")
+        self.assertEqual(doc["analysis"]["pipelineVersion"], worker_main.PIPELINE_VERSION)
         self.assertIn("evaluation", doc)
         # 参照譜に pedalIntervalsBeats があり演奏ペダルも一致しているため、
         # pedal_reference_available=True が正しく伝われば pedal は採点される。
@@ -203,6 +239,57 @@ class RunAnalyzeWiringTests(unittest.TestCase):
         # 見逃すため、ここで明示的に「採点される」側を確認する。
         self.assertIsNotNone(doc["metrics"]["pedal"])
         self.assertNotIn("pedal", doc["metricsNAReason"])
+
+    def test_agc_dynamic_range_reaches_the_dynamics_gate(self):
+        """`dynamic_range_db=` の配線を押さえる。
+
+        AGC ゲートは `dynamics` の唯一の安全装置で、M4 が -45.1 点と実測した崩壊した
+        強弱スコアを公開しないためだけに存在する。他のテストは全て
+        dynamic_range_db=20.0 を渡すので、この1本が無いと
+        `worker_main.py` の `dynamic_range_db=dynamic_range_db` を削除しても全テストが
+        緑のまま通ってしまう（confidence 側の既定は None ＝ AGC 判定を行わない）。
+        """
+        reference, est_notes, matched, _below_floor = _fixture(dynamics_capable=True)
+
+        code, doc = self._run(
+            reference, est_notes, matched, est_pedal=[(0.0, 4.0)], dynamic_range_db=7.0
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(doc["metricEvaluations"]["dynamics"]["reasonCode"], "AGC_DETECTED")
+        self.assertEqual(doc["metricEvaluations"]["dynamics"]["status"], "unavailable")
+        self.assertIsNone(doc["metrics"]["dynamics"])
+
+    def test_degraded_flag_reaches_metrics_compute(self):
+        """`degraded=` の配線を押さえる。
+
+        劣化録音では rhythm のデッドゾーンを 0.03 → 0.045 拍に緩める（metrics.md 7.4）。
+        緩和が死んでも素点は出続けるので出力からは検出できない。よって
+        `metrics.compute` を wraps で包み、渡された引数を直接見る。
+        dynamic_range_db=7.0 は DEGRADED_DYNAMIC_RANGE_DB(14.0) 未満なので True 側。
+        """
+        from ledgerlines_worker import metrics as metrics_mod
+
+        reference, est_notes, matched, _below_floor = _fixture()
+
+        with mock.patch(
+            "ledgerlines_worker.metrics.compute", wraps=metrics_mod.compute
+        ) as compute_spy:
+            code, _doc = self._run(
+                reference, est_notes, matched, est_pedal=[(0.0, 4.0)], dynamic_range_db=7.0
+            )
+
+        self.assertEqual(code, 0)
+        compute_spy.assert_called_once()
+        self.assertIs(compute_spy.call_args.kwargs["degraded"], True)
+
+    def test_pipeline_version_is_a_single_constant(self):
+        """バージョン文字列がテストにも実装にも散らばらないことを保証する。
+
+        片方だけ上げる事故を防ぐため、実装は worker_main.PIPELINE_VERSION 1箇所で持つ。
+        現在の値も併せて固定し、意図しない変更に気づけるようにする。
+        """
+        self.assertEqual(worker_main.PIPELINE_VERSION, "0.3.0-m5-metric-policy")
 
 
 if __name__ == "__main__":

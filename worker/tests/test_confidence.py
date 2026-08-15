@@ -14,6 +14,12 @@ from ledgerlines_worker.issues import generate_issues  # noqa: E402
 
 class ConfidencePolicyTests(unittest.TestCase):
     def _issue8_case(self):
+        """Issue #8（採譜ノイズ 521 音で pitch が 9.99 に崩れた実テイク）の再現。
+
+        フィクスチャ本体も返す。診断値や期待 status をテスト側にリテラルで書き写すと
+        フィクスチャとの結合が切れ、フィクスチャだけが実装と矛盾したまま緑になる
+        （Issue #8 の基準ケースを記述する唯一のファイルなので、次に読む人を誤導する）。
+        """
         fixture = json.loads(
             (Path(__file__).parent / "fixtures" / "issue8_take_diagnostic.json").read_text(
                 encoding="utf-8"
@@ -57,35 +63,53 @@ class ConfidencePolicyTests(unittest.TestCase):
                 }
             ],
         }
-        return result, reference, alignment
+        return result, reference, alignment, fixture
 
     def test_issue_8_diagnostic_withholds_pitch_only(self):
         """段2 では pitch だけが保留になり、他4指標は採点される。"""
-        result, reference, alignment = self._issue8_case()
+        result, reference, alignment, fixture = self._issue8_case()
+        expected = fixture["expected"]
 
         guarded = apply_fail_closed_policy(
             result,
             reference,
             alignment,
-            1495,
+            fixture["transcribedNotes"],
             None,
             dynamic_range_db=18.0,
             pedal_reference_available=False,
         )
 
-        self.assertEqual(guarded["metricEvaluations"]["pitch"]["status"], "withheld")
+        # フィクスチャの expected を実際に読む（リテラルで書き写さない）。
+        self.assertEqual(guarded["evaluation"]["status"], expected["evaluationStatus"])
+        for metric, key in (
+            ("pitch", "pitchStatus"),
+            ("rhythm", "rhythmStatus"),
+            ("tempo", "tempoStatus"),
+            ("dynamics", "dynamicsStatus"),
+            ("pedal", "pedalStatus"),
+        ):
+            self.assertEqual(
+                guarded["metricEvaluations"][metric]["status"], expected[key], metric
+            )
         self.assertEqual(
             guarded["metricEvaluations"]["pitch"]["reasonCode"], "PITCH_FORMULA_UNVALIDATED"
         )
-        self.assertEqual(guarded["metricEvaluations"]["rhythm"]["status"], "scored")
-        self.assertEqual(guarded["metricEvaluations"]["tempo"]["status"], "scored")
-        self.assertEqual(guarded["metricEvaluations"]["dynamics"]["status"], "scored")
         # 参照ペダルが未再生成なので測定対象外
-        self.assertEqual(guarded["metricEvaluations"]["pedal"]["status"], "unavailable")
         self.assertEqual(
             guarded["metricEvaluations"]["pedal"]["reasonCode"],
             "PEDAL_REFERENCE_NOT_REGENERATED",
         )
+        # diagnostics は監査の中心で、alignmentBelowFloor の判断根拠でもある。
+        # 指標別ポリシーに変わっても Issue #8 の実測値は変わらない。
+        self.assertEqual(guarded["diagnostics"]["referenceNotes"], fixture["referenceNotes"])
+        self.assertEqual(
+            guarded["diagnostics"]["transcribedNotes"], fixture["transcribedNotes"]
+        )
+        self.assertEqual(guarded["diagnostics"]["matchedNotes"], fixture["matchedNotes"])
+        self.assertEqual(guarded["diagnostics"]["extraNotes"], fixture["extraNotes"])
+        # 保留した素点を応答に漏らさない（rawScores は内部計算のみで外に出さない）。
+        self.assertNotIn("rawScores", guarded)
         # 小節レベルでも take レベルの具体的な理由がそのまま伝播すること（汎用の
         # INSUFFICIENT_ALIGNMENT_EVIDENCE に上書きされない）。この小節の pedal 素点は
         # None だが、take レベルの pedal は「scored」ではなく「参照譜未再生成で
@@ -104,32 +128,59 @@ class ConfidencePolicyTests(unittest.TestCase):
 
     def test_overall_score_is_withheld_while_pitch_is_unvalidated(self):
         """withheld が1つでも残れば総合点は出さない（spec 4.7）。"""
-        result, reference, alignment = self._issue8_case()
+        result, reference, alignment, fixture = self._issue8_case()
 
         guarded = apply_fail_closed_policy(
-            result, reference, alignment, 1495, None, dynamic_range_db=18.0
+            result, reference, alignment, fixture["transcribedNotes"], None,
+            dynamic_range_db=18.0,
         )
 
         self.assertIsNone(guarded["overallScore"])
         self.assertEqual(guarded["evaluation"]["status"], "withheld")
+        # withheld が残るときは、その具体的な理由を出す（pitch が唯一の withheld）。
+        self.assertEqual(guarded["evaluation"]["reasonCode"], "PITCH_FORMULA_UNVALIDATED")
 
     def test_agc_makes_dynamics_unavailable(self):
-        result, reference, alignment = self._issue8_case()
+        result, reference, alignment, fixture = self._issue8_case()
 
         guarded = apply_fail_closed_policy(
-            result, reference, alignment, 1495, None, dynamic_range_db=7.0
+            result, reference, alignment, fixture["transcribedNotes"], None,
+            dynamic_range_db=7.0,
         )
 
         self.assertEqual(guarded["metricEvaluations"]["dynamics"]["status"], "unavailable")
         self.assertEqual(guarded["metricEvaluations"]["dynamics"]["reasonCode"], "AGC_DETECTED")
 
+    def test_non_sustain_only_pedal_marks_do_not_advise_re_registration(self):
+        """楽譜のペダル記号が全て sostenuto/soft の場合。
+
+        capabilities.pedal は hasPedalMark だけを見るので True になるが、区間抽出は
+        sustain のみ拾うので pedalIntervalsBeats は空になる。この状態で
+        PEDAL_REFERENCE_NOT_REGENERATED（「楽譜を再登録すると測定できます」）を出すと、
+        再登録しても永久に同じ結果になる作業をユーザーに指示することになる。
+        """
+        result, reference, alignment, fixture = self._issue8_case()
+
+        guarded = apply_fail_closed_policy(
+            result, reference, alignment, fixture["transcribedNotes"], None,
+            dynamic_range_db=18.0,
+            pedal_reference_available=False,
+            pedal_reference_regenerated=True,  # キーはあるが sustain 区間が空
+        )
+
+        pedal = guarded["metricEvaluations"]["pedal"]
+        self.assertEqual(pedal["status"], "unavailable")
+        self.assertEqual(pedal["reasonCode"], "NO_SUSTAIN_PEDAL_IN_SCORE")
+        self.assertNotIn("再登録", pedal["reason"])
+
     def test_low_match_rate_is_rejected(self):
         """別の曲の音声が来た場合にスコアを出さない安全網。"""
-        result, reference, alignment = self._issue8_case()
+        result, reference, alignment, fixture = self._issue8_case()
         alignment["pairs"] = alignment["pairs"][:100]  # matchRate 約 0.08
 
         guarded = apply_fail_closed_policy(
-            result, reference, alignment, 1495, None, dynamic_range_db=18.0
+            result, reference, alignment, fixture["transcribedNotes"], None,
+            dynamic_range_db=18.0,
         )
 
         self.assertTrue(guarded["alignmentBelowFloor"])

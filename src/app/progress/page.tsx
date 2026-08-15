@@ -28,6 +28,16 @@ export default async function ProgressPage({
     if (takes.length === 0) notFound();
 
     const ordered = sortByRecordedAtDesc(takes);
+    // docs/operations/calibration-runbook.md は「異なる解析方式の結果の差を改善量として
+    // 提示しない」と定める。この画面は数値の差分を計算していないが、旧方式のテイク
+    // （4指標が判定保留）と新方式のテイク（4指標が数値バー）が同じ画面に縦に並ぶと
+    // 「最近のテイクで急に採点された＝上達した」と読めてしまう。混在しているときだけ
+    // 注記を出す（単一方式なら不要）。
+    const pipelineVersions = new Set(
+      ordered
+        .map((take) => (take.analysis as { pipelineVersion?: unknown } | null)?.pipelineVersion)
+        .filter((version): version is string => typeof version === "string"),
+    );
 
     return (
       <div>
@@ -38,6 +48,11 @@ export default async function ProgressPage({
         <Suspense>
           <SongSelector songs={selectableSongs} current={selectedId} />
         </Suspense>
+        {pipelineVersions.size > 1 && (
+          <p className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200">
+            解析方式が異なるテイクが含まれます。テイク間の差は上達を意味しません。
+          </p>
+        )}
         <div className="mt-5 space-y-6">
           {ordered.map((take) => (
             <section key={take.id}>

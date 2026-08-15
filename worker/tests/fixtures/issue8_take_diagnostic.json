@@ -18,6 +18,9 @@
   "expected": {
     "evaluationStatus": "withheld",
     "pitchStatus": "withheld",
-    "tempoStatus": "reference"
+    "rhythmStatus": "scored",
+    "tempoStatus": "scored",
+    "dynamicsStatus": "scored",
+    "pedalStatus": "unavailable"
   }
 }

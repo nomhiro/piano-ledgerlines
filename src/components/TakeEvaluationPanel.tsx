@@ -15,9 +15,18 @@ const STATUS_LABEL: Record<string, string> = {
   unavailable: "測定対象外",
 };
 
+/** `metrics` が null のときの説明文。テイクの status で書き分ける。 */
+function noMetricsMessage(status: string): string {
+  if (status === "failed") return "解析が完了しなかったため、指標は算出されていません。";
+  if (status === "completed") return "このテイクには指標が記録されていません。";
+  return "解析中です。完了すると指標が表示されます。";
+}
+
+/**
+ * このパネルが実際に読むフィールドだけを要求する（`id` / `label` は呼び出し側が
+ * 見出しに使うもので、ここでは読まないため型からも外している）。
+ */
 export interface TakeEvaluationData {
-  id: string;
-  label: string;
   status: string;
   failure: { message: string } | null;
   overallScore: number | null;
@@ -77,8 +86,8 @@ export default function TakeEvaluationPanel({ take }: { take: TakeEvaluationData
                       <span className="text-[var(--muted)]">{METRIC_LABELS[key]}</span>
                       <span className="max-w-md text-right text-[var(--muted)]">
                         {STATUS_LABEL[evaluation?.status ?? ""] ?? "算出不可"}
-                        {(evaluation?.reason ?? take.metricsNAReason[key])
-                          ? `（${evaluation?.reason ?? take.metricsNAReason[key]}）`
+                        {(evaluation?.reason ?? take.metricsNAReason?.[key])
+                          ? `（${evaluation?.reason ?? take.metricsNAReason?.[key]}）`
                           : ""}
                       </span>
                     </div>
@@ -100,7 +109,7 @@ export default function TakeEvaluationPanel({ take }: { take: TakeEvaluationData
                 );
               })}
             {!take.metrics && (
-              <p className="text-sm text-[var(--muted)]">まだ指標がありません（解析中または未完了）。</p>
+              <p className="text-sm text-[var(--muted)]">{noMetricsMessage(take.status)}</p>
             )}
           </div>
         </Card>

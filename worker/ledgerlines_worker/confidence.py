@@ -23,6 +23,7 @@ REASONS = {
     "PITCH_FORMULA_UNVALIDATED": "音程の指標式が採譜ノイズに影響されることが判明しているため、式の検証が完了するまで判定を保留します。",
     "AGC_DETECTED": "自動ゲイン制御がかかった録音のため、強弱を測定できません。",
     "PEDAL_REFERENCE_NOT_REGENERATED": "この曲の参照譜にペダル位置が含まれていないため測定できません。楽譜を再登録すると測定できます。",
+    "NO_SUSTAIN_PEDAL_IN_SCORE": "この楽譜のペダル記号はサステイン以外のため測定対象外です。",
     "ALIGNMENT_BELOW_FLOOR": "楽譜と演奏の対応付けが成立していないため採点できません。別の曲の録音でないかご確認ください。",
     "ROBUSTNESS_VALIDATED": "録音条件に対する頑健性が実測で確認されている指標です。",
 }
@@ -102,6 +103,7 @@ def apply_fail_closed_policy(
     *,
     dynamic_range_db: float | None = None,
     pedal_reference_available: bool = False,
+    pedal_reference_regenerated: bool = False,
 ) -> dict:
     """指標ごとに、実測された頑健性に基づいて採点可否を決める。
 
@@ -109,6 +111,13 @@ def apply_fail_closed_policy(
         tempo -2.7/-1.9/-3.2、pedal -4.5/-5.0、dynamics -5.7/-9.0/-45.1(AGC)、
         rhythm -11.8/-6.6/-14.7、pitch -37.7/-37.6/-50.0
     pitch のみ式が採譜ノイズに支配されるため保留する（段3で対応）。
+
+    ペダル関連の2つのフラグは別の状態を表す。混同すると誤った案内文が出る:
+        pedal_reference_regenerated  参照譜が `pedalIntervalsBeats` キーを持つか
+                                     （＝新形式で再生成済みか）
+        pedal_reference_available    そのキーに sustain 区間が1つ以上あるか
+    キーが無いなら「楽譜を再登録すれば測定できる」が正しく、キーはあるのに区間が
+    空なら（楽譜のペダル記号が全て sostenuto/soft）再登録しても結果は変わらない。
     """
     overall_evidence, by_measure = alignment_evidence(reference, alignment)
     diagnostics = {
@@ -151,6 +160,11 @@ def apply_fail_closed_policy(
             if not capabilities.get("pedal"):
                 return "unavailable", "NO_SCORE_PEDAL"
             if not pedal_reference_available:
+                # capabilities.pedal は種別を絞らず hasPedalMark だけを見るが、区間
+                # 抽出は sustain のみを拾う。よって「記号はあるが sustain が無い」と
+                # 「参照譜が旧形式」の2状態が両方ここに来る。再登録で直るのは後者だけ。
+                if pedal_reference_regenerated:
+                    return "unavailable", "NO_SUSTAIN_PEDAL_IN_SCORE"
                 return "unavailable", "PEDAL_REFERENCE_NOT_REGENERATED"
         if raw_scores["metrics"].get(key) is None:
             return "unavailable", "INSUFFICIENT_ALIGNMENT_EVIDENCE"
@@ -272,7 +286,20 @@ def apply_fail_closed_policy(
             "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
         }
     else:
-        reason_code = "ALIGNMENT_BELOW_FLOOR" if below_floor else "PITCH_FORMULA_UNVALIDATED"
+        # overallScore が出ない理由は「対応付けが不成立」「保留された指標がある」
+        # 「全指標が測定対象外（total_weight == 0）」の3通りある。今は pitch が必ず
+        # withheld なので2番目しか起こらないが、`has_withheld` を見ずに pitch の理由へ
+        # 倒すと、段3 で pitch が scored になったあと3番目の経路が「pitch の式が未検証」
+        # という事実でない理由を返すようになる。decisions は METRICS 順なので、
+        # 代表として最初に該当した指標の具体的な理由を採る。
+        if below_floor:
+            reason_code = "ALIGNMENT_BELOW_FLOOR"
+        else:
+            preferred = "withheld" if has_withheld else "unavailable"
+            reason_code = next(
+                (code for status, code in decisions.values() if status == preferred),
+                "INSUFFICIENT_ALIGNMENT_EVIDENCE",
+            )
         result["evaluation"] = {
             "status": "withheld",
             "confidence": alignment_confidence,

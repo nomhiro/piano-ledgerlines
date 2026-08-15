@@ -1,6 +1,8 @@
+import { Suspense } from "react";
 import { listSongs as listRealSongs, getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
 import { toHistorySong, sortByRecordedAtDesc } from "@/lib/real-history";
 import TakeEvaluationPanel from "@/components/TakeEvaluationPanel";
+import SongSelector from "@/components/SongSelector";
 import { getAccountContextForLayout } from "@/lib/server/account";
 
 export default async function SharePage({
@@ -47,6 +49,11 @@ export default async function SharePage({
     return (
       <div className="space-y-4">
         <h1 className="text-2xl font-bold">{realSong.title} の共有</h1>
+        {/* SongSelector は "use client" で useSearchParams を呼ぶため Suspense が必須
+            （境界が無いと本番ビルドが失敗する）。/progress と同じ形を保つ。 */}
+        <Suspense>
+          <SongSelector songs={selectableSongs} current={selectedId} />
+        </Suspense>
         <p className="text-sm text-[var(--muted)]">
           {account?.activeClassroom
             ? `共有先: ${account.activeClassroom.name}`

@@ -132,7 +132,3 @@ export function toCoachTake(take: TakeDoc): CoachTake {
     aiReview: normalizeCoachReview(take.aiReview, take),
   };
 }
-
-export function getSongListWithRealSongs(realSongs: SongDoc[], fallbackSongs: Song[]): Song[] {
-  return [...realSongs.map(toHistorySong), ...fallbackSongs];
-}
