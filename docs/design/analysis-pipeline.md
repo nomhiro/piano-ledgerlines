@@ -481,7 +481,7 @@ anchorQuality(m) = min(1, matched数 / 3)   … アンカー3点以上で満点
 | 条件 | 結果 |
 |---|---|
 | Stage 1 の DTW 正規化コストが閾値超過 | `ALIGN_FAILED` |
-| 全体の matchRate < 0.35 | `TOO_MANY_ERRORS` |
+| 全体の `matchRate` が `MIN_MATCH_RATE` 未満 | `ALIGN_FAILED`（→ [6.4](#64-信頼度の算出)の `MIN_MATCH_RATE = 0.30`。実装済みなのはこの条件だけで、`TOO_MANY_ERRORS` というコードは存在しない） |
 | `playedRange` が 2小節未満 | `ALIGN_FAILED` |
 
 失敗時も採譜結果（ピアノロール）と音声は保存し、UI で提示する。
