@@ -10,13 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pretty_midi
 
-from .scoring_constants import (
-    AGC_DYNAMIC_RANGE_DB,
-    DEAD_RHYTHM,
-    DEAD_RHYTHM_DEGRADED,
-    DEGRADED_DYNAMIC_RANGE_DB,
-    WEIGHTS,
-)
+from .scoring_constants import DEAD_RHYTHM, DEAD_RHYTHM_DEGRADED, WEIGHTS
 
 W_MISS = 1.0
 W_EXTRA = 0.7
