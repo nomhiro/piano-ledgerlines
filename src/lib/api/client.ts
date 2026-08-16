@@ -7,7 +7,7 @@ export interface ApiSong {
   title: string;
   composer: string;
   targetTempo: number | null;
-  status: "awaiting_score" | "converting_score" | "reviewing_score" | "omr_failed" | "ready";
+  status: "awaiting_score" | "parsing_score" | "converting_score" | "reviewing_score" | "omr_failed" | "ready";
   measureCount: number | null;
   timeSignature: string | null;
   keySignature: string | null;
