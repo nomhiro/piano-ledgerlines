@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { getAuthenticatedUser } from "@/lib/server/auth";
 import { getConfig } from "@/lib/server/config";
 import { errorResponse, jsonResponse, NotFoundError, ValidationError } from "@/lib/server/http";
 import { assertResourceId } from "@/lib/server/validation";
 import { getSong, saveScoreFile, updateSong } from "@/lib/server/repository";
-import { runOmrWorker, runReferenceWorker } from "@/lib/server/worker";
-import { processCloudScoreLocally } from "@/lib/server/cloud-score-processing";
+import { runOmrWorker } from "@/lib/server/worker";
+import { getScoreQueue } from "@/lib/server/queue";
 
 export const runtime = "nodejs";
 
@@ -62,36 +63,24 @@ export async function POST(
     }
 
     await updateSong(songId, {
+      status: "parsing_score",
       scoreSource: ext === ".mid" || ext === ".midi" ? "midi" : "musicxml",
       sourceScoreFileName: file.name,
       omrEngine: null,
       omrError: undefined,
+      lastScoreError: undefined,
     }, user.id);
-    if (getConfig().storageBackend === "azure") {
-      if (process.env.LEDGERLINES_AZURE_CLOUD === "true") {
-        const savedSong = await getSong(songId, user.id);
-        if (!savedSong) throw new NotFoundError("song not found");
-        const updated = await processCloudScoreLocally(savedSong);
-        return jsonResponse({
-          songId: updated.id, status: updated.status, measureCount: updated.measureCount,
-          scoreMeasureCount: updated.scoreMeasureCount, keySignature: updated.keySignature,
-          timeSignature: updated.timeSignature, detectedTempo: updated.detectedTempo,
-          hasRepeats: updated.hasRepeats, warnings: updated.warnings,
-        }, request);
-      }
-      return jsonResponse({ songId, status: "awaiting_score", uploadComplete: true }, request, { status: 202 });
-    }
-    const result = await runReferenceWorker(songId);
-    const updated = await getSong(songId, user.id);
-    if (result.code !== 0 || updated?.status !== "ready") {
-      throw new ValidationError(updated?.lastScoreError ?? "score parsing failed");
-    }
-    return jsonResponse({
-      songId: updated.id, status: updated.status, measureCount: updated.measureCount,
-      scoreMeasureCount: updated.scoreMeasureCount, keySignature: updated.keySignature,
-      timeSignature: updated.timeSignature, detectedTempo: updated.detectedTempo,
-      hasRepeats: updated.hasRepeats, warnings: updated.warnings,
-    }, request);
+    await getScoreQueue().enqueue({
+      schemaVersion: 1,
+      jobId: randomUUID(),
+      songId,
+      userId: user.id,
+      attempt: 1,
+      correlationId: request.headers.get("x-request-id") ?? randomUUID(),
+    });
+    // 参照譜の生成はワーカーが行う（Issue #33）。ストレージバックエンドで分岐しない ──
+    // ローカルでしか通らない経路を作らないことが、この変更の目的そのもの。
+    return jsonResponse({ songId, status: "parsing_score", uploadComplete: true }, request, { status: 202 });
   } catch (error) {
     return errorResponse(request, error);
   }

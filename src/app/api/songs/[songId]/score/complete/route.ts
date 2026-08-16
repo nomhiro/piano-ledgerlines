@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { getAuthenticatedUser } from "@/lib/server/auth";
 import { getConfig } from "@/lib/server/config";
 import { getBlobStore } from "@/lib/server/blob-storage";
 import { errorResponse, jsonResponse, NotFoundError, ValidationError } from "@/lib/server/http";
 import { assertResourceId } from "@/lib/server/validation";
 import { getSong, updateSong } from "@/lib/server/repository";
+import { getScoreQueue } from "@/lib/server/queue";
 
 export const runtime = "nodejs";
 
@@ -26,19 +28,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ son
       }
     }
     if (!found) throw new ValidationError("score blob missing");
-    if (getConfig().azureEmulator) {
-      await updateSong(songId, {
-        status: "ready",
-        measureCount: 16,
-        scoreMeasureCount: 16,
-        detectedTempo: 96,
-        warnings: [],
-      }, user.id);
-      return jsonResponse({ songId, status: "ready", measureCount: 16, uploadComplete: true }, request);
-    }
-    // Parsing remains a worker-job concern until the production image is configured.
-    await updateSong(songId, { status: "awaiting_score" }, user.id);
-    return jsonResponse({ songId, status: "awaiting_score", uploadComplete: true }, request, { status: 202 });
+    await updateSong(songId, { status: "parsing_score", lastScoreError: undefined }, user.id);
+    await getScoreQueue().enqueue({
+      schemaVersion: 1,
+      jobId: randomUUID(),
+      songId,
+      userId: user.id,
+      attempt: 1,
+      correlationId: request.headers.get("x-request-id") ?? randomUUID(),
+    });
+    return jsonResponse({ songId, status: "parsing_score", uploadComplete: true }, request, { status: 202 });
   } catch (error) {
     return errorResponse(request, error);
   }
