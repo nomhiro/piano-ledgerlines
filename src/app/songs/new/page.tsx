@@ -6,8 +6,9 @@ import Link from "next/link";
 import { FileMusic, Upload, Check, Loader2, ScanLine, Info, AlertTriangle } from "lucide-react";
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
 import { createSong, uploadScore } from "@/lib/api/client";
+import { useSongScoreProgress } from "@/lib/hooks/useSongScoreProgress";
 
-type Phase = "idle" | "uploading" | "converting" | "reviewing" | "parsing" | "awaiting_score" | "done" | "error";
+type Phase = "idle" | "uploading" | "converting" | "reviewing" | "parsing" | "done" | "error";
 
 const STEPS = [
   "ファイルをアップロード中…",
@@ -26,13 +27,23 @@ export default function NewSongPage() {
   const [targetTempo, setTargetTempo] = useState(120);
   const [songId, setSongId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [scoreInfo, setScoreInfo] = useState<{
-    measureCount: number;
-    timeSignature: string;
-    keySignature: string;
-    detectedTempo: number;
-    warnings: { code: string; message: string }[];
-  } | null>(null);
+  const [watchedSongId, setWatchedSongId] = useState<string | null>(null);
+  const progress = useSongScoreProgress(watchedSongId);
+
+  // parsing 中は SSE の結果をそのまま画面の状態として使う（別の state にコピーしない）。
+  // "done" になるのは parsing 経由のときだけなので、scoreInfo 用の state は持たない。
+  // phase / errorMessage は、parsing を経由しない他の分岐（PDF変換・エラー等）のために
+  // そのまま残す。
+  const displayPhase: Phase =
+    phase === "parsing"
+      ? progress.status === "ready"
+        ? "done"
+        : progress.failureMessage
+          ? "error"
+          : "parsing"
+      : phase;
+  const displayScoreInfo = phase === "parsing" ? progress.info : null;
+  const displayErrorMessage = phase === "parsing" ? progress.failureMessage ?? "" : errorMessage;
 
   async function handleFile(file: File) {
     setFileName(file.name);
@@ -72,19 +83,8 @@ export default function NewSongPage() {
         return;
       }
       setStep(STEPS.length);
-      if (result.status === "ready") {
-        setScoreInfo({
-          measureCount: result.measureCount ?? 0,
-          timeSignature: result.timeSignature ?? "未検出",
-          keySignature: result.keySignature ?? "未検出",
-          detectedTempo: result.detectedTempo ?? 0,
-          warnings: result.warnings ?? [],
-        });
-        setPhase("done");
-      } else {
-        setScoreInfo(null);
-        setPhase("awaiting_score");
-      }
+      // 参照譜の生成はワーカーが行う。ここでは parsing のまま SSE の結果を待つ。
+      setWatchedSongId(created.songId);
 
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
@@ -104,7 +104,7 @@ export default function NewSongPage() {
           <Card>
             <CardTitle title="楽譜を取り込む" />
             <div className="p-5">
-              {phase === "idle" ? (
+              {displayPhase === "idle" ? (
                 <>
                   <div className="relative">
                     <input
@@ -149,22 +149,22 @@ export default function NewSongPage() {
               ) : (
                 <div
                   className="space-y-3"
-                  role={phase === "error" ? "alert" : "status"}
-                  aria-live={phase === "error" ? "assertive" : "polite"}
-                  aria-busy={phase === "uploading" || phase === "parsing" || phase === "converting"}
+                  role={displayPhase === "error" ? "alert" : "status"}
+                  aria-live={displayPhase === "error" ? "assertive" : "polite"}
+                  aria-busy={displayPhase === "uploading" || displayPhase === "parsing" || displayPhase === "converting"}
                 >
                   <div className="flex items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
                     <FileMusic size={18} className="text-violet-400" aria-hidden="true" />
                     <span className="text-sm">{fileName}</span>
-                    {phase === "done" && <Badge color="#22c55e">解析完了</Badge>}
-                    {phase === "error" && <Badge color="#ef4444">失敗</Badge>}
+                    {displayPhase === "done" && <Badge color="#22c55e">解析完了</Badge>}
+                    {displayPhase === "error" && <Badge color="#ef4444">失敗</Badge>}
                   </div>
-                  {phase === "converting" && (
+                  {displayPhase === "converting" && (
                     <div className="rounded-lg border border-violet-500/25 bg-violet-500/10 p-4 text-xs text-violet-200">
                       PDF楽譜をAudiverisでMusicXMLに変換しています。完了後、この画面を再読み込みして変換結果を確認してください。
                     </div>
                   )}
-                  {phase === "reviewing" && (
+                  {displayPhase === "reviewing" && (
                     <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4 text-xs text-amber-100">
                       <p>PDFからMusicXMLへの変換が完了しました。これは原本との比較用プレビューであり、演奏分析には使用できません。</p>
                       <button
@@ -176,7 +176,7 @@ export default function NewSongPage() {
                       </button>
                     </div>
                   )}
-                  {phase !== "error" && phase !== "reviewing" && phase !== "converting" &&
+                  {displayPhase !== "error" && displayPhase !== "reviewing" && displayPhase !== "converting" &&
                     STEPS.map((s, i) => (
                       <div key={s} className="flex items-center gap-2.5 px-1 text-xs">
                         {i < step ? (
@@ -189,18 +189,18 @@ export default function NewSongPage() {
                         <span className={i <= step ? "" : "text-[var(--muted)]"}>{s}</span>
                       </div>
                     ))}
-                  {phase === "done" && scoreInfo && (
+                  {displayPhase === "done" && displayScoreInfo && (
                     <div className="rounded-lg border border-green-500/25 bg-green-500/10 p-4 text-xs">
                       <div className="font-semibold text-green-300">
-                        {scoreInfo.measureCount}小節 / {scoreInfo.timeSignature} / {scoreInfo.keySignature} を認識しました
+                        {displayScoreInfo.measureCount}小節 / {displayScoreInfo.timeSignature} / {displayScoreInfo.keySignature} を認識しました
                       </div>
                       <div className="mt-1 text-[var(--muted)]">
-                        検出テンポ ♩= {scoreInfo.detectedTempo}。
+                        検出テンポ ♩= {displayScoreInfo.detectedTempo}。
                         これが分析時の「理想の演奏」の基準になります。
                       </div>
-                      {scoreInfo.warnings.length > 0 && (
+                      {displayScoreInfo.warnings.length > 0 && (
                         <ul className="mt-2 space-y-1 text-amber-300">
-                          {scoreInfo.warnings.map((w, i) => (
+                          {displayScoreInfo.warnings.map((w, i) => (
                             <li key={i} className="flex items-start gap-1.5">
                               <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
                               <span>{w.message}</span>
@@ -210,14 +210,14 @@ export default function NewSongPage() {
                       )}
                     </div>
                   )}
-                  {phase === "awaiting_score" && (
+                  {displayPhase === "parsing" && (
                     <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4 text-xs text-amber-200">
-                      楽譜を受け付けました。解析ワーカーの完了後に、小節数・拍子・調などの情報を確認できます。
+                      楽譜を受け付けました。解析ワーカーが小節・拍子・調を抽出しています。この画面のまま少しお待ちください。
                     </div>
                   )}
-                  {phase === "error" && (
+                  {displayPhase === "error" && (
                     <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-4 text-xs text-red-300">
-                      {errorMessage}
+                      {displayErrorMessage}
                     </div>
                   )}
                 </div>
@@ -286,10 +286,10 @@ export default function NewSongPage() {
               </Link>
               <button
                 type="button"
-                disabled={phase !== "done" || !songId}
+                disabled={displayPhase !== "done" || !songId}
                 onClick={() => songId && router.push(`/record?song=${songId}`)}
                 className={`rounded-lg px-4 py-2 text-sm font-medium text-white ${
-                  phase === "done" && songId
+                  displayPhase === "done" && songId
                     ? "bg-violet-600 hover:bg-violet-500"
                     : "pointer-events-none bg-violet-600/40"
                 }`}

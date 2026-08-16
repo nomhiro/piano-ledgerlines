@@ -15,6 +15,8 @@ function scoreStatusLabel(status: string, scoreSource: string | null): string {
   switch (status) {
     case "ready":
       return "解析済み";
+    case "parsing_score":
+      return "楽譜を解析中";
     case "converting_score":
       return "PDF変換中";
     case "reviewing_score":

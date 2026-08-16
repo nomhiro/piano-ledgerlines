@@ -1,28 +1,48 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { uploadScore } from "@/lib/api/client";
+import { useSongScoreProgress } from "@/lib/hooks/useSongScoreProgress";
+
+type ReplaceState = "idle" | "uploading" | "watching";
 
 export default function VerifiedScoreReplacement({ songId }: { songId: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
-  const [status, setStatus] = useState("");
-  const [error, setError] = useState("");
+  const [state, setState] = useState<ReplaceState>("idle");
+  const [uploadError, setUploadError] = useState("");
+  const progress = useSongScoreProgress(state === "watching" ? songId : null);
+
+  // watching 中は SSE の結果をそのまま画面の状態として使う（別の state にコピーしない）。
+  const isDone = state === "watching" && progress.status === "ready";
+  const failureMessage = state === "watching" ? progress.failureMessage : null;
+  const status =
+    state === "uploading" || (state === "watching" && !isDone && !failureMessage)
+      ? "解析中…"
+      : isDone
+        ? "差し替えが完了しました。"
+        : "";
+  const error = failureMessage ?? uploadError;
+
+  // router.refresh() は setState ではないため、完了時に一度だけ呼ぶ副作用として
+  // ここに残す（表示状態自体は上の isDone / failureMessage の導出に任せる）。
+  useEffect(() => {
+    if (isDone) router.refresh();
+  }, [isDone, router]);
 
   async function replaceScore(file: File) {
-    setStatus("解析中…");
-    setError("");
+    setState("uploading");
+    setUploadError("");
     try {
       const result = await uploadScore(songId, file);
-      if (result.status !== "ready") {
-        throw new Error("楽譜を解析できませんでした。");
+      if (result.status !== "parsing_score") {
+        throw new Error("楽譜のアップロードを受け付けられませんでした。");
       }
-      setStatus("差し替えが完了しました。");
-      router.refresh();
+      setState("watching");
     } catch (cause) {
-      setStatus("");
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setState("idle");
+      setUploadError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       if (inputRef.current) inputRef.current.value = "";
     }
