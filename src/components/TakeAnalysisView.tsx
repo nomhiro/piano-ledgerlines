@@ -13,7 +13,7 @@ import {
 import { Badge, Card, CardTitle, MetricBar, ScoreRing } from "@/components/ui";
 import MeasureHeatmap from "@/components/MeasureHeatmap";
 import PianoRoll from "@/components/PianoRoll";
-import ScoreView from "@/components/ScoreView";
+import ScoreView, { DEMO_SCORE_FOOTNOTE } from "@/components/ScoreView";
 import { DynamicsChart, MetricRadar, TempoCurveChart } from "@/components/charts";
 import {
   formatDateTime,
@@ -191,6 +191,7 @@ export default function TakeAnalysisView({
               measureScores={take.measureScores}
               onSelectMeasure={(m) => setSelected(selected === m ? null : m)}
               selected={selected}
+              footnote={DEMO_SCORE_FOOTNOTE}
             />
           </div>
         </Card>

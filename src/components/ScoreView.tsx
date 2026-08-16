@@ -1,8 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MeasureScore } from "@/lib/mock/types";
+import { measureScoreKey, measureScoreMapFromKey, type MeasureScoreInput } from "@/components/score-overlay";
 import { scoreColor } from "@/lib/format";
+
+/**
+ * デモ用サンプル楽譜を使っている画面（TakeAnalysisView / SongDetailView）で出す注記。
+ * 「両画面でバイト完全一致」が要件のため、文字列を一箇所にまとめて重複を防ぐ。
+ */
+export const DEMO_SCORE_FOOTNOTE =
+  "※ デモ用サンプル楽譜（16小節）に、分析結果の小節スコアを色で重ねています。本実装ではアップロードされたMusicXMLをそのまま表示します。";
 
 interface Overlay {
   measure: number;
@@ -11,6 +18,8 @@ interface Overlay {
   w: number;
   h: number;
   score: number | null;
+  /** このテイクに記録はあるが採点が保留された小節。 */
+  withheld: boolean;
 }
 
 export default function ScoreView({
@@ -19,24 +28,21 @@ export default function ScoreView({
   showHeatmap = true,
   onSelectMeasure,
   selected,
+  footnote,
 }: {
   scoreUrl: string;
-  measureScores?: MeasureScore[];
+  measureScores?: readonly MeasureScoreInput[];
   showHeatmap?: boolean;
   onSelectMeasure?: (measure: number) => void;
   selected?: number | null;
+  /** 楽譜の下に出す注記。渡されなければ何も出さない。 */
+  footnote?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [overlays, setOverlays] = useState<Overlay[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
-  const scoreKey = measureScores.map((m) => `${m.measure}:${m.score}`).join(",");
-  const scoreMap = useMemo(
-    () => new Map(scoreKey ? scoreKey.split(",").map((p) => {
-      const [m, s] = p.split(":");
-      return [Number(m), Number(s)] as [number, number];
-    }) : []),
-    [scoreKey],
-  );
+  const scoreKey = measureScoreKey(measureScores);
+  const scoreMap = useMemo(() => measureScoreMapFromKey(scoreKey), [scoreKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,7 +77,6 @@ export default function ScoreView({
         const rects: Overlay[] = [];
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const list: any[][] = (osmd as any).GraphicSheet?.MeasureList ?? [];
-        const scoreMapLocal = scoreMap;
 
         list.forEach((staffMeasures) => {
           const present = (staffMeasures ?? []).filter(Boolean);
@@ -86,13 +91,15 @@ export default function ScoreView({
           const w = (bb.BorderRight - bb.BorderLeft) * unit;
           const top = (bb.AbsolutePosition.y + bb.BorderTop) * unit;
           const bottom = (lb.AbsolutePosition.y + lb.BorderBottom) * unit;
+          const score = scoreMap.get(measureNo) ?? null;
           rects.push({
             measure: measureNo,
             x,
             y: top,
             w,
             h: Math.max(10, bottom - top),
-            score: scoreMapLocal.has(measureNo) ? scoreMapLocal.get(measureNo)! : null,
+            score,
+            withheld: score === null && scoreMap.has(measureNo),
           });
         });
 
@@ -119,10 +126,10 @@ export default function ScoreView({
               {overlays.map((o) => (
                 <div
                   key={o.measure}
-                  onClick={() => onSelectMeasure?.(o.measure)}
-                  className={`pointer-events-auto absolute cursor-pointer rounded-sm transition-opacity hover:opacity-70 ${
-                    selected === o.measure ? "ring-2 ring-violet-600" : ""
-                  }`}
+                  onClick={onSelectMeasure ? () => onSelectMeasure(o.measure) : undefined}
+                  className={`pointer-events-auto absolute rounded-sm transition-opacity ${
+                    onSelectMeasure ? "cursor-pointer hover:opacity-70" : ""
+                  } ${selected === o.measure ? "ring-2 ring-violet-600" : ""}`}
                   style={{
                     left: o.x,
                     top: o.y,
@@ -130,13 +137,20 @@ export default function ScoreView({
                     height: o.h,
                     backgroundColor:
                       o.score === null ? "transparent" : `${scoreColor(o.score)}38`,
+                    // 判定保留は色で点数を暗示できないため、斜線で「記録はあるが未採点」を
+                    // 示す（TakeEvaluationPanel の数字グリッドの表現に合わせる）。
+                    backgroundImage: o.withheld
+                      ? "repeating-linear-gradient(135deg, transparent, transparent 3px, #94a3b8 3px, #94a3b8 4px)"
+                      : undefined,
                     borderBottom:
                       o.score === null ? "none" : `3px solid ${scoreColor(o.score)}`,
                   }}
                   title={
-                    o.score === null
-                      ? `${o.measure}小節（このテイクの対象外）`
-                      : `${o.measure}小節：${o.score.toFixed(1)}点`
+                    o.score !== null
+                      ? `${o.measure}小節：${o.score.toFixed(1)}点`
+                      : o.withheld
+                        ? `${o.measure}小節（判定保留）`
+                        : `${o.measure}小節（このテイクの対象外）`
                   }
                 />
               ))}
@@ -154,10 +168,8 @@ export default function ScoreView({
           </div>
         )}
       </div>
-      {showHeatmap && status === "ready" && (
-        <p className="mt-2 text-[11px] text-[var(--muted)]">
-          ※ デモ用サンプル楽譜（16小節）に、分析結果の小節スコアを色で重ねています。本実装ではアップロードされたMusicXMLをそのまま表示します。
-        </p>
+      {footnote && showHeatmap && status === "ready" && (
+        <p className="mt-2 text-[11px] text-[var(--muted)]">{footnote}</p>
       )}
     </div>
   );

@@ -7,7 +7,7 @@ import type { Song, Take, MeasureScore } from "@/lib/mock/types";
 import { METRIC_KEYS, METRIC_LABELS, METRIC_DESCRIPTIONS, SONG_STATUS_LABELS } from "@/lib/mock/types";
 import { Badge, Card, CardTitle, MetricBar, ScoreRing } from "@/components/ui";
 import MeasureHeatmap from "@/components/MeasureHeatmap";
-import ScoreView from "@/components/ScoreView";
+import ScoreView, { DEMO_SCORE_FOOTNOTE } from "@/components/ScoreView";
 import { daysUntil, formatDateTime, formatDuration, signed } from "@/lib/format";
 
 export default function SongDetailView({
@@ -73,6 +73,7 @@ export default function SongDetailView({
                 measureScores={latest.measureScores}
                 onSelectMeasure={setSelected}
                 selected={selected}
+                footnote={DEMO_SCORE_FOOTNOTE}
               />
             </div>
           </Card>
