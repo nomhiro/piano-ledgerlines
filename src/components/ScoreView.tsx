@@ -4,6 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { measureScoreKey, measureScoreMapFromKey, type MeasureScoreInput } from "@/components/score-overlay";
 import { scoreColor } from "@/lib/format";
 
+/**
+ * デモ用サンプル楽譜を使っている画面（TakeAnalysisView / SongDetailView）で出す注記。
+ * 「両画面でバイト完全一致」が要件のため、文字列を一箇所にまとめて重複を防ぐ。
+ */
+export const DEMO_SCORE_FOOTNOTE =
+  "※ デモ用サンプル楽譜（16小節）に、分析結果の小節スコアを色で重ねています。本実装ではアップロードされたMusicXMLをそのまま表示します。";
+
 interface Overlay {
   measure: number;
   x: number;

@@ -58,3 +58,8 @@ test("判定保留と採点済みが同じ楽譜上の小節に写る場合は�
 test("measureScores が空なら対応表も空", () => {
   assert.equal(roundTrip([]).size, 0);
 });
+
+test("0点は判定保留に化けない", () => {
+  const map = roundTrip([{ measure: 1, score: 0 }]);
+  assert.equal(map.get(1), 0);
+});

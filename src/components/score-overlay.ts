@@ -20,12 +20,13 @@ export interface MeasureScoreInput {
 /**
  * useMemo の依存に使える安定キー。measureScores は毎レンダー新しい配列になり得るため、
  * 内容から作った文字列を依存にする（配列そのものを依存にすると毎回 OSMD を再描画する）。
- * null は数値と衝突しない "null" として書き出す。
+ * JSON にエンコードするため、往復は構造的にロスレス（手組みの "measure:score" 形式が
+ * 必要としていた区切り文字や数値パースの防御分岐が要らない）。
+ * ただし JSON.stringify(NaN) は null になるため、紛れ込んだ NaN はここで既に判定保留に
+ * 化ける（下の NaN テストが依存している挙動）。
  */
 export function measureScoreKey(measureScores: readonly MeasureScoreInput[]): string {
-  return measureScores
-    .map((m) => `${m.scoreMeasure ?? m.measure}:${m.score === null ? "null" : m.score}`)
-    .join(",");
+  return JSON.stringify(measureScores.map((m) => [m.scoreMeasure ?? m.measure, m.score]));
 }
 
 /** 採点済みが判定保留に勝ち、採点済み同士では低い方（弱い小節）を残す。 */
@@ -42,16 +43,7 @@ function mergeScores(existing: number | null, incoming: number | null): number |
  */
 export function measureScoreMapFromKey(key: string): Map<number, number | null> {
   const map = new Map<number, number | null>();
-  if (!key) return map;
-  for (const entry of key.split(",")) {
-    const separator = entry.lastIndexOf(":");
-    if (separator < 0) continue;
-    const measure = Number(entry.slice(0, separator));
-    if (!Number.isFinite(measure)) continue;
-    const rawScore = entry.slice(separator + 1);
-    const parsed = rawScore === "null" ? null : Number(rawScore);
-    // "null" 以外で数値にならない値（"NaN" 等）も保留として扱う。点数に見せない。
-    const score = parsed !== null && Number.isFinite(parsed) ? parsed : null;
+  for (const [measure, score] of JSON.parse(key) as [number, number | null][]) {
     map.set(measure, map.has(measure) ? mergeScores(map.get(measure) ?? null, score) : score);
   }
   return map;

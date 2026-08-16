@@ -12,7 +12,6 @@ export interface ApiSong {
   timeSignature: string | null;
   keySignature: string | null;
   detectedTempo: number | null;
-  scoreSource: "musicxml" | "midi" | "pdf" | null;
   /** OSMD で描ける MusicXML プレビューのファイル名。null なら楽譜を描けない。 */
   previewScoreFileName: string | null;
   warnings: { code: string; message: string; measures?: number[] }[];

@@ -30,8 +30,9 @@ export default function TakeScoreCard({
         if (!cancelled && song.previewScoreFileName) {
           setScoreUrl(`/api/songs/${songId}/score/file`);
         }
-      } catch {
+      } catch (error) {
         // 楽譜が引けないことは採点結果の表示を止める理由にならない。
+        console.error("score lookup failed", error);
       }
     }
     void load();
