@@ -82,6 +82,7 @@ var blobContainers = [
 
 var queues = [
   'analysis-jobs'
+  'score-jobs'
 ]
 
 var cosmosContainers = [
@@ -275,11 +276,14 @@ module analysisWorker './modules/analysis-worker.bicep' = if (enableWorkerHostin
     storageQueueUrl: endsWith(storage.outputs.queueEndpoint, '/') ? substring(storage.outputs.queueEndpoint, 0, max(0, length(storage.outputs.queueEndpoint) - 1)) : storage.outputs.queueEndpoint
     storageAccountName: storage.outputs.name
     analysisQueueName: 'analysis-jobs'
+    scoreQueueName: 'score-jobs'
+    songsContainerName: 'songs'
     cosmosEndpoint: cosmos.outputs.endpoint
     cosmosDatabaseName: cosmos.outputs.databaseName
     audioContainerName: 'audio'
     derivedContainerName: 'derived'
     takesContainerName: 'takes'
+    scoresContainerName: 'scores'
     tags: {
       environment: environmentName
       component: 'analysis-worker'

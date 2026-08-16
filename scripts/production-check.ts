@@ -337,6 +337,21 @@ test("production rejects emulator and local cloud profiles", () => {
   resetConfigForTests();
 });
 
+test("score queue name defaults to score-jobs and is overridable", () => {
+  const previous = process.env.AZURE_SCORE_QUEUE;
+  delete process.env.AZURE_SCORE_QUEUE;
+  resetConfigForTests();
+  assert.equal(getConfig().scoreQueueName, "score-jobs");
+
+  process.env.AZURE_SCORE_QUEUE = "score-jobs-test";
+  resetConfigForTests();
+  assert.equal(getConfig().scoreQueueName, "score-jobs-test");
+
+  if (previous === undefined) delete process.env.AZURE_SCORE_QUEUE;
+  else process.env.AZURE_SCORE_QUEUE = previous;
+  resetConfigForTests();
+});
+
 test("Google Easy Auth principal resolves to the storage user id", async () => {
   const env = process.env as Record<string, string | undefined>;
   const previous = {
