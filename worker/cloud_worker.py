@@ -18,7 +18,8 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
-from worker_main import run_analyze
+from ledgerlines_worker.score_job import MAX_ATTEMPTS, process_score_job
+from worker_main import run_analyze, run_reference
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -87,6 +88,10 @@ class CloudStore:
                 connection_string,
                 required("AZURE_ANALYSIS_QUEUE"),
             )
+            self.score_queue = QueueClient.from_connection_string(
+                connection_string,
+                required("AZURE_SCORE_QUEUE"),
+            )
             cosmos = CosmosClient(
                 cosmos_endpoint,
                 credential=required("AZURE_COSMOS_KEY"),
@@ -107,9 +112,15 @@ class CloudStore:
                 queue_name=required("AZURE_ANALYSIS_QUEUE"),
                 credential=credential,
             )
+            self.score_queue = QueueClient(
+                account_url=self.queue_url,
+                queue_name=required("AZURE_SCORE_QUEUE"),
+                credential=credential,
+            )
             cosmos = CosmosClient(required("AZURE_COSMOS_ENDPOINT"), credential)
         database = cosmos.get_database_client(os.environ.get("AZURE_COSMOS_DATABASE", "ledgerlines"))
         self.takes = database.get_container_client(os.environ.get("AZURE_COSMOS_TAKES_CONTAINER", "takes"))
+        self.songs = database.get_container_client(os.environ.get("AZURE_COSMOS_SONGS_CONTAINER", "songs"))
         self.audio = self.storage.get_container_client(os.environ.get("AZURE_STORAGE_AUDIO_CONTAINER", "audio"))
         self.scores = self.storage.get_container_client(os.environ.get("AZURE_STORAGE_SCORES_CONTAINER", "scores"))
         self.derived = self.storage.get_container_client(os.environ.get("AZURE_STORAGE_DERIVED_CONTAINER", "derived"))
@@ -151,6 +162,50 @@ class CloudStore:
                 overwrite=True,
                 content_settings=ContentSettings(content_type=content_type),
             )
+
+    def get_song(self, song_id: str, user_id: str) -> dict[str, Any] | None:
+        try:
+            return self.songs.read_item(item=song_id, partition_key=user_id)
+        except ResourceNotFoundError:
+            return None
+
+    def update_song(self, song_id: str, user_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_song(song_id, user_id)
+        if current is None:
+            raise RuntimeError(f"song {song_id} not found")
+        current.update(patch)
+        current["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return self.songs.replace_item(item=song_id, body=current)
+
+    def download_score(self, song: dict[str, Any], target_dir: Path) -> Path:
+        # Blob 名は src/lib/server/cloud-score-processing.ts:10-13 と同一。
+        # 拡張子は曲ドキュメントの scoreFileName から引く（アップロード時に
+        # 検証済みの拡張子がそのまま入っている）。
+        extension = Path(song.get("scoreFileName") or "").suffix.lower() or ".musicxml"
+        name = f"users/{song['userId']}/songs/{song['id']}/scores/score{extension}"
+        target = target_dir / f"score{extension}"
+        target.write_bytes(self.scores.download_blob(name).readall())
+        return target
+
+    def upload_reference(self, song: dict[str, Any], source: Path) -> None:
+        self.upload(
+            self.derived,
+            f"users/{song['userId']}/songs/{song['id']}/reference.json",
+            source,
+            "application/json",
+        )
+
+    def upload_preview(self, song: dict[str, Any], file_name: str, source: Path) -> None:
+        content_type = (
+            "audio/midi" if file_name.lower().endswith(".mid")
+            else "application/vnd.recordare.musicxml+xml"
+        )
+        self.upload(
+            self.scores,
+            f"users/{song['userId']}/songs/{song['id']}/scores/{file_name}",
+            source,
+            content_type,
+        )
 
 
 def sync_local_doc(store: CloudStore, job: dict[str, Any], document: dict[str, Any]) -> None:
@@ -232,12 +287,41 @@ def process_job(store: CloudStore, job: dict[str, Any]) -> None:
             )
 
 
+def _drain_score_queue(store: CloudStore, visibility_seconds: int) -> bool:
+    """score-jobs を1件処理する。処理したら True（呼び出し側が先頭から見直す）。"""
+    messages = list(
+        store.score_queue.receive_messages(messages_per_page=1, visibility_timeout=visibility_seconds)
+    )
+    if not messages:
+        return False
+    for message in messages:
+        try:
+            job = json.loads(message.content)
+            with tempfile.TemporaryDirectory(prefix=f"ledgerlines-score-{job['songId']}-") as temp:
+                outcome = process_score_job(
+                    store, job, message.dequeue_count, Path(temp), run_reference
+                )
+            store.score_queue.delete_message(message)
+            LOGGER.info("Score job %s outcome=%s song=%s", job.get("jobId"), outcome, job.get("songId"))
+        except Exception:
+            # process_score_job は再試行に意味がある失敗だけを送出する
+            # （MAX_ATTEMPTS 到達時は自分で終端させて戻る）。
+            LOGGER.exception("Score job failed; leaving message for retry (max %s attempts)", MAX_ATTEMPTS)
+    return True
+
+
 def main() -> None:
     store = CloudStore()
     polling_seconds = int(os.environ.get("WORKER_POLLING_SECONDS", "5"))
     visibility_seconds = int(os.environ.get("WORKER_VISIBILITY_TIMEOUT_SECONDS", "1800"))
+    score_visibility_seconds = int(os.environ.get("WORKER_SCORE_VISIBILITY_TIMEOUT_SECONDS", "300"))
     LOGGER.info("Analysis worker started")
     while True:
+        # 参照譜生成（数秒）を解析（数分）より先に見る。ただしレプリカは1つで
+        # ループも1本なので、既に走っている解析を追い越すことはできない
+        # （設計 §4.2 の既知の制約）。
+        if _drain_score_queue(store, score_visibility_seconds):
+            continue
         messages = list(store.queue.receive_messages(messages_per_page=1, visibility_timeout=visibility_seconds))
         if not messages:
             time.sleep(polling_seconds)
