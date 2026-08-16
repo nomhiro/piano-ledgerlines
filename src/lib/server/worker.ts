@@ -80,3 +80,15 @@ export function runAnalyzeWorkerAsync(takeId: string): void {
     console.error(`[worker] analyze failed to start for take ${takeId}:`, err);
   });
 }
+
+/**
+ * 参照譜生成をローカルバックエンドで非同期に走らせる。api.md 5.1 は 202 +
+ * 進捗の購読が前提になったため（Issue #33）、呼び出し元はawaitしない。
+ * songs/{songId}.json の status をワーカーが直接更新するので、進捗は
+ * ファイルをポーリングして把握する（analyze と同じ考え方）。
+ */
+export function runReferenceWorkerAsync(songId: string): void {
+  runWorker(["--mode", "reference", "--data-dir", DATA_DIR, "--song-id", songId]).catch((err) => {
+    console.error(`[worker] reference failed to start for song ${songId}:`, err);
+  });
+}

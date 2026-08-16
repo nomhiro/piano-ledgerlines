@@ -352,6 +352,27 @@ test("score queue name defaults to score-jobs and is overridable", () => {
   resetConfigForTests();
 });
 
+test("score queue backend follows LEDGERLINES_QUEUE and getScoreQueue memoizes its instance", async () => {
+  const { getScoreQueue, resetScoreQueueForTests, LocalScoreQueue } =
+    await import("../src/lib/server/queue");
+  const previous = process.env.LEDGERLINES_QUEUE;
+
+  process.env.LEDGERLINES_QUEUE = "local";
+  resetConfigForTests();
+  resetScoreQueueForTests();
+  assert.ok(getScoreQueue() instanceof LocalScoreQueue);
+
+  const first = getScoreQueue();
+  assert.equal(getScoreQueue(), first, "getScoreQueue must memoize its instance");
+  resetScoreQueueForTests();
+  assert.notEqual(getScoreQueue(), first, "resetScoreQueueForTests must clear the memo");
+
+  if (previous === undefined) delete process.env.LEDGERLINES_QUEUE;
+  else process.env.LEDGERLINES_QUEUE = previous;
+  resetConfigForTests();
+  resetScoreQueueForTests();
+});
+
 test("Google Easy Auth principal resolves to the storage user id", async () => {
   const env = process.env as Record<string, string | undefined>;
   const previous = {
