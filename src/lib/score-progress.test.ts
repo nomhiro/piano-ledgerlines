@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isScoreProgressTerminal, scoreProgressFailureMessage } from "./score-progress";
+import {
+  isScoreProgressTerminal,
+  scoreProgressFailureMessage,
+  scoreProgressStalledMessage,
+  scoreProgressStreamErrorMessage,
+} from "./score-progress";
 
 test("parsing_score keeps the stream open", () => {
   assert.equal(isScoreProgressTerminal("parsing_score"), false);
@@ -52,4 +57,52 @@ test("failure message uses omrError for a failed PDF conversion", () => {
 
 test("ready has no failure message", () => {
   assert.equal(scoreProgressFailureMessage({ status: "ready" }), null);
+});
+
+test("stalled message is null when ready", () => {
+  assert.equal(scoreProgressStalledMessage("ready"), null);
+});
+
+test("stalled message is null for explicit failures already covered by scoreProgressFailureMessage", () => {
+  assert.equal(scoreProgressStalledMessage("omr_failed"), null);
+  assert.equal(scoreProgressStalledMessage("awaiting_score"), null);
+});
+
+test("stalled message fires when done arrives without a result (worker never finished before the stream cap)", () => {
+  assert.equal(
+    scoreProgressStalledMessage("parsing_score"),
+    "解析が完了しませんでした。時間をおいて曲の詳細をご確認ください。",
+  );
+  assert.equal(
+    scoreProgressStalledMessage("converting_score"),
+    "解析が完了しませんでした。時間をおいて曲の詳細をご確認ください。",
+  );
+});
+
+test("stalled message fires when done arrives while still waiting on a separate flow (reviewing_score)", () => {
+  assert.equal(
+    scoreProgressStalledMessage("reviewing_score"),
+    "解析が完了しませんでした。時間をおいて曲の詳細をご確認ください。",
+  );
+});
+
+test("stream error message maps NOT_FOUND to a user-facing reason", () => {
+  assert.equal(
+    scoreProgressStreamErrorMessage({ code: "NOT_FOUND", message: "song not found" }),
+    "対象の曲が見つかりませんでした。曲の一覧からやり直してください。",
+  );
+});
+
+test("stream error message maps INTERNAL to a user-facing reason", () => {
+  assert.equal(
+    scoreProgressStreamErrorMessage({ code: "INTERNAL", message: "unable to read score progress" }),
+    "進捗の確認中にエラーが発生しました。ページを再読み込みしてください。",
+  );
+});
+
+test("stream error message falls back to a generic reason for a browser-level disconnect", () => {
+  assert.equal(
+    scoreProgressStreamErrorMessage(null),
+    "進捗の取得が中断されました。ページを再読み込みしてください。",
+  );
 });

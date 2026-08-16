@@ -36,3 +36,43 @@ export function scoreProgressFailureMessage(song: {
   if (song.status === "awaiting_score") return song.lastScoreError || FALLBACK_FAILURE_MESSAGE;
   return null;
 }
+
+const STALLED_MESSAGE = "解析が完了しませんでした。時間をおいて曲の詳細をご確認ください。";
+
+/**
+ * SSE の `done` は「進捗が変化しない状態に達した」ことしか意味しない。`ready` でも
+ * `scoreProgressFailureMessage` が拾う明示的な失敗（`omr_failed` / `awaiting_score`）
+ * でもない状態で `done` になった場合 ── ワーカーが動かず `MAX_DURATION_MS` で
+ * 打ち切られた（`parsing_score` / `converting_score` のまま）、あるいは
+ * `reviewing_score` のように別フロー待ちのまま終端した場合 ── は、結果が出ないまま
+ * 終わったことを待ち手（SSE ルート／`useSongScoreProgress`）に伝える必要がある。
+ * 失敗でないときは null を返す。
+ */
+export function scoreProgressStalledMessage(status: SongDocStatus): string | null {
+  if (status === "ready") return null;
+  if (scoreProgressFailureMessage({ status }) !== null) return null;
+  return STALLED_MESSAGE;
+}
+
+const STREAM_INTERRUPTED_MESSAGE = "進捗の取得が中断されました。ページを再読み込みしてください。";
+
+export interface ScoreProgressStreamError {
+  code?: string;
+  message?: string;
+}
+
+/**
+ * SSE 接続自体が失敗したときにユーザーへ見せる文言を決める。
+ * サーバーが名前付き `error` イベントで理由を送っている場合（SSE ルートの
+ * `NOT_FOUND` / `INTERNAL`）はそれに応じた文言を、ブラウザ側の接続断
+ * （初回接続失敗や一時的な切断で `error` に data が無い場合）は汎用の文言を返す。
+ */
+export function scoreProgressStreamErrorMessage(serverError: ScoreProgressStreamError | null): string {
+  if (serverError?.code === "NOT_FOUND") {
+    return "対象の曲が見つかりませんでした。曲の一覧からやり直してください。";
+  }
+  if (serverError?.code === "INTERNAL") {
+    return "進捗の確認中にエラーが発生しました。ページを再読み込みしてください。";
+  }
+  return STREAM_INTERRUPTED_MESSAGE;
+}
