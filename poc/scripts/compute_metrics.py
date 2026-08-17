@@ -17,7 +17,7 @@ from pathlib import Path
 # ここは検証用の CLI で、本番と同じコードを呼ぶ。
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "worker"))
 
-from ledgerlines_worker.metrics import compute, load_est, pedal_intervals  # noqa: E402
+from ledgerlines_worker.metrics import compute, load_est  # noqa: E402
 
 
 def main() -> int:
