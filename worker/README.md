@@ -42,7 +42,7 @@ C:\llpoc\venv\Scripts\python.exe worker_main.py --data-dir ..\.data --song-id <s
 ローカルデータルート（既定 `<repo>/.data`、`LEDGERLINES_DATA_DIR` で上書き可）を指定する。
 テイクの `status` フィールドを段階的に更新しながら、完了時に
 `overallScore` / `metrics` / `measureScores` / `issues` を書き込む。
-Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeWorkerAsync`
+Next.js側は `src/lib/server/worker.ts` の `runReferenceWorkerAsync` / `runAnalyzeWorkerAsync`
 から `child_process.spawn` でこのCLIを起動する（Pythonインタプリタは
 `WORKER_PYTHON` 環境変数、未設定時は `C:\llpoc\venv\Scripts\python.exe` の存在確認、
 それも無ければ `python` にフォールバック）。
