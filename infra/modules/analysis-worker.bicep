@@ -21,6 +21,7 @@ param storageQueueUrl string
 param storageAccountName string
 param analysisQueueName string
 param scoreQueueName string
+param omrQueueName string
 param songsContainerName string
 param cosmosEndpoint string
 param cosmosDatabaseName string
@@ -61,6 +62,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storageAccountName }
             { name: 'AZURE_ANALYSIS_QUEUE', value: analysisQueueName }
             { name: 'AZURE_SCORE_QUEUE', value: scoreQueueName }
+            { name: 'AZURE_OMR_QUEUE', value: omrQueueName }
             { name: 'AZURE_COSMOS_SONGS_CONTAINER', value: songsContainerName }
             { name: 'AZURE_STORAGE_SCORES_CONTAINER', value: scoresContainerName }
             { name: 'WORKER_SCORE_VISIBILITY_TIMEOUT_SECONDS', value: '300' }

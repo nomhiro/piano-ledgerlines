@@ -83,6 +83,7 @@ var blobContainers = [
 var queues = [
   'analysis-jobs'
   'score-jobs'
+  'omr-jobs'
 ]
 
 var cosmosContainers = [
@@ -277,6 +278,7 @@ module analysisWorker './modules/analysis-worker.bicep' = if (enableWorkerHostin
     storageAccountName: storage.outputs.name
     analysisQueueName: 'analysis-jobs'
     scoreQueueName: 'score-jobs'
+    omrQueueName: 'omr-jobs'
     songsContainerName: 'songs'
     cosmosEndpoint: cosmos.outputs.endpoint
     cosmosDatabaseName: cosmos.outputs.databaseName
