@@ -190,6 +190,15 @@ def apply_fail_closed_policy(
         for key, (status, reason_code) in decisions.items()
     }
 
+    # 楽譜上の小節番号は reference.py が算出した値を保持する（api.md の `scoreMeasure`）。
+    # 繰り返しを展開すると複数の演奏順小節が同じ楽譜上の小節に写るため、ここで演奏順の
+    # 番号を書いてはならない——楽譜ビューの重ね合わせは `scoreMeasure` で引いている。
+    # このキーを持たない古い参照譜は演奏順の番号にフォールバックする。
+    printed_measure = {
+        int(measure["measure"]): int(measure.get("scoreMeasure", measure["measure"]))
+        for measure in reference.get("measures", [])
+    }
+
     for measure_score in result["measureScores"]:
         measure = int(measure_score["measure"])
         evidence = by_measure.get(
@@ -203,7 +212,7 @@ def apply_fail_closed_policy(
             },
         )
         measure_metrics = dict(measure_score["metrics"])
-        measure_score["scoreMeasure"] = measure
+        measure_score["scoreMeasure"] = printed_measure.get(measure, measure)
         measure_score["noteCount"] = measure_score.pop("refNotes", evidence["referenceNotes"])
         measure_score["confidence"] = evidence["alignmentConfidence"]
         measure_score["metrics"] = {

@@ -140,6 +140,82 @@ class ConfidencePolicyTests(unittest.TestCase):
         # withheld が残るときは、その具体的な理由を出す（pitch が唯一の withheld）。
         self.assertEqual(guarded["evaluation"]["reasonCode"], "PITCH_FORMULA_UNVALIDATED")
 
+    def _repeat_case(self, measures: list[dict]):
+        """演奏順小節 1 と 17 が同じ楽譜上の小節 1 に写る、繰り返し展開後の形。
+
+        `measures` だけを差し替えられるようにして、`scoreMeasure` の有無を
+        テストごとに変えられるようにしている。
+        """
+        reference = {
+            "notes": [{"index": i, "measure": 1 if i < 5 else 17} for i in range(10)],
+            "measures": measures,
+        }
+        alignment = {
+            "pairs": [[i, i] for i in range(10)],
+            "missed": [],
+            "extra": [],
+            "retakes": [],
+            "unplayed": [],
+        }
+        metrics = {"pitch": 50, "rhythm": 50, "tempo": 50, "dynamics": None, "pedal": None}
+        result = {
+            "overallScore": 50,
+            "metrics": dict(metrics),
+            "measureScores": [
+                {"measure": 1, "refNotes": 5, "score": 50, "metrics": dict(metrics)},
+                {"measure": 17, "refNotes": 5, "score": 50, "metrics": dict(metrics)},
+            ],
+        }
+        return result, reference, alignment
+
+    def test_score_measure_comes_from_the_reference_not_the_performance_order(self):
+        """楽譜上の小節番号は reference.py が算出した値を保持する（#37）。
+
+        繰り返しを展開すると演奏順小節 17 は楽譜上の小節 1 に写る。ここで演奏順の
+        番号を書くと、楽譜ビューの重ね合わせ（`scoreMeasure` で引く）がずれる。
+        """
+        result, reference, alignment = self._repeat_case(
+            [
+                {"measure": 1, "scoreMeasure": 1, "tempoExcluded": False},
+                {"measure": 17, "scoreMeasure": 1, "tempoExcluded": False},
+            ]
+        )
+
+        guarded = apply_fail_closed_policy(result, reference, alignment, 10)
+
+        by_measure = {ms["measure"]: ms for ms in guarded["measureScores"]}
+        self.assertEqual(by_measure[1]["scoreMeasure"], 1)
+        self.assertEqual(by_measure[17]["scoreMeasure"], 1)
+        # 演奏順の番号は別フィールドとして保たれる。
+        self.assertEqual(sorted(by_measure), [1, 17])
+
+    def test_score_measure_falls_back_when_the_reference_predates_the_field(self):
+        """`scoreMeasure` を持たない古い参照譜は演奏順の番号にフォールバックする。"""
+        result, reference, alignment = self._repeat_case(
+            [
+                {"measure": 1, "tempoExcluded": False},
+                {"measure": 17, "tempoExcluded": False},
+            ]
+        )
+
+        guarded = apply_fail_closed_policy(result, reference, alignment, 10)
+
+        by_measure = {ms["measure"]: ms for ms in guarded["measureScores"]}
+        self.assertEqual(by_measure[1]["scoreMeasure"], 1)
+        self.assertEqual(by_measure[17]["scoreMeasure"], 17)
+
+    def test_score_measure_falls_back_when_the_measure_is_absent_from_the_reference(self):
+        """参照譜の measures に該当する演奏順小節が無い場合もフォールバックする。"""
+        result, reference, alignment = self._repeat_case(
+            [{"measure": 1, "scoreMeasure": 1, "tempoExcluded": False}]
+        )
+
+        guarded = apply_fail_closed_policy(result, reference, alignment, 10)
+
+        by_measure = {ms["measure"]: ms for ms in guarded["measureScores"]}
+        self.assertEqual(by_measure[1]["scoreMeasure"], 1)
+        self.assertEqual(by_measure[17]["scoreMeasure"], 17)
+
     def test_agc_makes_dynamics_unavailable(self):
         result, reference, alignment, fixture = self._issue8_case()
 
