@@ -13,19 +13,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-import librosa
 import numpy as np
 import pretty_midi
 import soundfile as sf
 
+# 段3 以降、ペダル区間の抽出は worker 側の1つだけ（設計 9.1）。
+# ここは検証用の CLI で、本番と同じコードを呼ぶ。
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "worker"))
+
+from ledgerlines_worker.metrics import pedal_intervals as pedal_intervals_sec  # noqa: E402
+
 SR = 16000
 SUBDIVISION = 8  # 1拍を32分音符相当まで分割する（粗いと繰り返し音が同一格子に潰れる）
+MIDI_ONLY_SUBDIVISION = 16  # 設計 9.2（8分割ではトリルが潰れることを実測）
+MIDI_ONLY_TEMPO_BPM = 120.0  # MAESTRO の MIDI が持つ固定テンポ
 
 
 def estimate_beat_grid(audio: np.ndarray, sr: int = SR) -> np.ndarray:
     """音声からビート時刻を推定し、拍内を細分した格子時刻を返す。"""
+    import librosa  # --midi-only では不要なので遅延 import する
+
     tempo, beats = librosa.beat.beat_track(y=audio, sr=sr, units="time", trim=False)
     beats = np.asarray(beats, dtype=float)
     if beats.size < 2:
@@ -48,7 +58,31 @@ def estimate_beat_grid(audio: np.ndarray, sr: int = SR) -> np.ndarray:
     return np.array(grid_times), np.array(grid_beats), float(np.atleast_1d(tempo)[0])
 
 
-def build_reference(pm: pretty_midi.PrettyMIDI, grid_t: np.ndarray, grid_b: np.ndarray) -> list[dict]:
+def midi_only_beat_grid(pm: pretty_midi.PrettyMIDI) -> tuple[np.ndarray, np.ndarray, float]:
+    """MIDI のオンセットから等間隔の拍格子を作る（設計 9.2）。
+
+    音声の拍トラッキングを使わないので librosa を必要としない。フェーズ1 の合格条件は
+    missed / extra の個数で決まり拍の音楽的正しさに依存しないため、推定誤差を持ち込む
+    音声由来の拍より、厳密なオンセットに対する等間隔格子のほうが適している。
+
+    **この格子で算出した rhythm / tempo は音楽的な意味を持たない。**
+    """
+    beat_sec = 60.0 / MIDI_ONLY_TEMPO_BPM
+    end = max(pm.get_end_time(), beat_sec)
+    n_beats = int(np.ceil(end / beat_sec)) + 2
+    grid_times = []
+    grid_beats = []
+    for i in range(n_beats):
+        for s in range(MIDI_ONLY_SUBDIVISION):
+            frac = s / MIDI_ONLY_SUBDIVISION
+            grid_times.append((i + frac) * beat_sec)
+            grid_beats.append(i + frac)
+    return np.array(grid_times), np.array(grid_beats), MIDI_ONLY_TEMPO_BPM
+
+
+def build_reference(
+    pm: pretty_midi.PrettyMIDI, grid_t: np.ndarray, grid_b: np.ndarray, subdivision: int = SUBDIVISION
+) -> list[dict]:
     """演奏 MIDI を拍格子にスナップして参照譜を作る。"""
     notes = sorted(
         (n for inst in pm.instruments for n in inst.notes), key=lambda n: (n.start, n.pitch)
@@ -62,14 +96,14 @@ def build_reference(pm: pretty_midi.PrettyMIDI, grid_t: np.ndarray, grid_b: np.n
             end_beat = float(grid_b[e])
         else:
             # 格子の末尾を超える音符は刻み幅で外挿する
-            end_beat = float(grid_b[-1]) + (e - len(grid_b) + 1) / SUBDIVISION
+            end_beat = float(grid_b[-1]) + (e - len(grid_b) + 1) / subdivision
         ref.append(
             {
                 "index": len(ref),
                 "gtIndex": gt_index,
                 "pitch": int(note.pitch),
                 "startBeat": round(start_beat, 4),
-                "durationBeats": round(max(end_beat - start_beat, 1 / SUBDIVISION), 4),
+                "durationBeats": round(max(end_beat - start_beat, 1 / subdivision), 4),
                 # 楽譜は絶対的な音量を持たないので、強弱は3段階に丸める
                 "dynamicLevel": 0 if note.velocity < 48 else (1 if note.velocity < 80 else 2),
                 "gtStart": round(note.start, 4),
@@ -89,6 +123,11 @@ def main() -> int:
     ap.add_argument("--dataset", type=Path, default=Path("data/dataset"))
     ap.add_argument("--out", type=Path, default=Path("out/reference"))
     ap.add_argument("--beats-per-measure", type=int, default=4)
+    ap.add_argument(
+        "--midi-only",
+        action="store_true",
+        help="音声を使わず MIDI 由来の等間隔グリッドで参照譜を作る（設計 9.2）",
+    )
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -96,16 +135,21 @@ def main() -> int:
 
     summary = []
     for piece in pieces:
-        audio, sr = sf.read(args.dataset / f"{piece['name']}.clean.wav", dtype="float32")
-        grid_t, grid_b, tempo = estimate_beat_grid(audio, sr)
         pm = pretty_midi.PrettyMIDI(str(args.dataset / f"{piece['name']}.ref.mid"))
-        ref = build_reference(pm, grid_t, grid_b)
+        if args.midi_only:
+            grid_t, grid_b, tempo = midi_only_beat_grid(pm)
+            subdivision = MIDI_ONLY_SUBDIVISION
+        else:
+            audio, sr = sf.read(args.dataset / f"{piece['name']}.clean.wav", dtype="float32")
+            grid_t, grid_b, tempo = estimate_beat_grid(audio, sr)
+            subdivision = SUBDIVISION
+        ref = build_reference(pm, grid_t, grid_b, subdivision)
         assign_measures(ref, args.beats_per_measure)
 
         # 楽譜としての「拍 -> 秒」の正解対応も残す（BeatMap の評価に使う）
         beat_map = [
             {"time": round(float(t), 4), "beat": round(float(b), 4)}
-            for t, b in zip(grid_t[::SUBDIVISION], grid_b[::SUBDIVISION])
+            for t, b in zip(grid_t[::subdivision], grid_b[::subdivision])
         ]
 
         doc = {
@@ -115,6 +159,12 @@ def main() -> int:
             "measureCount": max(n["measure"] for n in ref),
             "notes": ref,
             "beatMap": beat_map,
+            "pedalIntervalsBeats": [
+                [round(float(np.interp(a, grid_t, grid_b)), 4),
+                 round(float(np.interp(b, grid_t, grid_b)), 4)]
+                for a, b in pedal_intervals_sec(pm)
+            ],
+            "gridSource": "midi" if args.midi_only else "audio",
         }
         (args.out / f"{piece['name']}.reference.json").write_text(
             json.dumps(doc, ensure_ascii=False), encoding="utf-8"
