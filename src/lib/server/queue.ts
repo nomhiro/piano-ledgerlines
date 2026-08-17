@@ -160,7 +160,15 @@ export class LocalOmrQueue implements OmrQueue {
     // azure バックエンドと契約を揃えるためのラッパーで、spawn の実装は
     // worker.ts の内側に閉じる。
     const { runOmrWorker } = await import("./worker");
-    await runOmrWorker(job.songId);
+    const result = await runOmrWorker(job.songId);
+    // 戻り値を捨てると、失敗しても route は常に 202 を返してしまう。この
+    // クラスは storageBackend=azure かつ queueBackend=local という組み合わせ
+    // で到達し得るが、その組み合わせでは runOmrWorker がローカルの .data を
+    // 見に行くのに曲は Cosmos にある——つまり支援された構成ではない。到達
+    // したときに嘘の 202 で成功を装わないよう、失敗はここで例外にする。
+    if (result.code !== 0) {
+      throw new Error(`runOmrWorker failed for song ${job.songId} (exit code ${result.code})`);
+    }
     getTelemetry().record({ name: "omr.queue.enqueued", jobId: job.jobId, songId: job.songId, stage: "local" });
   }
 }
@@ -187,10 +195,12 @@ export class AzureOmrQueue implements OmrQueue {
 
 let omrQueue: OmrQueue | undefined;
 export function getOmrQueue(): OmrQueue {
-  // storageBackend=azure かつ queueBackend=local の組み合わせは実在する
-  // (ストレージだけ Azure、ジョブ投入はローカル spawn で検証する構成)。
-  // この場合でも route の分岐は azure 側に入るため、ここは LocalOmrQueue を
-  // 返す必要がある——「呼ばれない実装」ではない。
+  // route の分岐は storageBackend で決まるが、キューの選択は queueBackend で
+  // 決まる。そのため storageBackend=azure かつ queueBackend=local という
+  // 組み合わせでも route は azure 側に入り、ここは LocalOmrQueue を返す——
+  // 「呼ばれない実装」ではない。ただしこの組み合わせは支援された構成ではない
+  // (runOmrWorker はローカルの .data を見に行くが、曲は Cosmos にある)。
+  // 到達したら黙って失敗を握り潰さずエラーにするのが LocalOmrQueue の役目。
   omrQueue ??= getConfig().queueBackend === "azure" ? new AzureOmrQueue() : new LocalOmrQueue();
   return omrQueue;
 }
