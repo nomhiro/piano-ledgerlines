@@ -148,9 +148,18 @@ Container App が認証なしでイメージを pull して Queue を監視し�
 `--mode omr --data-dir <dir> --song-id <songId>` で実行します。ワーカーは
 `scores/<songId>/score.pdf` をAudiverisで変換し、生成したMusicXMLを
 `scores/<songId>/score.musicxml` に保存します。変換後の曲は
-`reviewing_score` になり、ユーザーが承認するまで参照譜の生成・演奏分析は行いません。
+`reviewing_score` になりますが、これは比較用ドラフトの終端状態です。
+`POST /api/songs/{songId}/score/approve` は何も承認せず、PDFから自動変換した曲に
+対しては常に「PDFからの自動変換は分析には使用できません。正しいMusicXML、MXL、
+またはMIDIへ差し替えてください。」という `ValidationError` を返すだけで、
+クライアントからも呼び出していません。`reviewing_score` から先に進む道は、
+正しいMusicXML・MXL・MIDIへの差し替えのみです。
 
-`AUDIVERIS_COMMAND`（既定: `audiveris`）にAudiveris 5.10.2の実行コマンドを、
+`AUDIVERIS_COMMAND` にAudiveris 5.10.2の実行コマンドを設定できます。既定値は
+呼び出し元によって異なります: `worker_main.py` 自体の既定は `audiveris`
+（PATH上に無ければ実行時エラーになるため、ローカルで直接実行する場合は要設定）ですが、
+このワーカーイメージ内では `worker/Dockerfile` が `ENV AUDIVERIS_COMMAND=/opt/audiveris/bin/Audiveris`
+を設定しているため、未設定でもイメージ内に同梱した実体を指します。
 `AUDIVERIS_TIMEOUT_SECONDS`（既定: `300`）にタイムアウト秒数を設定できます。
 印刷譜のみを対象とし、手書き譜・撮影画像は受け付けません。Audiverisは
 AGPL-3.0のため、本番配備前にライセンス上の義務を確認してください。
