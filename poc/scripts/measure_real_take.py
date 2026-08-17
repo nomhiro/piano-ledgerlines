@@ -120,6 +120,9 @@ def main() -> int:
                 # 実データの reference.json は旧形式だとこのキーを持たないので get で読む
                 # （worker_main.py も同じく欠損時は空リストに degrade させる）。
                 reference.get("pedalIntervalsBeats", []),
+                # 第6引数 degraded は意図的に省略している（既定の False）。degraded が効くのは
+                # rhythm のデッドゾーン（metrics.py:117 の dead_rhythm）だけで pitch には
+                # 影響しないため、pitch を測るこのハーネスでは production と同値になる。
             )
             grid.append(
                 {"tau": tau, "wExtra": w_extra, "pitch": result["metrics"]["pitch"]}
