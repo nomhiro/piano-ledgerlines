@@ -195,6 +195,17 @@ Task 9 が担う。** 実データでの `noiseShare` と pitch の水準が実�
 条件3（`add` で pitch が下がる）が成立した理由を、pitch の値ではなく分類の実数で記録する。
 以下は τ / W_EXTRA に依存しない量である（アライメントと分類だけで決まる）。5曲の合計。
 
+**再現手順**: `pitch-sweep.json` は `{condition, pitch}` しか持たないため、当初この内訳は
+コンテナ内でのアドホック解析でしか得られなかった。`poc/scripts/analyze_pitch_sweep_breakdown.py`
+（本コミットで追加）が同じ集計をコミットされた形で再現する。
+
+```
+cd poc && python scripts/analyze_pitch_sweep_breakdown.py
+```
+
+出力は以下の表と `extraNoiseByReason`（add05: duplicate 2 / harmonic 0 / spurious 11 / reverb 1、
+add15: duplicate 4 / harmonic 0 / spurious 51 / reverb 1）に厳密に一致する。
+
 | condition | 参照音符 | matched | missed | unplayed | extraPlayed | extraNoise | 摂動 MIDI の音符数（増減） |
 |---|---|---|---|---|---|---|---|
 | none | 5474 | 5473 | 0 | 1 | 1 | 0 | 5474 (±0) |
@@ -420,7 +431,11 @@ CPU 数分。**同じ音声で2回通した採譜 MIDI は md5 一致（`0032f31
 **分類が pitch に与えた効果は 0.05〜0.09 点**（258 件全部を計上した場合との差。τ=0.15/W=0.7 で
 30.24 対 30.16）。実質ゼロである。
 
-**なぜ効かないのか**（`align.py` の4規則を extra 258 件に対して個別に当てた実測）:
+**なぜ効かないのか**（`align.py` の4規則を extra 258 件に対して個別に当てた実測。当初はコンテナ内
+でのアドホック解析だったが、`poc/scripts/analyze_real_take_extra.py`（本コミットで追加）が
+`measure_real_take.py` と同じ採譜済み MIDI・reference.json からコミットされた形で再現する。
+下記の候補数・velocity 比・閾値ごとの発火数・同音高オンセット対の統計は、いずれもこのスクリプトの
+出力と厳密に一致することを確認済み）:
 
 | 規則 | 前段の条件に該当 | 実際に分類された | 落ちた理由 |
 |---|---|---|---|
@@ -523,8 +538,8 @@ CPU 数分。**同じ音声で2回通した採譜 MIDI は md5 一致（`0032f31
 | pitch（τ=0.15 / W_EXTRA=0.7） | **9.99** | **30.24** |
 
 **issue8 の 268 は fixture に実在するキーではない。** `issue8_take_diagnostic.json` の
-キーは `referenceNotes` / `transcribedNotes` / `matchedNotes` / `extraNotes` / `rawScores` /
-`expected` だけで、`missedNotes` も `unplayed` も持たない。268 は 1242 − 974 の派生値であり、
+キーは `songId` / `takeId` / `referenceNotes` / `transcribedNotes` / `matchedNotes` /
+`extraNotes` / `rawScores` / `expected` で、`missedNotes` も `unplayed` も持たない。268 は 1242 − 974 の派生値であり、
 その take の `unplayed` が 0 とは限らないので、**`missed` としては上限値である**
 （本測定では 1121 − 1015 = 106 のうち 89 が `missed`、17 が `unplayed` だった）。
 
