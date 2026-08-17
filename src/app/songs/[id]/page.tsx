@@ -2,11 +2,14 @@ import { notFound } from "next/navigation";
 import { getSong, getTakesForSong, findStagnantMeasures, songs } from "@/lib/mock/data";
 import SongDetailView from "@/components/SongDetailView";
 import { getSong as getRealSong, listTakesBySong } from "@/lib/server/repository";
+import type { SongDoc } from "@/lib/server/types";
 import Link from "next/link";
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
 import SongManagementControls from "@/components/SongManagementControls";
 import ScorePreview from "@/components/ScorePreview";
-import VerifiedScoreReplacement from "@/components/VerifiedScoreReplacement";
+import VerifiedScoreReplacement, {
+  type ScoreReplacementReason,
+} from "@/components/VerifiedScoreReplacement";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +31,19 @@ function scoreStatusLabel(status: string, scoreSource: string | null): string {
   }
 }
 
+/** 正確なデジタル楽譜への差し替え・登録を促すべき状態か。促さない場合は null。 */
+function scoreReplacementReason(song: SongDoc): ScoreReplacementReason | null {
+  if (song.scoreSource === "pdf") return "pdf_draft";
+  if (song.status === "awaiting_score") {
+    // createSong 直後も awaiting_score なので、状態だけでは「解析が失敗した」と
+    // 断定できない。楽譜を受け付けたときに sourceScoreFileName が入るため、
+    // これで「一度も上げていない」と「上げたが解析できなかった」を区別する。
+    return song.sourceScoreFileName ? "parse_failed" : "not_uploaded";
+  }
+  if (song.status === "parsing_score") return "parsing";
+  return null;
+}
+
 export function generateStaticParams() {
   return songs.map((s) => ({ id: s.id }));
 }
@@ -42,6 +58,7 @@ export default async function SongDetailPage({
     const song = await getRealSong(id);
     if (!song) notFound();
     const takes = await listTakesBySong(id);
+    const replacementReason = scoreReplacementReason(song);
     return (
       <div>
         <PageHeader
@@ -66,6 +83,9 @@ export default async function SongDetailPage({
               {song.sourceScoreFileName && <div>登録ファイル: {song.sourceScoreFileName}</div>}
               {song.status === "omr_failed" && song.omrError && (
                 <div className="text-red-300">変換エラー: {song.omrError}</div>
+              )}
+              {song.lastScoreError && (
+                <div className="text-red-300">解析エラー: {song.lastScoreError}</div>
               )}
               <div>小節数: {song.measureCount ?? "未解析"}</div>
               <div>検出テンポ: {song.detectedTempo ? `♩=${song.detectedTempo}` : "未検出"}</div>
@@ -104,7 +124,12 @@ export default async function SongDetailPage({
             targetTempo={song.targetTempo}
           />
         )}
-        {song.scoreSource === "pdf" && <VerifiedScoreReplacement songId={song.id} />}
+        {/* PDFドラフトに加えて、参照譜が無い状態（生成失敗・解析未完了）でも
+            差し替え口を出す。設計 §4.6 の「失敗時は再アップロードへ誘導する」。
+            これが無いと、取り残された曲は別の曲として登録し直すしかない。 */}
+        {replacementReason && (
+          <VerifiedScoreReplacement songId={song.id} reason={replacementReason} />
+        )}
         <SongManagementControls song={song} />
       </div>
     );

@@ -19,7 +19,6 @@ const STEPS = [
 export default function NewSongPage() {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>("idle");
-  const [step, setStep] = useState(0);
   const [fileName, setFileName] = useState("");
   const [title, setTitle] = useState("");
   const [composer, setComposer] = useState("");
@@ -45,10 +44,17 @@ export default function NewSongPage() {
   const displayScoreInfo = phase === "parsing" ? progress.info : null;
   const displayErrorMessage = phase === "parsing" ? progress.failureMessage ?? "" : errorMessage;
 
+  // 進捗のチェックは「実際に終わった段階」だけを示す。state に持たず displayPhase
+  // から導出するので、まだ解析していない段階にチェックが付くことがない。
+  // uploading: STEPS[0]（アップロード中）を回す。
+  // parsing: アップロードは完了、ワーカーが STEPS[1] を実行中。
+  // done: reference.json が出来ている（= 全段階が完了）。
+  const displayStep =
+    displayPhase === "done" ? STEPS.length : displayPhase === "parsing" ? 1 : 0;
+
   async function handleFile(file: File) {
     setFileName(file.name);
     setPhase("uploading");
-    setStep(0);
     setErrorMessage("");
 
     const derivedTitle = title || file.name.replace(/\.(musicxml|xml|mxl|mid|midi|pdf)$/i, "");
@@ -62,12 +68,10 @@ export default function NewSongPage() {
         targetTempo,
       });
       setSongId(created.songId);
-      setStep(1);
-      setPhase("parsing");
 
-      // 2. 楽譜ファイルをアップロードし、サーバー側でreference.jsonを生成
-      //    (api.md 5.1 `POST /songs/{songId}/score`、実際はPythonワーカーが
-      //    music21でMusicXMLを解析する。同期処理で通常数秒)
+      // 2. 楽譜ファイルを送信する。最大10MBのマルチパートなので、送っている間は
+      //    まだ「受け付けられた」とは言えない。phase は uploading のまま維持し、
+      //    202 が返ってから parsing に進む（api.md 5.1 は 202 + 進捗の購読）。
       const result = await uploadScore(created.songId, file);
       if (result.status === "converting_score") {
         setPhase("converting");
@@ -82,10 +86,10 @@ export default function NewSongPage() {
         setPhase("error");
         return;
       }
-      setStep(STEPS.length);
-      // 参照譜の生成はワーカーが行う。ここでは parsing のまま SSE の結果を待つ。
+      // 参照譜の生成はワーカーが行う。受け付けられたので parsing に進み、
+      // SSE の結果を待つ。
       setWatchedSongId(created.songId);
-
+      setPhase("parsing");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
       setPhase("error");
@@ -179,14 +183,14 @@ export default function NewSongPage() {
                   {displayPhase !== "error" && displayPhase !== "reviewing" && displayPhase !== "converting" &&
                     STEPS.map((s, i) => (
                       <div key={s} className="flex items-center gap-2.5 px-1 text-xs">
-                        {i < step ? (
+                        {i < displayStep ? (
                           <Check size={15} className="text-green-400" aria-hidden="true" />
-                        ) : i === step ? (
+                        ) : i === displayStep ? (
                           <Loader2 size={15} className="animate-spin text-violet-400" aria-hidden="true" />
                         ) : (
                           <span className="inline-block h-[15px] w-[15px] rounded-full border border-[#3b4560]" />
                         )}
-                        <span className={i <= step ? "" : "text-[var(--muted)]"}>{s}</span>
+                        <span className={i <= displayStep ? "" : "text-[var(--muted)]"}>{s}</span>
                       </div>
                     ))}
                   {displayPhase === "done" && displayScoreInfo && (
@@ -217,7 +221,20 @@ export default function NewSongPage() {
                   )}
                   {displayPhase === "error" && (
                     <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-4 text-xs text-red-300">
-                      {displayErrorMessage}
+                      <p>{displayErrorMessage}</p>
+                      {/* この画面でのやり直しは createSong から始まって曲が重複作成
+                          されるため、既に作られた曲の詳細へ送る。差し替えは
+                          そこから同じ曲に対して行える。 */}
+                      {songId && (
+                        <p className="mt-2">
+                          <Link
+                            href={`/songs/${songId}`}
+                            className="text-red-200 underline underline-offset-2"
+                          >
+                            曲の詳細を開いて楽譜を差し替える
+                          </Link>
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
