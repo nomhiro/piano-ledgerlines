@@ -17,9 +17,19 @@ export interface ApiSong {
   warnings: { code: string; message: string; measures?: number[] }[];
 }
 
+/**
+ * `GET /api/songs/{songId}` と `GET /api/songs/{songId}/takes` が返すテイク。
+ *
+ * どちらのルートもテイクの文書をそのまま返すため実際のレスポンスはこれより広い。
+ * ここでは画面が使うフィールドだけを宣言している。識別子のキーは `takeId` では
+ * なく `id`（`src/app/api/songs/[songId]/route.ts:18`）。
+ */
 export interface ApiTakeSummary {
-  takeId: string;
+  id: string;
+  label: string;
+  recordedAt: string;
   status: string;
+  overallScore: number | null;
 }
 
 export type ApiEvaluationStatus = "scored" | "reference" | "withheld" | "unavailable";
@@ -36,6 +46,8 @@ export interface ApiTakeDetail {
   id: string;
   songId: string;
   label: string;
+  /** 録音日時（ISO8601）。`src/app/api/takes/[takeId]/route.ts:19` が返している。 */
+  recordedAt: string;
   status: string;
   progress: number;
   failure: { code: string; message: string } | null;
