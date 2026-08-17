@@ -58,7 +58,7 @@ def build_result(reference, est_notes, ref_ev, est_ev, est_pos, cost, penalty, w
         ],
         "unplayed": [n["index"] for n in ref_notes if n["index"] not in covered_notes],
         "retakes": sorted(retakes),
-        "extra": [],
+        "extra": [],  # 跳躍ペナルティの掃引には extra を使わないので空にしている
         "takes": len(runs),
     }
 
