@@ -20,11 +20,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 
-from align import load_est
+# align.py 経由の再エクスポートに依存していたが、align.load_est が
+# ペダル区間も返す ledgerlines_worker.metrics.load_est に切り替わったため
+# ここでは worker 側の align.load_est（音符のみ、1戻り値）を直接呼ぶ
+# （sweep_jump.py と同じ載せ方）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "worker"))
+
+from ledgerlines_worker.align import load_est  # noqa: E402
 
 TOL_SEC = 0.3  # テイク間の間隔(>=1.2s)より十分小さく、採譜の発音時刻ずれよりは大きい
 

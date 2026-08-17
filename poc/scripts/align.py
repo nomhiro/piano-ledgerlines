@@ -21,7 +21,8 @@ from pathlib import Path
 # ここは検証用の CLI で、本番と同じコードを呼ぶ。
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "worker"))
 
-from ledgerlines_worker.align import JUMP_PENALTY, align, load_est  # noqa: E402
+from ledgerlines_worker.align import JUMP_PENALTY, align  # noqa: E402
+from ledgerlines_worker.metrics import load_est  # noqa: E402  # 音符 + ペダル区間
 
 
 def main() -> int:
@@ -49,8 +50,8 @@ def main() -> int:
             mid = args.transcribed / f"{name}.{cond}.mid"
             if not mid.exists():
                 continue
-            est = load_est(mid)
-            result = align(reference, est, args.window, args.mode, args.jump_penalty)
+            est, est_pedal = load_est(mid)
+            result = align(reference, est, args.window, args.mode, args.jump_penalty, est_pedal)
             result["name"] = name
             result["condition"] = cond
             (args.out / f"{name}.{cond}{suffix}.alignment.json").write_text(
