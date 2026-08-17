@@ -10,26 +10,9 @@ import ScorePreview from "@/components/ScorePreview";
 import VerifiedScoreReplacement, {
   type ScoreReplacementReason,
 } from "@/components/VerifiedScoreReplacement";
+import { scoreStatusColor, scoreStatusLabel } from "@/components/song-status";
 
 export const dynamic = "force-dynamic";
-
-function scoreStatusLabel(status: string, scoreSource: string | null): string {
-  if (scoreSource === "pdf") return "OMRドラフト";
-  switch (status) {
-    case "ready":
-      return "解析済み";
-    case "parsing_score":
-      return "楽譜を解析中";
-    case "converting_score":
-      return "PDF変換中";
-    case "reviewing_score":
-      return "変換結果の確認待ち";
-    case "omr_failed":
-      return "PDF変換失敗";
-    default:
-      return "楽譜待ち";
-  }
-}
 
 /** 正確なデジタル楽譜への差し替え・登録を促すべき状態か。促さない場合は null。 */
 function scoreReplacementReason(song: SongDoc): ScoreReplacementReason | null {
@@ -79,7 +62,7 @@ export default async function SongDetailPage({
           <Card>
             <CardTitle title="楽譜情報" />
             <div className="space-y-2 p-5 text-sm text-[var(--muted)]">
-              <div>ステータス: <Badge color="#8b5cf6">{scoreStatusLabel(song.status, song.scoreSource)}</Badge></div>
+              <div>ステータス: <Badge color={scoreStatusColor(song.status, song.scoreSource)}>{scoreStatusLabel(song.status, song.scoreSource)}</Badge></div>
               {song.sourceScoreFileName && <div>登録ファイル: {song.sourceScoreFileName}</div>}
               {song.status === "omr_failed" && song.omrError && (
                 <div className="text-red-300">変換エラー: {song.omrError}</div>
