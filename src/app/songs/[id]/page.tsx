@@ -98,8 +98,11 @@ export default async function SongDetailPage({
             <CardTitle title={`演奏テイク (${takes.length})`} />
             <div className="space-y-2 p-5">
               {takes.length === 0 && <p className="text-sm text-[var(--muted)]">まだ録音がありません。</p>}
+              {/* 実データの曲詳細なので実データ用ルートを直接指す。`/takes/{id}` は
+                  モック用ルートで、`take_` 接頭辞を見て redirect() するだけの
+                  遠回りになっていた（#39）。 */}
               {takes.map((take) => (
-                <Link key={take.id} href={`/takes/${take.id}`} className="block rounded-lg border border-[var(--border)] p-3 text-sm hover:border-violet-500/50">
+                <Link key={take.id} href={`/takes/real/${take.id}`} className="block rounded-lg border border-[var(--border)] p-3 text-sm hover:border-violet-500/50">
                   <div className="flex justify-between gap-3">
                     <span>{take.label}</span>
                     <span className="text-[var(--muted)]">{take.status}</span>
