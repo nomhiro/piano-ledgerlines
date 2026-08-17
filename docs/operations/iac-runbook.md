@@ -150,6 +150,25 @@ azd provision
 リソースを手動変更した場合も、次回の what-if で差分を検出し、Bicepへ取り込むか
 手動変更をやめて宣言へ戻します。
 
+## 5.1 アプリより先にIaCを流す必要がある変更
+
+`.github/workflows/azure-container-apps-cd.yml` は `az containerapp update --image`
+だけを行い、Bicepを流しません。したがってキューやコンテナ、アプリ設定を新しく
+必要とするリリースは、**アプリのデプロイより先に `azd provision` を実行します**。
+
+参照譜生成のキュー化（Issue #33）は次を要求します。適用順序を誤ると障害になります。
+
+- `score-jobs` Storage Queue（`infra/main.bicep` の `queues`）
+  未作成のままWebをデプロイすると、`POST /api/songs/{songId}/score` のenqueueが
+  `QueueNotFound` で失敗し、同エンドポイントが500を返します。楽譜の新規登録と
+  差し替えが全滅します。
+- ワーカーの `AZURE_SCORE_QUEUE` 環境変数（`infra/modules/analysis-worker.bicep`）
+  ワーカーは未設定時に既定値 `score-jobs` へフォールバックするため起動はしますが、
+  キュー名を宣言で管理するため、IaCを流して明示設定へ揃えます。
+
+手順は「対象環境で `azd provision`（または `what-if` → `az deployment group create`）
+→ `az resource list` でキューの存在を確認 → アプリ/ワーカーのイメージを更新」です。
+
 ## 6. 環境昇格とロールバック
 
 devで確認した同一コミットをstg、prodへ昇格します。環境ごとにパラメータだけを

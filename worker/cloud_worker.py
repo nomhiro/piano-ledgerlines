@@ -35,6 +35,22 @@ def required(name: str) -> str:
     return value
 
 
+# 参照譜ジョブのキュー名は required() ではなく既定値で解決する。
+# CD (.github/workflows/azure-container-apps-cd.yml) は `az containerapp update
+# --image` だけを行い Bicep を流さないため、AZURE_SCORE_QUEUE を持たない
+# Container App に新しいイメージが先に入り得る。そこで required() を使うと
+# ワーカーが起動時に落ちて再起動ループになり、解析パイプライン全体が止まる。
+# TS側 (src/lib/server/config.ts の `scoreQueueName`) も同じ既定値を持つ。
+DEFAULT_SCORE_QUEUE = "score-jobs"
+
+
+def score_queue_name() -> str:
+    # `os.environ.get(name, DEFAULT)` では env が空文字で設定されている場合に ""
+    # を返してキュー名が空になる。required() が空文字を欠落として扱うのと
+    # 同じ意味論を保つため、strip() してから or で既定値へ落とす。
+    return os.environ.get("AZURE_SCORE_QUEUE", "").strip() or DEFAULT_SCORE_QUEUE
+
+
 # LEDGERLINES_AZURE_EMULATOR=true が選ぶ分岐は接続文字列・固定キーで認証し、かつ
 # Cosmosの証明書検証を無効化する（下のconnection_verify=False）。これはローカルの
 # Azurite/Cosmosエミュレータ向けの既知の対処であり、本物のAzureエンドポイントに
@@ -90,7 +106,7 @@ class CloudStore:
             )
             self.score_queue = QueueClient.from_connection_string(
                 connection_string,
-                required("AZURE_SCORE_QUEUE"),
+                score_queue_name(),
             )
             cosmos = CosmosClient(
                 cosmos_endpoint,
@@ -114,7 +130,7 @@ class CloudStore:
             )
             self.score_queue = QueueClient(
                 account_url=self.queue_url,
-                queue_name=required("AZURE_SCORE_QUEUE"),
+                queue_name=score_queue_name(),
                 credential=credential,
             )
             cosmos = CosmosClient(required("AZURE_COSMOS_ENDPOINT"), credential)
