@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:production": "tsx --test scripts/production-check.ts",
-    "test:unit": "tsx --test src/components/empty-takes.test.ts src/components/score-overlay.test.ts src/components/take-navigation.test.ts src/components/song-status.test.ts src/components/measure-selection.test.ts src/lib/dashboard.test.ts src/lib/score-progress.test.ts src/lib/real-history.test.ts",
+    "test:unit": "tsx --test src/components/empty-takes.test.ts src/components/score-overlay.test.ts src/components/take-navigation.test.ts src/components/song-status.test.ts src/components/measure-selection.test.ts src/lib/dashboard.test.ts src/lib/score-progress.test.ts src/lib/real-history.test.ts src/lib/server/omr-queue.test.ts",
     "test:classroom": "tsx --test --test-concurrency=1 src/lib/server/classroom-invitations.test.ts src/lib/server/account.test.ts src/app/classroom-invitations/accept/invitation-client.test.ts",
     "test:infra": "tsx --test infra/acs-email-identity.test.ts",
     "azure:up": "docker compose -f docker-compose.azure-local.yml up -d",

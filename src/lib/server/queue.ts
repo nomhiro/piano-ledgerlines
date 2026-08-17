@@ -140,3 +140,61 @@ export function getScoreQueue(): ScoreQueue {
 export function resetScoreQueueForTests(): void {
   scoreQueue = undefined;
 }
+
+export interface OmrJob {
+  schemaVersion: 1;
+  jobId: string;
+  songId: string;
+  userId: string;
+  attempt: number;
+  correlationId: string;
+}
+
+export interface OmrQueue {
+  enqueue(job: OmrJob): Promise<void>;
+}
+
+export class LocalOmrQueue implements OmrQueue {
+  async enqueue(job: OmrJob): Promise<void> {
+    // ローカルバックエンドは従来どおり同期実行(route が結果を返す)。ここは
+    // azure バックエンドと契約を揃えるためのラッパーで、spawn の実装は
+    // worker.ts の内側に閉じる。
+    const { runOmrWorker } = await import("./worker");
+    await runOmrWorker(job.songId);
+    getTelemetry().record({ name: "omr.queue.enqueued", jobId: job.jobId, songId: job.songId, stage: "local" });
+  }
+}
+
+export class AzureOmrQueue implements OmrQueue {
+  private readonly client: QueueClient;
+
+  constructor() {
+    const config = getConfig();
+    this.client = config.azureEmulator
+      ? QueueServiceClient.fromConnectionString(config.storageConnectionString!).getQueueClient(config.omrQueueName)
+      : new QueueClient(
+          `${config.storageQueueUrl ?? config.storageAccountUrl}/${config.omrQueueName}`,
+          createAzureCredential()
+        );
+  }
+
+  async enqueue(job: OmrJob): Promise<void> {
+    // 解析・参照譜生成と同じ約束: メッセージは識別子だけを載せる。
+    await this.client.sendMessage(JSON.stringify(job));
+    getTelemetry().record({ name: "omr.queue.enqueued", jobId: job.jobId, songId: job.songId, stage: "azure" });
+  }
+}
+
+let omrQueue: OmrQueue | undefined;
+export function getOmrQueue(): OmrQueue {
+  // storageBackend=azure かつ queueBackend=local の組み合わせは実在する
+  // (ストレージだけ Azure、ジョブ投入はローカル spawn で検証する構成)。
+  // この場合でも route の分岐は azure 側に入るため、ここは LocalOmrQueue を
+  // 返す必要がある——「呼ばれない実装」ではない。
+  omrQueue ??= getConfig().queueBackend === "azure" ? new AzureOmrQueue() : new LocalOmrQueue();
+  return omrQueue;
+}
+
+export function resetOmrQueueForTests(): void {
+  omrQueue = undefined;
+}

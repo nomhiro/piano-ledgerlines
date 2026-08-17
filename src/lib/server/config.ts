@@ -37,6 +37,7 @@ export interface AppConfig {
   derivedContainer: string;
   analysisQueueName: string;
   scoreQueueName: string;
+  omrQueueName: string;
   sasLifetimeSeconds: number;
   foundryEnabled: boolean;
   foundryEndpoint?: string;
@@ -138,6 +139,10 @@ export function getConfig(): AppConfig {
     derivedContainer: process.env.AZURE_STORAGE_DERIVED_CONTAINER ?? "derived",
     analysisQueueName: process.env.AZURE_ANALYSIS_QUEUE ?? "analysis-jobs",
     scoreQueueName: process.env.AZURE_SCORE_QUEUE ?? "score-jobs",
+    // 空文字も既定値へ落とす。ワーカー側（cloud_worker.omr_queue_name）と挙動を
+    // 揃えるため——片方だけが "" を受け入れると、Web が名前の無いキューへ投げて
+    // ワーカーは omr-jobs を読む、という食い違いになる。
+    omrQueueName: process.env.AZURE_OMR_QUEUE?.trim() || "omr-jobs",
     sasLifetimeSeconds: Number(process.env.AZURE_SAS_LIFETIME_SECONDS ?? "900"),
     foundryEnabled,
     foundryEndpoint: process.env.AZURE_FOUNDRY_ENDPOINT?.trim(),
