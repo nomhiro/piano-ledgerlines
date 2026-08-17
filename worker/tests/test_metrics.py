@@ -152,5 +152,57 @@ class MetricSemanticsTests(unittest.TestCase):
         return reference, est_notes, alignment
 
 
+class PitchUsesExtraPlayedTest(unittest.TestCase):
+    def _fixture(self):
+        reference = {
+            "notes": [
+                {"index": i, "pitch": 60 + i, "measure": 1,
+                 "startBeat": float(i), "endBeat": float(i) + 1.0, "dynamicLevel": None}
+                for i in range(4)
+            ],
+            "beatsPerMeasure": 4.0,
+            "measures": [{"measure": 1, "tempoExcluded": False}],
+            "capabilities": {"dynamics": False, "pedal": False},
+        }
+        est = [
+            {"index": i, "pitch": 60 + i, "start": float(i), "end": float(i) + 0.5, "velocity": 80}
+            for i in range(4)
+        ] + [
+            {"index": 4, "pitch": 60, "start": 0.01, "end": 0.5, "velocity": 80},
+        ]
+        alignment = {
+            "pairs": [[i, i] for i in range(4)],
+            "missed": [],
+            "unplayed": [],
+            "retakes": [],
+            "extra": [4],
+            "extraNoise": [4],
+            "extraPlayed": [],
+            "extraNoiseByReason": {"duplicate": 1, "harmonic": 0, "spurious": 0, "reverb": 0},
+        }
+        return reference, est, alignment
+
+    def test_noise_classified_extra_does_not_lower_pitch(self):
+        reference, est, alignment = self._fixture()
+        result = compute(reference, est, alignment, [], [])
+        self.assertEqual(result["metrics"]["pitch"], 100.0)
+
+    def test_played_extra_lowers_pitch(self):
+        reference, est, alignment = self._fixture()
+        alignment["extraNoise"] = []
+        alignment["extraPlayed"] = [4]
+        alignment["extraNoiseByReason"] = {"duplicate": 0, "harmonic": 0, "spurious": 0, "reverb": 0}
+        result = compute(reference, est, alignment, [], [])
+        self.assertLess(result["metrics"]["pitch"], 100.0)
+
+    def test_alignment_without_the_split_falls_back_to_extra(self):
+        # 分類キーが無い古い alignment.json でも採点を落とさない。
+        reference, est, alignment = self._fixture()
+        for key in ("extraNoise", "extraPlayed", "extraNoiseByReason"):
+            alignment.pop(key)
+        result = compute(reference, est, alignment, [], [])
+        self.assertLess(result["metrics"]["pitch"], 100.0)
+
+
 if __name__ == "__main__":
     unittest.main()

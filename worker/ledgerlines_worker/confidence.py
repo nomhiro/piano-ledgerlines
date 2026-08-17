@@ -88,6 +88,11 @@ def alignment_evidence(reference: dict, alignment: dict) -> tuple[dict, dict[int
         "matchedNotes": matched_total,
         "missedNotes": len(alignment.get("missed", [])),
         "extraNotes": len(alignment.get("extra", [])),
+        "extraPlayedNotes": len(alignment.get("extraPlayed", alignment.get("extra", []))),
+        "extraNoiseNotes": len(alignment.get("extraNoise", [])),
+        "extraNoiseByReason": alignment.get(
+            "extraNoiseByReason", {"duplicate": 0, "harmonic": 0, "spurious": 0, "reverb": 0}
+        ),
         "retakeNotes": len(alignment.get("retakes", [])),
         "unplayedNotes": len(alignment.get("unplayed", [])),
         "matchRate": round(matched_total / len(ref_notes), 4) if ref_notes else 0.0,

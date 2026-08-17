@@ -98,6 +98,39 @@ python scripts\compute_metrics.py
 python scripts\stability_report.py
 ```
 
+### 段3（extra 分類と τ の検証、Issue #40）
+
+`prepare_dataset.py` / `make_reference.py` は `--midi-only` を付けると音声・librosa 抜きで
+MIDI 由来の等間隔グリッドから参照譜を作る（設計 §9.2）。この経路では rhythm / tempo の
+数値は意味を持たない。フェーズ1（弁別力）はこの経路だけで完結する。
+
+```powershell
+# 脚1（フェーズ1）: MAESTRO MIDI zip だけで実行できる（librosa 不要）
+cd poc
+python scripts\prepare_dataset.py --midi-only
+python scripts\make_reference.py --midi-only
+python scripts\perturb.py
+python scripts\sweep_pitch_tau.py          # 設計 5.1 の4条件を τ×W_EXTRA 18候補で判定
+python scripts\analyze_pitch_sweep_breakdown.py   # 結果文書 §6 の内訳を再現する
+
+# 脚2: 実録音1件の採譜結果に対する extra 分類の実測
+# torch が必要なのでワーカーコンテナ内で実行する（リポジトリルートから、cd poc しない）
+docker compose -f docker-compose.azure-local.yml run --rm --no-deps `
+  -v "${PWD}\poc:/app/poc" -v "${PWD}\.data:/app/.data" -v "${PWD}\out:/app/out" `
+  --entrypoint python worker /app/poc/scripts/measure_real_take.py `
+  --audio /app/.data/audio/<takeId>/original.webm `
+  --reference /app/.data/derived/<songId>/reference.json
+
+# analyze_real_take_extra.py はローカルの Python（torch 不要）でよい。cd poc の状態から:
+python scripts\analyze_real_take_extra.py --reference ..\.data\derived\<songId>\reference.json --midi ..\out\real-take\transcription.mid
+# （結果文書 §9.3 の規則別分析を再現する）
+```
+
+測定の全文は
+[段3 実装計画](../docs/superpowers/plans/2026-08-17-pitch-formula-stage3.md) と
+[段3 測定結果](../docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md)
+にまとまっています。
+
 出力は `out/`、データは `data/` に置かれます。どちらも `.gitignore` 済みです。
 
 ## スクリプトの役割
@@ -115,9 +148,9 @@ python scripts\stability_report.py
 | `analyze_legato.py` | 「レガートが断絶したか」の1ビット判定で代替できないかの検証。不成立 |
 | `make_reference.py` | ground truth MIDI を拍の格子に量子化し、楽譜相当の参照譜を作る |
 | `perturb.py` | 音符欠落・余分な音・タイミング揺れ・テンポ揺れ・強弱圧縮・ペダル除去を MIDI レベルで適用する。**採譜を通さないので指標そのものの挙動を測れる** |
-| `align.py` | イベント列 DTW（Jaccard距離）→ イベント内マッチング → 秒ベース近傍探索。M4.5 で跳躍遷移を追加 |
+| `align.py` | アライメントの検証 CLI。**段3 以降、アルゴリズムの実体は `worker/ledgerlines_worker/align.py` の1つだけ**（設計 §9.1）で、このスクリプトはそれを呼ぶだけ。M4.5 の跳躍遷移や段3 の extra 分類も含め、アルゴリズムの説明は worker 側の docstring を参照すること |
 | `evaluate_alignment.py` | 参照譜→ground truth→採譜結果の連鎖から正解対応を作り、アライメント精度を測る |
-| `compute_metrics.py` | pitch / rhythm / tempo / dynamics / pedal の5指標を算出する |
+| `compute_metrics.py` | 5指標算出の検証 CLI。**アルゴリズムの実体は `worker/ledgerlines_worker/metrics.py`**（設計 §9.1）で、このスクリプトはそれを呼ぶだけ |
 | `summarize_metrics.py` | 録音条件・摂動条件ごとに集計する |
 | `estimate_quality.py` | 音声の音響特徴から採譜精度を予測できるかを調べる。AGC は確実に検出できる |
 
@@ -132,6 +165,15 @@ python scripts\stability_report.py
 | `transcribe_onnx.py` | `PianoTranscription.model` を ONNX セッションに差し替えて採譜する。前後処理はライブラリのものをそのまま使う |
 | `stability_gen.py` | 同じ音源に対し劣化条件の乱数だけを振り直したバリアントを作る。`noise`（雑音の実現値のみ）と `session`（残響・マイク位置・SNR も振る）の2水準 |
 | `stability_report.py` | 指標ごとの σ と最小検出差（MDD = 1.96·√2·σ）を出す |
+
+### 段3（Issue #40）
+
+| スクリプト | 役割 |
+|---|---|
+| `sweep_pitch_tau.py` | `(TAU_PITCH, W_EXTRA)` 18候補を掃引し、設計 5.1 の4条件を判定する。式は再実装せず `metrics.py` のモジュール変数を差し替える（脚1） |
+| `measure_real_take.py` | 実録音1件を採譜し、extra 分類の内訳と τ 候補ごとの pitch を測る。torch が必要なのでワーカーコンテナ内で実行する（脚2） |
+| `analyze_pitch_sweep_breakdown.py` | 脚1の5条件について matched/missed/unplayed/extraPlayed/extraNoise と `extraNoiseByReason` を5曲合計で集計する。結果文書 §6 の再現用 |
+| `analyze_real_take_extra.py` | 脚2の extra に `align.py` の4規則を個別に当て、前段候補数・velocity 比の分布・閾値ごとの発火数を集計する。結果文書 §9.3 の再現用 |
 
 ## 注意
 

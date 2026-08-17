@@ -17,21 +17,35 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# 段3 以降、アライメントの実体は worker 側の1つだけ（設計 9.1）。ここは検証用の
+# CLI で、本番と同じコードを呼ぶ（align.py と同じ載せ方）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "worker"))
 
-import align as A  # noqa: E402
 import evaluate_alignment as EA  # noqa: E402
 import evaluate_replay as ER  # noqa: E402
+# _match_path は private 名だが、跳躍 DTW がテイクをどこで区切るかという
+# 内部挙動そのものを掃引で測るスクリプトなので、worker の実装から直接借用する。
+from ledgerlines_worker.align import (  # noqa: E402
+    EST_GROUP_SEC,
+    REF_GROUP_BEATS,
+    _match_path,
+    cost_matrix,
+    dtw_path,
+    dtw_path_jump,
+    group_events,
+    load_est,
+)
 
 
 def build_result(reference, est_notes, ref_ev, est_ev, est_pos, cost, penalty, window):
-    runs = A.dtw_path_jump(cost, penalty) if penalty is not None else [A.dtw_path(cost)]
+    runs = dtw_path_jump(cost, penalty) if penalty is not None else [dtw_path(cost)]
     used_est: set[int] = set()
     final: dict[int, int] = {}
     retakes: list[tuple[int, int]] = []
     covered: set[int] = set()
     for path in runs:
         covered.update(i for i, _ in path)
-        for r, e in A._match_path(path, ref_ev, est_ev, est_pos, window, used_est):
+        for r, e in _match_path(path, ref_ev, est_ev, est_pos, window, used_est):
             if r in final:
                 retakes.append((r, final[r]))
             final[r] = e
@@ -44,7 +58,7 @@ def build_result(reference, est_notes, ref_ev, est_ev, est_pos, cost, penalty, w
         ],
         "unplayed": [n["index"] for n in ref_notes if n["index"] not in covered_notes],
         "retakes": sorted(retakes),
-        "extra": [],
+        "extra": [],  # 跳躍ペナルティの掃引には extra を使わないので空にしている
         "takes": len(runs),
     }
 
@@ -67,7 +81,7 @@ def main() -> int:
     for ref_path in sorted(args.reference.glob("*.reference.json")):
         name = ref_path.name.split(".")[0]
         reference = json.loads(ref_path.read_text(encoding="utf-8"))
-        ref_ev = A.group_events(reference["notes"], "startBeat", A.REF_GROUP_BEATS)
+        ref_ev = group_events(reference["notes"], "startBeat", REF_GROUP_BEATS)
 
         conditions = [(c, "audio") for c in args.audio_conditions]
         conditions += [
@@ -79,10 +93,10 @@ def main() -> int:
             mid = args.transcribed / f"{name}.{cond}.mid"
             if not mid.exists():
                 continue
-            est_notes = A.load_est(mid)
-            est_ev = A.group_events(est_notes, "start", A.EST_GROUP_SEC)
+            est_notes = load_est(mid)
+            est_ev = group_events(est_notes, "start", EST_GROUP_SEC)
             est_pos = [ev["pos"] for ev in est_ev]
-            cost = A.cost_matrix(ref_ev, est_ev)
+            cost = cost_matrix(ref_ev, est_ev)
 
             if kind == "audio":
                 est_pm = EA.load_notes(mid)

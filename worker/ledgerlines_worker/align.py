@@ -223,6 +223,7 @@ def align(
     window_sec: float = 1.0,
     mode: str = "jump",
     jump_penalty: float = JUMP_PENALTY,
+    est_pedal: list[tuple[float, float]] | None = None,
 ) -> dict:
     ref_notes = reference["notes"]
     ref_ev = group_events(ref_notes, "startBeat", REF_GROUP_BEATS)
@@ -232,6 +233,9 @@ def align(
             "pairs": [],
             "missed": [n["index"] for n in ref_notes],
             "extra": [],
+            "extraNoise": [],
+            "extraPlayed": [],
+            "extraNoiseByReason": {"duplicate": 0, "harmonic": 0, "spurious": 0, "reverb": 0},
             "retakes": [],
             "unplayed": [],
         }
@@ -257,18 +261,23 @@ def align(
     covered_notes = {n["index"] for i in covered for n in ref_ev[i]["members"]}
     matched_est = set(final.values())
     retake_est = {e for _, e in retakes}
+    pairs = sorted(final.items())
+    extra = [
+        n["index"]
+        for n in est_notes
+        if n["index"] not in matched_est and n["index"] not in retake_est
+    ]
+    # extra は監査用に全件を残し、採点は extraPlayed だけを使う（設計 4.2）。
+    classified = classify_extra(est_notes, pairs, extra, est_pedal)
     return {
-        "pairs": sorted(final.items()),
+        "pairs": pairs,
         "missed": [
             n["index"] for n in ref_notes if n["index"] not in final and n["index"] in covered_notes
         ],
         "unplayed": [n["index"] for n in ref_notes if n["index"] not in covered_notes],
         "retakes": sorted(retakes),
-        "extra": [
-            n["index"]
-            for n in est_notes
-            if n["index"] not in matched_est and n["index"] not in retake_est
-        ],
+        "extra": extra,
+        **classified,
         "takes": len(runs),
     }
 
@@ -288,3 +297,111 @@ def load_est(path) -> list[dict]:
         }
         for i, n in enumerate(notes)
     ]
+
+
+# 設計 4.2 の分類閾値。**フェーズ2 で MAESTRO の clean と room の extra 特徴分布から
+# 確定するまでの暫定値である**（設計 4.2 / 8章 / 9.3）。実測根拠はまだ無い。
+NOISE_ONSET_SEC = 0.050          # 二重検出・倍音ゴーストと見なす onset 差
+NOISE_SPURIOUS_DURATION_SEC = 0.060
+NOISE_SPURIOUS_VELOCITY = 40
+NOISE_VELOCITY_RATIO = 0.50      # 元の音符に対する velocity 比
+
+
+def _pedal_span(pedal: list[tuple[float, float]], t: float) -> tuple[float, float] | None:
+    """時刻 t を含むペダル区間を返す。無ければ None。"""
+    for start, end in pedal:
+        if start <= t <= end:
+            return (start, end)
+    return None
+
+
+def _noise_reason(
+    note: dict,
+    matched: list[dict],
+    matched_starts: list[float],
+    pedal: list[tuple[float, float]],
+) -> str | None:
+    """採譜アーティファクトと見なせる理由を返す。演奏由来なら None。
+
+    判定順は設計 4.2 の並び（1 duplicate → 2 harmonic → 3 spurious → 4 reverb）。
+    内訳は監査用なので、複数該当時にどの理由が付くかが設計と一致している必要がある。
+    """
+    lo = bisect.bisect_left(matched_starts, note["start"] - NOISE_ONSET_SEC)
+    hi = bisect.bisect_right(matched_starts, note["start"] + NOISE_ONSET_SEC)
+    near = matched[lo:hi]
+
+    for m in near:
+        if m["pitch"] == note["pitch"]:
+            return "duplicate"
+    for m in near:
+        if (
+            abs(m["pitch"] - note["pitch"]) == 12
+            and note["velocity"] < m["velocity"] * NOISE_VELOCITY_RATIO
+        ):
+            return "harmonic"
+
+    if (
+        (note["end"] - note["start"]) < NOISE_SPURIOUS_DURATION_SEC
+        and note["velocity"] < NOISE_SPURIOUS_VELOCITY
+    ):
+        return "spurious"
+
+    span = _pedal_span(pedal, note["start"])
+    if span is not None:
+        span_start, _ = span
+        for m in matched:
+            if m["start"] >= note["start"]:
+                break
+            if m["start"] < span_start:
+                continue
+            if (
+                m["pitch"] == note["pitch"]
+                and note["velocity"] < m["velocity"] * NOISE_VELOCITY_RATIO
+            ):
+                return "reverb"
+    return None
+
+
+def classify_extra(
+    est_notes: list[dict],
+    pairs: list[tuple[int, int]],
+    extra: list[int],
+    est_pedal: list[tuple[float, float]] | None = None,
+) -> dict:
+    """extra を採譜アーティファクト（extraNoise）と弾き間違い（extraPlayed）に分ける。
+
+    設計 4.2。判定1と2はマッチ済み音符を参照するため、align() が final を確定した
+    後に呼ぶ必要がある。extraPlayed に実際の弾き間違いが残ることが要件で、
+    フェーズ1 の合格条件3（設計 5.1）がそれを検証する。
+    """
+    by_index = {int(n["index"]): n for n in est_notes}
+    matched = sorted(
+        (by_index[int(e)] for _, e in pairs if int(e) in by_index),
+        key=lambda n: n["start"],
+    )
+    matched_starts = [n["start"] for n in matched]
+    pedal = sorted(est_pedal or [])
+
+    noise: list[int] = []
+    played: list[int] = []
+    reasons = {"duplicate": 0, "harmonic": 0, "spurious": 0, "reverb": 0}
+
+    for e_idx in extra:
+        note = by_index.get(int(e_idx))
+        if note is None:
+            # 索引が引けない extra は分類できない。誤って noise に入れると
+            # 弾き間違いを見逃すので played 側に残す。
+            played.append(int(e_idx))
+            continue
+        reason = _noise_reason(note, matched, matched_starts, pedal)
+        if reason is None:
+            played.append(int(e_idx))
+        else:
+            noise.append(int(e_idx))
+            reasons[reason] += 1
+
+    return {
+        "extraNoise": sorted(noise),
+        "extraPlayed": sorted(played),
+        "extraNoiseByReason": reasons,
+    }

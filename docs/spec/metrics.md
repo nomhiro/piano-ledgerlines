@@ -307,8 +307,16 @@ M4 で同一の演奏を4つの録音条件で解析したところ、次の変�
 | 記号 | 定義 |
 |---|---|
 | `N_ref` | 参照音符数 |
-| `n_missed` | `kind = "missed"` の数（抜け音） |
-| `n_extra` | `kind = "extra"` の数（余分な音） |
+| `n_missed` | `alignment["missed"]` の数（DTW が覆う区間内で対応する採譜音符が無かった参照音符） |
+| `n_extra` | `extraPlayed` の数（余分な音のうち、採譜アーティファクトと分類されなかったもの） |
+
+**`n_missed` は `align.py` の `missed` キーだけを計上し、`unplayed`（どの run にも覆われなかった
+参照音符）は計上しない**（`metrics.py:128` が `alignment["missed"]` のみを読む）。`missed` と
+`unplayed` は `align()` が別のキーで返す別集合であり、`unplayed` は `n_missed` にも `n_extra` にも
+現れないため **`e_pitch` に一切寄与しない**。実録音1件の実測
+（`docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md` §9.2）では
+`missedNotes` 89 / `unplayedNotes` 17（参照 1121 音のうち）で、この17件は pitch で減点されて
+いない。
 
 ```
 e_pitch = (w_miss * n_missed + w_extra * n_extra) / N_ref
@@ -319,13 +327,35 @@ e_pitch = (w_miss * n_missed + w_extra * n_extra) / N_ref
 | `w_miss` | 1.0 | 音が抜けるのは明確な誤り |
 | `w_extra` | 0.7 | 隣接鍵の巻き込みは音楽的損失がやや小さい |
 
-**ただし `n_extra` の判定に例外を設ける。**
+**`n_extra` は「マッチしなかった採譜音符（`extra`）」全体ではなく、そこから採譜アーティファクトを
+除いた `extraPlayed` である**（`worker/ledgerlines_worker/align.py` の `classify_extra`、
+`metrics.py:132-135`）。`extra` は次の4規則のいずれかに該当すれば `extraNoise` として除外され、
+残りが `extraPlayed` として `e_pitch` に計上される。判定順は 1→4（`align.py` の
+`_noise_reason`）。
+
+| 規則 | 条件 | 意図 |
+|---|---|---|
+| 1 duplicate | マッチ済み音符と同一ピッチで、onset 差が `NOISE_ONSET_SEC`（0.050秒）以内 | 二重検出 |
+| 2 harmonic | マッチ済み音符と ±12 半音差で、onset 差が `NOISE_ONSET_SEC` 以内かつ velocity がその音符の `NOISE_VELOCITY_RATIO`（0.50）未満 | 倍音ゴースト |
+| 3 spurious | duration が `NOISE_SPURIOUS_DURATION_SEC`（0.060秒）未満**かつ** velocity が `NOISE_SPURIOUS_VELOCITY`（40）未満 | スプリアス |
+| 4 reverb | 採譜側のペダル区間内にあり、同一区間内で先行するマッチ済み音符と同ピッチで、velocity がその音符の `NOISE_VELOCITY_RATIO`（0.50）未満 | ペダル残響 |
+
+**これらの閾値はすべて暫定値であり、フェーズ2（MAESTRO 音声の clean / room 比較による
+extra 特徴分布の実測）で確定する予定である**（設計 §4.2 / §9.3、`align.py` のコメント）。
+実録音1件での実測（段3 Task 8、
+`docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md` §9.3）では、この暫定閾値が
+実際の分類にほとんど寄与していない（`extraNotes` 258 件中 `extraNoiseNotes` は2件、
+`noiseShare` 0.78%。規則1 は採譜器の性質上構造的に発火せず、規則2・4 は velocity 比 0.50 の
+閾値を僅差で外している）。
+
+**`n_extra`（＝ `extraPlayed`）の判定には次の例外を設ける設計だが、現状の実装で効いている
+ものは無い**（下表の3行はいずれも「未実装」または「実装済みだが実測で発火0件」である）。
 
 | 例外 | 扱い |
 |---|---|
-| 装飾音・アルペジオ的な追加（参照音の直前 100ms 以内に、その音の 1〜2 半音下） | `extra` としない（演奏解釈） |
-| ペダル残響による重複検出 | アライメント段で除去済みとする |
-| オクターブ違い（`midi` が ±12 でマッチ可能） | `missed + extra` ではなく `octave-error` として `w = 0.8` の単一エラーにする |
+| 装飾音・アルペジオ的な追加（参照音の直前 100ms 以内に、その音の 1〜2 半音下） | **未実装。実装予定は未定。** `align.py` / `metrics.py` に該当する判定は無く、この種の追加は他の条件に当てはまらない限り通常の `extraPlayed` として計上される |
+| ペダル残響による重複検出 | 上表の規則4（reverb）で除去を試みるが、実録音1件の実測では velocity 比の閾値を僅差（min 0.51、閾値 0.50）で外し続け、**発火 0 件**だった。「除去済みとする」ではなく「除去を試みるが実測では効いていない」 |
+| オクターブ違い（`midi` が ±12 でマッチ可能） | `missed + extra` を `octave-error`（`w = 0.8` の単一エラー）として扱う仕組みは**未実装**。実装にあるのは上表の規則2（倍音ゴーストを `extraNoise` として除外する規則）で、これは倍音ゴーストの除外に限られ、オクターブ違いの弾き間違いを単一エラーにまとめる仕組みではない |
 
 #### スコア
 
@@ -335,10 +365,29 @@ pitch = 100 * exp( -(e_pitch / 0.15)^1 )
 
 `τ = 0.15` は「音符の15%を外すと約37点」に相当する。
 
+**`τ = 0.15` と `w_extra = 0.7` は段3（Issue #40）でも据え置きである。再校正はされていない。**
+
+- 摂動応答による弁別力測定（設計 §5.1、フェーズ1）は τ 6点 × W_EXTRA 3点の18候補**全部**が
+  4条件に合格した。pitch は `100 * exp(-e_pitch/τ)` で τ に対して単調なので、順序だけを問う
+  条件（`drop05 > drop15` など）は τ を一切制約しない。**フェーズ1 では τ を選べない**
+  （測定の記録: `docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md` §5）。
+- 実録音1件の採譜による測定（設計 §9.3、脚2）は、上記の分類がこの録音でほぼ効かないことを
+  示した（`noiseShare` 0.78%。閾値を 0.90 まで緩めても上限は 0.20 で 0.50 に届かない）。
+  分類が pitch に与える寄与は 0.05〜0.09点で実質ゼロであり、この1件から τ を選ぶ根拠には
+  ならない（同文書 §9.3〜§9.4）。
+- したがって **τ は再校正されておらず、`pitch` は判定保留（`withheld` /
+  `PITCH_FORMULA_UNVALIDATED`）のままである**。`overallScore` も `null` のままで、
+  Issue #40 は閉じていない。**教師較正も未のまま**（設計 §4.3 / §8）。次に必要なのは
+  フェーズ2（MAESTRO 音声で clean/room の extra 特徴分布から分類閾値を確定する）である。
+
 #### 補足
 
-`velocity` が極端に低い音（`< 15`）は「触れただけ」とみなし、
-参照音符とマッチしても `matched` ではなく `weak-touch` として `w = 0.5` の部分減点にする。
+`velocity` が極端に低い音（`< 15`）を「触れただけ」とみなし、参照音符とマッチしても
+`matched` ではなく `weak-touch` として `w = 0.5` の部分減点にする、という `weak-touch` 判定は
+**未実装。実装予定は未定。** `worker/ledgerlines_worker/align.py` / `metrics.py` に velocity を
+参照するのは extra 分類（3.1 の4規則）と dynamics の平均計算のみで、マッチ済み音符の velocity
+による重み付けは存在しない。`e_pitch` はマッチ済み音符に対する項を持たないため、velocity の
+高低にかかわらず、マッチした音符は常に満点扱いになる。
 
 ---
 
@@ -859,8 +908,16 @@ confidence(m) = c_transcription(m) * c_alignment(m)
 > `e_pitch = (W_MISS * missed + W_EXTRA * extra) / n_ref` の内訳では、`missed` 268個分
 > （`W_MISS=1.0`）より `extra` 521個分（`W_EXTRA=0.7`）の寄与が大きく、誤差全体の58%を
 > 余分な音が占める。そこに `TAU_PITCH = 0.15` という急な減衰関数がかかるため、
-> 78%の音が対応付けられていても指標は壊滅的な値になる。式の再検証（`TAU_PITCH` /
-> `W_EXTRA` の再校正）は段3のスコープ（→ 末尾「次の計画」）。
+> 78%の音が対応付けられていても指標は壊滅的な値になる。
+>
+> **式の再検証（`TAU_PITCH` / `W_EXTRA` の再校正）は段3で着手したが、確定できなかった。**
+> extra の分類（3.1 の4規則）は実装し、摂動応答（18候補すべてが弁別力の4条件に合格）と
+> 実録音1件の採譜結果の両方で測定したが、`pitch = 100*exp(-e_pitch/τ)` の式自体が τ に対して
+> 単調なため候補を選別できず、実録音では分類がほぼ効かなかった（`noiseShare` 0.78%）。
+> したがって `TAU_PITCH = 0.15` /
+> `W_EXTRA = 0.7` は据え置きのままで、`pitch` は判定保留を継続し、`overallScore` も
+> `null` のままである（Issue #40 は未完了）。測定の記録:
+> `docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md`。
 
 `overallScore` はこの指標別の状態から導かれる（実装値であり別途の閾値ではない）。
 `unavailable`（測定対象が存在しない）な指標は加重平均から除外し、残りの重みで
