@@ -12,6 +12,7 @@ export type ScoreReplacementReason =
   | "pdf_draft"
   | "parse_failed"
   | "parsing"
+  | "converting"
   | "not_uploaded";
 
 // 文言は状態ごとに分ける。「解析できませんでした」を未アップロードの曲に出すのは
@@ -33,6 +34,11 @@ const REASON_COPY: Record<
   parsing: {
     title: "楽譜の解析が完了していません",
     body: "参照譜の生成がまだ終わっていないため、この曲はまだ録音の照合・採点に使えません。しばらく待っても変わらない場合は、MusicXML、MXL、またはMIDIに差し替えてください。",
+    action: "楽譜データを差し替える",
+  },
+  converting: {
+    title: "PDFの変換が完了していません",
+    body: "PDFをMusicXMLへ変換中です。変換は自動で進みますが、待たずに正しいMusicXML、MXL、またはMIDIへ差し替えることもできます。",
     action: "楽譜データを差し替える",
   },
   not_uploaded: {

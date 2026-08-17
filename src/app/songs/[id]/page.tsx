@@ -16,6 +16,10 @@ export const dynamic = "force-dynamic";
 
 /** 正確なデジタル楽譜への差し替え・登録を促すべき状態か。促さない場合は null。 */
 function scoreReplacementReason(song: SongDoc): ScoreReplacementReason | null {
+  // converting_score は scoreSource が既に "pdf" になっているため、下の
+  // pdf_draft 判定より先に見る必要がある。変換が止まった曲に差し替え導線が
+  // 無いと、削除以外に復旧手段が無い（#45）。
+  if (song.status === "converting_score") return "converting";
   if (song.scoreSource === "pdf") return "pdf_draft";
   if (song.status === "awaiting_score") {
     // createSong 直後も awaiting_score なので、状態だけでは「解析が失敗した」と

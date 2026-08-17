@@ -275,7 +275,7 @@ PDF（`application/pdf`、最大10MB）は印刷譜だけを受け付ける。�
 | `awaiting_score` | 楽譜が未アップロード、または参照譜の生成が失敗して戻された状態。後者では `lastScoreError` に理由が入る |
 | `parsing_score` | 楽譜をワーカーが解析中（参照譜 `reference.json` の生成待ち） |
 | `converting_score` | PDFをAudiverisでMusicXML化中 |
-| `reviewing_score` | OMR結果をユーザーが承認するまで待機中のドラフト |
+| `reviewing_score` | OMRが生成した比較用ドラフト。分析には使用しない終端状態で、利用者は正しいMusicXML、MXL、またはMIDIへ差し替えて分析を開始する |
 | `omr_failed` | OMR変換が失敗した終端状態。`omrError` に理由が入る |
 | `ready` | 参照譜生成済み。テイクの録音・解析を開始できる |
 
