@@ -169,6 +169,45 @@ azd provision
 手順は「対象環境で `azd provision`（または `what-if` → `az deployment group create`）
 → `az resource list` でキューの存在を確認 → アプリ/ワーカーのイメージを更新」です。
 
+## 5.2 CDワークフローに必要なリポジトリ設定
+
+`.github/workflows/azure-container-apps-cd.yml` は `main` への push と手動実行で走り、
+イメージを **GitHub Container Registry（GHCR）** に push してから Container Apps の
+イメージを差し替えます。ACRは使いません（`e9370a2` でACR依存をやめました。GHCRは
+公開参照できるため、Container App側にレジストリ資格情報が不要になります）。
+
+GitHub secrets（OIDCでのAzureログインに使用。`azure/login@v2`）:
+
+| 名前 | 用途 |
+|---|---|
+| `AZURE_CLIENT_ID` | フェデレーション資格情報を持つアプリ登録 |
+| `AZURE_TENANT_ID` | テナント |
+| `AZURE_SUBSCRIPTION_ID` | サブスクリプション |
+
+GitHub variables:
+
+| 名前 | 用途 |
+|---|---|
+| `AZURE_RESOURCE_GROUP` | 両アプリのリソースグループ |
+| `AZURE_CONTAINER_APP_NAME` | Web の Container App 名 |
+| `AZURE_ANALYSIS_WORKER_NAME` | 解析ワーカーの Container App 名 |
+
+イメージ名は変数ではなくリポジトリ名から導出します
+（`ghcr.io/<owner>/<repo>` と `ghcr.io/<owner>/<repo>-analysis-worker`）。
+
+### 片方だけ失敗したときの再実行
+
+Web とワーカーは**独立した job** です。以前はひとつの job に直列で並べていたため、
+ワーカーイメージのビルドが配布元の一過性の失敗（HTTP 504）で落ちると、その前に
+成功していた **web のデプロイまで skip** されました（run 32011026498）。現在は
+失敗した job だけを再実行すれば足ります（Actions の画面で "Re-run failed jobs"）。
+
+ワーカーイメージのビルドは採譜モデルのチェックポイント（約164MiB）を配布元から
+取得します。`worker/scripts/fetch_checkpoint.py` が 5xx・429・接続失敗に対して
+最大4回まで待機しながら再試行し、毎回の再試行をビルドログに出します。4xx は
+再試行しません（URLや公開設定が変わった場合は待っても変わらないため、ビルドを
+止めて気づかせます）。
+
 ## 6. 環境昇格とロールバック
 
 devで確認した同一コミットをstg、prodへ昇格します。環境ごとにパラメータだけを

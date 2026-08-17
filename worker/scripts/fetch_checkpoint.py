@@ -16,7 +16,10 @@ from __future__ import annotations
 import hashlib
 import pathlib
 import sys
+import time
+import urllib.error
 import urllib.request
+from typing import Callable
 
 URL = (
     "https://zenodo.org/record/4034264/files/"
@@ -46,6 +49,68 @@ EXPECTED_MD5 = "22b961b77c1878239fec963362097045"
 # 数KB程度なので、余裕を持った下限でも十分に見分けられる。
 MIN_SIZE_BYTES = 150 * 1024 * 1024
 
+# 164MiB を1回の GET で取るので、配布側の一過性の失敗をそのままビルド失敗に
+# しないよう再試行する。実際に CD が Zenodo の HTTP 504 で落ちている
+# （run 32011026498、2026-08-17）。そのときは web イメージのビルドは成功して
+# いたのに、この失敗で web のデプロイまで飛ばされた。
+RETRY_ATTEMPTS = 4
+RETRY_BACKOFF_SEC = (5, 15, 45)
+
+
+def is_retryable(error: BaseException) -> bool:
+    """待って再試行する意味があるか。
+
+    5xx と 429 は配布側の一過性の問題。4xx（URL 変更・公開設定の変更など）は
+    待っても変わらないので、ビルドを止めて気づかせる。
+    """
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code == 429 or 500 <= error.code < 600
+    # URLError は接続リセットや DNS 失敗を含む（HTTPError の親なので後に置く）。
+    if isinstance(error, (urllib.error.URLError, TimeoutError)):
+        return True
+    return False
+
+
+def fetch_with_retry(
+    url: str,
+    dest: pathlib.Path,
+    *,
+    attempts: int = RETRY_ATTEMPTS,
+    backoff: tuple[int, ...] = RETRY_BACKOFF_SEC,
+    retrieve: Callable[[str, pathlib.Path], object] = urllib.request.urlretrieve,
+    verify: Callable[[pathlib.Path], str | None],
+    sleep: Callable[[float], object] = time.sleep,
+    log: Callable[[str], object] = print,
+) -> str | None:
+    """取得と検証を成功するまで繰り返す。成功なら None、諦めたら理由を返す。
+
+    検証失敗も再試行する——途中で切れたダウンロードは例外ではなくサイズ不足や
+    MD5 不一致として現れるため。
+    """
+    for attempt in range(1, attempts + 1):
+        problem: str
+        try:
+            retrieve(url, dest)
+        except Exception as error:  # noqa: BLE001 - 再試行の判断は is_retryable が持つ
+            if not is_retryable(error):
+                return f"download failed: {error!r}"
+            problem = f"download failed: {error!r}"
+        else:
+            verified = verify(dest)
+            if verified is None:
+                return None
+            problem = f"checkpoint download failed verification: {verified}"
+
+        if attempt == attempts:
+            return problem
+        wait = backoff[min(attempt - 1, len(backoff) - 1)]
+        # 再試行したことをビルドログに残す。残さないと「成功した run が実は
+        # 何回も取り直していた」ことに気づけない。
+        log(f"attempt {attempt}/{attempts} failed ({problem}); retrying in {wait}s")
+        sleep(wait)
+
+    return "retry loop exhausted without a verdict"
+
 
 def verify(path: pathlib.Path) -> str | None:
     """検証に通れば None、失敗すれば理由を返す。"""
@@ -74,14 +139,12 @@ def main() -> int:
 
     DEST.parent.mkdir(parents=True, exist_ok=True)
     print(f"downloading checkpoint from {URL}")
-    urllib.request.urlretrieve(URL, DEST)
-
-    print(f"downloaded {DEST.stat().st_size} bytes")
-    problem = verify(DEST)
+    problem = fetch_with_retry(URL, DEST, verify=verify)
     if problem is not None:
-        print(f"checkpoint download failed verification: {problem}", file=sys.stderr)
+        print(problem, file=sys.stderr)
         return 1
 
+    print(f"downloaded {DEST.stat().st_size} bytes")
     print(f"checkpoint MD5 verified at {DEST}")
     return 0
 
