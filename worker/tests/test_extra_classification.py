@@ -12,6 +12,7 @@ from ledgerlines_worker.align import (  # noqa: E402
     NOISE_SPURIOUS_DURATION_SEC,
     NOISE_SPURIOUS_VELOCITY,
     NOISE_VELOCITY_RATIO,
+    align,
     classify_extra,
 )
 
@@ -120,6 +121,49 @@ class ClassifyExtraTest(unittest.TestCase):
         est = [note(0, 60, 1.000)]
         result = classify_extra(est, pairs=[(0, 0), (1, 99)], extra=[])
         self.assertEqual(result["extraPlayed"], [])
+
+
+class AlignIntegrationTest(unittest.TestCase):
+    def _reference(self) -> dict:
+        return {
+            "notes": [
+                {"index": 0, "pitch": 60, "measure": 1, "startBeat": 0.0, "endBeat": 1.0},
+                {"index": 1, "pitch": 62, "measure": 1, "startBeat": 1.0, "endBeat": 2.0},
+            ],
+            "beatsPerMeasure": 4.0,
+        }
+
+    def test_align_splits_extra_into_noise_and_played(self):
+        # 0/1 は参照譜に対応し、2 は二重検出（同一ピッチ・同時）、3 は誤打。
+        est = [
+            note(0, 60, 0.000),
+            note(1, 62, 1.000),
+            note(2, 60, 0.015),
+            note(3, 61, 2.500),
+        ]
+        result = align(self._reference(), est)
+        self.assertEqual(sorted(result["extra"]), [2, 3])
+        self.assertEqual(result["extraNoise"], [2])
+        self.assertEqual(result["extraPlayed"], [3])
+        self.assertEqual(result["extraNoiseByReason"]["duplicate"], 1)
+
+    def test_align_uses_pedal_for_reverb_classification(self):
+        est = [
+            note(0, 60, 0.000, velocity=90),
+            note(1, 62, 1.000),
+            note(2, 60, 0.600, velocity=20),
+        ]
+        without = align(self._reference(), est)
+        with_pedal = align(self._reference(), est, est_pedal=[(0.0, 2.0)])
+        self.assertEqual(without["extraPlayed"], [2])
+        self.assertEqual(with_pedal["extraNoise"], [2])
+        self.assertEqual(with_pedal["extraNoiseByReason"]["reverb"], 1)
+
+    def test_empty_events_still_return_the_new_keys(self):
+        result = align({"notes": [], "beatsPerMeasure": 4.0}, [])
+        self.assertEqual(result["extraNoise"], [])
+        self.assertEqual(result["extraPlayed"], [])
+        self.assertEqual(sum(result["extraNoiseByReason"].values()), 0)
 
 
 if __name__ == "__main__":

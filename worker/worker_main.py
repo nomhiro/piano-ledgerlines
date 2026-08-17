@@ -299,13 +299,15 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
         update({"status": "aligning", "progress": 0.55})
 
         reference = read_json(data_dir / "derived" / song_id / "reference.json")
-        est_notes = align_mod.load_est(midi_path)
-        alignment = align_mod.align(reference, est_notes, mode="jump")
+        # MIDI は1回だけ読む。metrics 側の load_est が (音符, ペダル区間) を返し、
+        # 音符の dict 構造は align 側の load_est と同一。ペダルは extra 分類の
+        # 判定4（残響）に必要なので align() にも渡す（設計 4.2）。
+        est_notes, est_pedal = metrics_mod.load_est(midi_path)
+        alignment = align_mod.align(reference, est_notes, mode="jump", est_pedal=est_pedal)
         write_json(data_dir / "derived-takes" / take_id / "alignment.json", alignment)
 
         update({"status": "scoring", "progress": 0.8})
 
-        est_notes_full, est_pedal = metrics_mod.load_est(midi_path)
         dynamic_range_db = pre.get("dynamicRangeDb")
         # ここで使う DEGRADED_DYNAMIC_RANGE_DB(14.0) は「rhythm のデッドゾーンを広げるか」
         # だけを決める閾値。AGC_DYNAMIC_RANGE_DB(10.0) とは別物で、AGC 判定は
@@ -325,7 +327,7 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
         ref_pedal_beats = ref_pedal_intervals or []
         result = metrics_mod.compute(
             reference,
-            est_notes_full,
+            est_notes,
             alignment,
             est_pedal,
             ref_pedal_beats=ref_pedal_beats,
@@ -336,7 +338,7 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
             result,
             reference,
             alignment,
-            len(est_notes_full),
+            len(est_notes),
             calibration,
             dynamic_range_db=dynamic_range_db,
             pedal_reference_available=bool(ref_pedal_beats),

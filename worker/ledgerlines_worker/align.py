@@ -223,6 +223,7 @@ def align(
     window_sec: float = 1.0,
     mode: str = "jump",
     jump_penalty: float = JUMP_PENALTY,
+    est_pedal: list[tuple[float, float]] | None = None,
 ) -> dict:
     ref_notes = reference["notes"]
     ref_ev = group_events(ref_notes, "startBeat", REF_GROUP_BEATS)
@@ -232,6 +233,9 @@ def align(
             "pairs": [],
             "missed": [n["index"] for n in ref_notes],
             "extra": [],
+            "extraNoise": [],
+            "extraPlayed": [],
+            "extraNoiseByReason": {"duplicate": 0, "harmonic": 0, "spurious": 0, "reverb": 0},
             "retakes": [],
             "unplayed": [],
         }
@@ -257,18 +261,23 @@ def align(
     covered_notes = {n["index"] for i in covered for n in ref_ev[i]["members"]}
     matched_est = set(final.values())
     retake_est = {e for _, e in retakes}
+    pairs = sorted(final.items())
+    extra = [
+        n["index"]
+        for n in est_notes
+        if n["index"] not in matched_est and n["index"] not in retake_est
+    ]
+    # extra は監査用に全件を残し、採点は extraPlayed だけを使う（設計 4.2）。
+    classified = classify_extra(est_notes, pairs, extra, est_pedal)
     return {
-        "pairs": sorted(final.items()),
+        "pairs": pairs,
         "missed": [
             n["index"] for n in ref_notes if n["index"] not in final and n["index"] in covered_notes
         ],
         "unplayed": [n["index"] for n in ref_notes if n["index"] not in covered_notes],
         "retakes": sorted(retakes),
-        "extra": [
-            n["index"]
-            for n in est_notes
-            if n["index"] not in matched_est and n["index"] not in retake_est
-        ],
+        "extra": extra,
+        **classified,
         "takes": len(runs),
     }
 
