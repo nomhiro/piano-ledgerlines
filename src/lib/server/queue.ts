@@ -3,6 +3,7 @@ import { getConfig } from "./config";
 import { getTelemetry } from "./observability";
 import { updateTake } from "./repository";
 import { createAzureCredential } from "./azure-credential";
+import { deterministicAnalysisResult } from "./deterministic-analysis";
 
 export interface AnalysisJob {
   schemaVersion: 1;
@@ -53,16 +54,20 @@ export class AzureAnalysisQueue implements AnalysisQueue {
 
 async function runDeterministicAnalysis(job: AnalysisJob): Promise<void> {
   try {
-    const metrics = { pitch: 82, rhythm: 78, tempo: 80, dynamics: 75, pedal: null };
+    // 書き込む値は deterministic-analysis.ts が持つ。metrics と metricEvaluations が
+    // 食い違うと AIコーチが 400 になるため、対応関係はそこでテストに固定してある（#44）。
+    const { overallScore, metrics, metricEvaluations, metricsNAReason } =
+      deterministicAnalysisResult();
     await updateTake(job.takeId, { status: "transcribing", progress: 0.25 }, job.userId);
     await updateTake(job.takeId, { status: "aligning", progress: 0.55 }, job.userId);
     await updateTake(job.takeId, { status: "scoring", progress: 0.8 }, job.userId);
     await updateTake(job.takeId, {
       status: "completed",
       progress: 1,
-      overallScore: 79,
+      overallScore,
       metrics,
-      metricsNAReason: { pedal: "deterministic local analysis does not measure pedal" },
+      metricEvaluations,
+      metricsNAReason,
       measureScores: [],
       issues: [],
       analysis: { pipelineVersion: "local-azure-deterministic-v1", source: "emulator" },
