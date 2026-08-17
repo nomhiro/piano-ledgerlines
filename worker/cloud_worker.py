@@ -18,8 +18,9 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
+from ledgerlines_worker.omr_job import MAX_ATTEMPTS as OMR_MAX_ATTEMPTS, process_omr_job
 from ledgerlines_worker.score_job import MAX_ATTEMPTS, process_score_job
-from worker_main import run_analyze, run_reference
+from worker_main import run_analyze, run_omr, run_reference
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -43,12 +44,26 @@ def required(name: str) -> str:
 # TS側 (src/lib/server/config.ts の `scoreQueueName`) も同じ既定値を持つ。
 DEFAULT_SCORE_QUEUE = "score-jobs"
 
+# OMR ジョブのキュー名も同じ理由で既定値を持つ。
+DEFAULT_OMR_QUEUE = "omr-jobs"
+
 
 def score_queue_name() -> str:
     # `os.environ.get(name, DEFAULT)` では env が空文字で設定されている場合に ""
     # を返してキュー名が空になる。required() が空文字を欠落として扱うのと
     # 同じ意味論を保つため、strip() してから or で既定値へ落とす。
     return os.environ.get("AZURE_SCORE_QUEUE", "").strip() or DEFAULT_SCORE_QUEUE
+
+
+def omr_queue_name() -> str:
+    """OMR ジョブのキュー名。
+
+    score_queue_name() と同じ理由で required() にしない。CD は
+    `az containerapp update --image` だけを行い Bicep を流さないため、
+    AZURE_OMR_QUEUE を持たないリビジョンが動く。そこで落とすと再起動ループに
+    入り、動いている解析パイプラインまで止まる。
+    """
+    return os.environ.get("AZURE_OMR_QUEUE", "").strip() or DEFAULT_OMR_QUEUE
 
 
 # LEDGERLINES_AZURE_EMULATOR=true が選ぶ分岐は接続文字列・固定キーで認証し、かつ
@@ -108,6 +123,10 @@ class CloudStore:
                 connection_string,
                 score_queue_name(),
             )
+            self.omr_queue = QueueClient.from_connection_string(
+                connection_string,
+                omr_queue_name(),
+            )
             cosmos = CosmosClient(
                 cosmos_endpoint,
                 credential=required("AZURE_COSMOS_KEY"),
@@ -131,6 +150,11 @@ class CloudStore:
             self.score_queue = QueueClient(
                 account_url=self.queue_url,
                 queue_name=score_queue_name(),
+                credential=credential,
+            )
+            self.omr_queue = QueueClient(
+                account_url=self.queue_url,
+                queue_name=omr_queue_name(),
                 credential=credential,
             )
             cosmos = CosmosClient(required("AZURE_COSMOS_ENDPOINT"), credential)
@@ -330,30 +354,66 @@ def _drain_score_queue(store: CloudStore, visibility_seconds: int) -> bool:
     return True
 
 
+def _drain_omr_queue(store: CloudStore, visibility_seconds: int) -> bool:
+    """omr-jobs を1件処理する。処理したら True（呼び出し側が先頭から見直す）。"""
+    messages = list(
+        store.omr_queue.receive_messages(messages_per_page=1, visibility_timeout=visibility_seconds)
+    )
+    if not messages:
+        return False
+    for message in messages:
+        try:
+            job = json.loads(message.content)
+            with tempfile.TemporaryDirectory(prefix=f"ledgerlines-omr-{job.get('songId', 'unknown')}-") as temp:
+                outcome = process_omr_job(
+                    store, job, message.dequeue_count, Path(temp), run_omr
+                )
+            store.omr_queue.delete_message(message)
+            LOGGER.info("OMR job %s outcome=%s song=%s", job.get("jobId"), outcome, job.get("songId"))
+        except Exception:
+            # process_omr_job は再試行に意味がある失敗だけを送出する
+            # （MAX_ATTEMPTS 到達時は自分で終端させて戻る）。
+            LOGGER.exception("OMR job failed; leaving message for retry (max %s attempts)", OMR_MAX_ATTEMPTS)
+    return True
+
+
+def _drain_analysis_queue(store: CloudStore, visibility_seconds: int) -> bool:
+    """analysis-jobs を1件処理する。処理したら True。"""
+    messages = list(store.queue.receive_messages(messages_per_page=1, visibility_timeout=visibility_seconds))
+    if not messages:
+        return False
+    for message in messages:
+        try:
+            job = json.loads(message.content)
+            process_job(store, job)
+            store.queue.delete_message(message)
+            LOGGER.info("Completed analysis job %s", job.get("jobId"))
+        except Exception:
+            LOGGER.exception("Analysis job failed; leaving message for retry")
+    return True
+
+
 def main() -> None:
     store = CloudStore()
     polling_seconds = int(os.environ.get("WORKER_POLLING_SECONDS", "5"))
     visibility_seconds = int(os.environ.get("WORKER_VISIBILITY_TIMEOUT_SECONDS", "1800"))
     score_visibility_seconds = int(os.environ.get("WORKER_SCORE_VISIBILITY_TIMEOUT_SECONDS", "300"))
+    # Audiveris は既定300秒（AUDIVERIS_TIMEOUT_SECONDS）。ダウンロード・
+    # アップロード・プレビュー生成の余裕を足す。
+    omr_visibility_seconds = int(os.environ.get("WORKER_OMR_VISIBILITY_TIMEOUT_SECONDS", "900"))
     LOGGER.info("Analysis worker started")
     while True:
-        # 参照譜生成（数秒）を解析（数分）より先に見る。ただしレプリカは1つで
-        # ループも1本なので、既に走っている解析を追い越すことはできない
-        # （設計 §4.2 の既知の制約）。
+        # 優先順位: 参照譜生成（数秒、利用者が待っている） > 演奏分析（数分、
+        # このアプリの中心価値） > OMR（数分、プレビューの下書き）。
+        # OMR を最後に置くのは、下書きの生成で採点を遅らせないため。レプリカ1・
+        # ループ1本という制約は設計 §4.2 の既知の制約。
         if _drain_score_queue(store, score_visibility_seconds):
             continue
-        messages = list(store.queue.receive_messages(messages_per_page=1, visibility_timeout=visibility_seconds))
-        if not messages:
-            time.sleep(polling_seconds)
+        if _drain_analysis_queue(store, visibility_seconds):
             continue
-        for message in messages:
-            try:
-                job = json.loads(message.content)
-                process_job(store, job)
-                store.queue.delete_message(message)
-                LOGGER.info("Completed analysis job %s", job.get("jobId"))
-            except Exception:
-                LOGGER.exception("Analysis job failed; leaving message for retry")
+        if _drain_omr_queue(store, omr_visibility_seconds):
+            continue
+        time.sleep(polling_seconds)
 
 
 if __name__ == "__main__":
