@@ -940,11 +940,27 @@ Expected: `midi <小節数> <音符数> <ペダル区間数>` で、小節数・
 
 Run: `cd poc && python -c "
 import json,glob
-d=json.load(open(sorted(glob.glob('out/reference/*.reference.json'))[0],encoding='utf-8'))
-beats=[n['startBeat'] for n in d['notes']]
-print('unique startBeat', len(set(beats)), 'of', len(beats))
+from collections import defaultdict
+for f in sorted(glob.glob('out/reference/*.reference.json')):
+    d=json.load(open(f,encoding='utf-8'))
+    by_pitch=defaultdict(list)
+    for n in d['notes']:
+        by_pitch[n['pitch']].append(n)
+    collisions=0; total_pairs=0
+    for pitch, notes in by_pitch.items():
+        notes=sorted(notes, key=lambda n:n['gtStart'])
+        for a,b in zip(notes, notes[1:]):
+            total_pairs+=1
+            if a['startBeat']==b['startBeat']:
+                collisions+=1
+    print(f, 'same-pitch consecutive collisions', collisions, 'of', total_pairs)
 "`
-Expected: `unique startBeat` が音符数の 80% 以上（同一格子への潰れが起きていない目安。和音は同じ拍を共有するので 100% にはならない）
+Expected: 5曲すべてで `collisions 0`（同一ピッチの連続オンセットが同じ格子点に潰れていないこと）
+（**実施結果の注記**: 当初案の「`unique startBeat` が音符数の 80% 以上」は和音（同一拍に
+複数音が乗る）を区別しない目安で、実測では45.6%〜84.4%と基準を下回った。密な和音が多いことが
+原因で、コードの不具合ではないと確認した上で、トリル潰れという本来の関心事を直接検証する
+上記の「同一ピッチの連続オンセット潰れ0件」に検証基準を差し替えた。実測は5曲・5216ペア中0件
+（715+310+1074+1721+1396）、詳細は結果文書 §6 参照）
 
 - [ ] **Step 4: コミット**
 
@@ -970,7 +986,9 @@ git commit -m "feat: derive the poc reference grid from MIDI so phase 1 needs no
 設計 §5.1 の合格条件4項目を判定する。
 
 1. `perturbation=none`（完璧な演奏）で pitch ≥ 90
-2. `drop 5%` と `drop 10%` が分離する（前者が高い）
+2. `drop 5%` と `drop 10%` が分離する（前者が高い）（**実施結果の注記**: `drop10` は存在しない
+   `perturb.py` の条件は `drop05` / `drop15` の2点なので、率の最小（`drop05`）と最大（`drop15`）を
+   比較して判定した。結果文書 §4 参照）
 3. `add 5%`（隣接半音の誤打）で pitch が低下する ← **本フェーズの主眼**。extra 分類が弾き間違いを `extraNoise` に誤分類していないこと
 4. 摂動率を上げるほど pitch が単調非増加（`drop` と `add` それぞれ）
 
@@ -1325,6 +1343,22 @@ git commit -m "test: measure the extra split against a real transcription"
 
 ## Task 9: τ / W_EXTRA の確定と pitch の保留解除
 
+**実施結果の注記（2026-08-17、コントローラ裁定・選択肢A）**: 本 Task の Step 1〜4・7 は
+達成した（分類機構の実装、検証ハーネス、脚1・脚2 の測定、文書化）。**Step 3・5・6、および
+下記「決定規則」に基づく τ / W_EXTRA の再校正と `confidence.py` の pitch 固定保留の削除は
+意図的に未実施のまま残す。** 理由は次の3点。
+
+- 脚1（フェーズ1）は τ の値に関わらず順序を保存する単調変換のため、18候補すべてが4条件に
+  合格し、τ を選ぶ制約にならなかった
+- 脚2（実録音1件）では extra 分類がほぼ効かず（258件中2件、`noiseShare` 0.78%）、
+  Task 9 の決定規則（`noiseShare ≥ 0.50`）を満たす候補が0件だった
+- 現行 τ=0.15 を支持する証拠ではなく、**むしろ変更を要求する証拠が出た**（τ の違いより
+  `extraPlayed` の計上の方が pitch を大きく左右した）
+
+したがって以下の Step 3・5・6 の手順は、**次にこの計画を実行する者への無条件の指示ではない**。
+フェーズ2（設計 §9.5 / 結果文書 §10）で分類閾値を実データの分布から確定した後にのみ、
+この Task を再開してよい。根拠と限界の全文は設計 §9.5 と結果文書 §10 を参照。
+
 **Files:**
 - Modify: `worker/ledgerlines_worker/metrics.py:15-17`
 - Modify: `worker/ledgerlines_worker/confidence.py:153-157`
@@ -1466,13 +1500,17 @@ git commit -m "feat: recalibrate the pitch formula and let overallScore be a num
 
 ## 完了の定義
 
+**実施結果の注記（2026-08-17、コントローラ裁定・選択肢A）**: 1〜4 は達成した。**5・6 は
+意図的に未達のまま Issue #40 を閉じない**（τ の再校正を制約する測定が取れなかったため。
+理由の要点は Task 9 冒頭の注記、根拠の全文は設計 §9.5 / 結果文書 §10）。
+
 1. `extra` が `extraNoise` / `extraPlayed` に分類され、`e_pitch` が後者だけを計上する
 2. 分類ロジックの実体が worker の1箇所だけにあり、`poc/scripts/` はそれを import している（`git grep "def align" -- poc/scripts/` が空）
 3. フェーズ1 が MAESTRO MIDI zip だけで実行でき（librosa 不要）、設計 5.1 の4条件の判定結果が記録されている
 4. 実録音1件に対する分類の内訳と τ 応答が記録されている
-5. `TAU_PITCH` / `W_EXTRA` が決定規則に沿って確定し、根拠と限界が `metrics.md` に書かれている
-6. **`decide("pitch")` が `scored` を返し得るようになり、`overallScore` が数値になる**（Issue #40 の完了条件）
-7. ワーカーの unittest 8ファイルすべてと、`npm run test:unit` / `test:production` / `tsc --noEmit` / `lint` / `build` が通る
+5. ~~`TAU_PITCH` / `W_EXTRA` が決定規則に沿って確定し、根拠と限界が `metrics.md` に書かれている~~ — **意図的に未達（選択肢A）**
+6. ~~**`decide("pitch")` が `scored` を返し得るようになり、`overallScore` が数値になる**（Issue #40 の完了条件）~~ — **意図的に未達。Issue #40 は閉じない**
+7. ワーカーの unittest 9ファイルすべてと、`npm run test:unit` / `test:production` / `tsc --noEmit` / `lint` / `build` が通る
 
 ## この計画に含まれないもの
 
