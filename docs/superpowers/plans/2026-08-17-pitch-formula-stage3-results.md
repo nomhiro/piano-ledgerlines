@@ -290,7 +290,9 @@ NOTE: phase 1 does not exercise transcription, so it cannot show whether the
 **フェーズ1（脚1）は通った。** 設計 §5.1 の4条件が18候補すべてで成立し、とくに主眼の条件3
 について、注入した隣接半音の誤打の 93〜95% が `extraPlayed` に残り `harmonic` 誤分類は
 0 件だった。**extra 分類は注入した誤打の 93〜95% を計上しており、大半を飲み込んでいない。**
-残る 5〜7%（`add05` で 14/265、`add15` で 56/809）は `spurious` として飲まれている（§6）。
+残る 5〜7%（`add05` で 14/265、`add15` で 56/809）は大半が `spurious` として飲まれている
+（§6:223-224 の内訳: add05 は duplicate 2 / spurious 11 / reverb 1、add15 は
+duplicate 4 / spurious 51 / reverb 1）。
 **「全く飲み込んでいない」ではない。**
 
 **ただしフェーズ1 は `TAU_PITCH` / `W_EXTRA` を決めない。** 4条件は τ に依存しない順序比較で

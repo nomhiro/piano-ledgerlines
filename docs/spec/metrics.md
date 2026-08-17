@@ -307,8 +307,16 @@ M4 で同一の演奏を4つの録音条件で解析したところ、次の変�
 | 記号 | 定義 |
 |---|---|
 | `N_ref` | 参照音符数 |
-| `n_missed` | `kind = "missed"` の数（抜け音） |
+| `n_missed` | `alignment["missed"]` の数（DTW が覆う区間内で対応する採譜音符が無かった参照音符） |
 | `n_extra` | `extraPlayed` の数（余分な音のうち、採譜アーティファクトと分類されなかったもの） |
+
+**`n_missed` は `align.py` の `missed` キーだけを計上し、`unplayed`（どの run にも覆われなかった
+参照音符）は計上しない**（`metrics.py:128` が `alignment["missed"]` のみを読む）。`missed` と
+`unplayed` は `align()` が別のキーで返す別集合であり、`unplayed` は `n_missed` にも `n_extra` にも
+現れないため **`e_pitch` に一切寄与しない**。実録音1件の実測
+（`docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md` §9.2）では
+`missedNotes` 89 / `unplayedNotes` 17（参照 1121 音のうち）で、この17件は pitch で減点されて
+いない。
 
 ```
 e_pitch = (w_miss * n_missed + w_extra * n_extra) / N_ref
@@ -340,7 +348,8 @@ extra 特徴分布の実測）で確定する予定である**（設計 §4.2 / 
 `noiseShare` 0.78%。規則1 は採譜器の性質上構造的に発火せず、規則2・4 は velocity 比 0.50 の
 閾値を僅差で外している）。
 
-**ただし `n_extra`（＝ `extraPlayed`）の判定に例外を設ける。**
+**`n_extra`（＝ `extraPlayed`）の判定には次の例外を設ける設計だが、現状の実装で効いている
+ものは無い**（下表の3行はいずれも「未実装」または「実装済みだが実測で発火0件」である）。
 
 | 例外 | 扱い |
 |---|---|
@@ -903,8 +912,9 @@ confidence(m) = c_transcription(m) * c_alignment(m)
 >
 > **式の再検証（`TAU_PITCH` / `W_EXTRA` の再校正）は段3で着手したが、確定できなかった。**
 > extra の分類（3.1 の4規則）は実装し、摂動応答（18候補すべてが弁別力の4条件に合格）と
-> 実録音1件の採譜結果の両方で測定したが、摂動応答は τ に単調なため候補を選別できず、
-> 実録音では分類がほぼ効かなかった（`noiseShare` 0.78%）。したがって `TAU_PITCH = 0.15` /
+> 実録音1件の採譜結果の両方で測定したが、`pitch = 100*exp(-e_pitch/τ)` の式自体が τ に対して
+> 単調なため候補を選別できず、実録音では分類がほぼ効かなかった（`noiseShare` 0.78%）。
+> したがって `TAU_PITCH = 0.15` /
 > `W_EXTRA = 0.7` は据え置きのままで、`pitch` は判定保留を継続し、`overallScore` も
 > `null` のままである（Issue #40 は未完了）。測定の記録:
 > `docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md`。

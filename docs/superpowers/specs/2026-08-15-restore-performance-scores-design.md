@@ -50,8 +50,8 @@ missed 268 / extra 521 / 採譜音符 1495）で分解すると:
 | extra 完全除去 ＋ TAU_PITCH 0.30 | 0.216 | 48.7点 |
 
 余剰音が誤りの 58% を占めるが、**それを全て消しても 24 点にしか戻らない**。`TAU_PITCH = 0.15`
-が支配的である。`metrics.md:330` の「15% 外すと約 37 点」は式の意味の説明であり、測定根拠ではない。
-`metrics.md:922` は τ の較正手段を「講師3名のランク付けとの順位相関」と定め、状態を **未** と
+が支配的である。`metrics.md:366` の「15% 外すと約 37 点」は式の意味の説明であり、測定根拠ではない。
+`metrics.md:1055` は τ の較正手段を「講師3名のランク付けとの順位相関」と定め、状態を **未** と
 記録している。
 
 ### 2.3 UI が null を 0 点として描画している
@@ -73,7 +73,7 @@ missed 268 / extra 521 / 採譜音符 1495）で分解すると:
 ## 3. 非目標
 
 - 教師評価データセットの作成。`poc/evaluation/manifest.json` は全項目 `missing` /
-  `pending_external_annotation` のままとし、`metrics.md:922`（τ の教師較正）は **未** で残す。
+  `pending_external_annotation` のままとし、`metrics.md:1055`（τ の教師較正）は **未** で残す。
 - 教師視点の高度評価（演奏順位、worst-5 一致、意図的表現の判定）の公開。
   `calibration.py` の artifact 経路と `advancedEvaluationPassed` ゲートは現状のまま維持する。
 - `articulation` 指標の追加（M4 で offset が信頼できないと結論済み）。
