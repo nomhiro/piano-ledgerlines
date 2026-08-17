@@ -66,6 +66,7 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_COSMOS_SONGS_CONTAINER', value: songsContainerName }
             { name: 'AZURE_STORAGE_SCORES_CONTAINER', value: scoresContainerName }
             { name: 'WORKER_SCORE_VISIBILITY_TIMEOUT_SECONDS', value: '300' }
+            { name: 'WORKER_OMR_VISIBILITY_TIMEOUT_SECONDS', value: '900' }
             { name: 'AZURE_COSMOS_ENDPOINT', value: cosmosEndpoint }
             { name: 'AZURE_COSMOS_DATABASE', value: cosmosDatabaseName }
             { name: 'AZURE_COSMOS_TAKES_CONTAINER', value: takesContainerName }
