@@ -12,6 +12,12 @@
 を流用し、式は再実装しない。
 
 入力は measure_real_take.py が書き出す採譜済み MIDI（--reuse-midi 相当）と reference.json。
+
+**重複測定（fix round 2）**: 「`NOISE_VELOCITY_RATIO` を 0.90 まで緩めた場合の noiseShare 上限
+0.20」は規則2（harmonic@0.90）・規則3（spurious、AND、閾値と無関係）・規則4（reverb@0.90）の
+3つの該当 extra 集合の単純和（43+2+6=51）で出している。この単純和が union と一致するか
+（＝3集合が互いに素か）を、この録音1件について実測する。式は増やさず、上記の分類ロジックが
+既に持っている判定をそのまま集合として記録するだけ。
 """
 
 from __future__ import annotations
@@ -45,9 +51,15 @@ def analyze(est_notes, extra, pairs, pedal):
     dup_cand = spurious_dur = spurious_vel = spurious_and = 0
     harmonic_ratios: list[float] = []
     reverb_ratios: list[float] = []
+    # fix round 2: 規則2@0.90・規則3(AND)・規則4@0.90 に該当する extra index の集合
+    # （「単純和 = union」かどうかを実測するため、閾値判定と同時に集合として記録する）
+    spurious_fired: set[int] = set()
+    harmonic_090: set[int] = set()
+    reverb_090: set[int] = set()
 
     for e_idx in extra:
-        note = by_index[int(e_idx)]
+        idx = int(e_idx)
+        note = by_index[idx]
         lo = bisect.bisect_left(starts, note["start"] - NOISE_ONSET_SEC)
         hi = bisect.bisect_right(starts, note["start"] + NOISE_ONSET_SEC)
         near = matched[lo:hi]
@@ -57,13 +69,18 @@ def analyze(est_notes, extra, pairs, pedal):
 
         octave = [m for m in near if abs(m["pitch"] - note["pitch"]) == 12]
         if octave:
-            harmonic_ratios.append(min(note["velocity"] / m["velocity"] for m in octave))
+            ratio = min(note["velocity"] / m["velocity"] for m in octave)
+            harmonic_ratios.append(ratio)
+            if ratio < 0.90:
+                harmonic_090.add(idx)
 
         dur_hit = (note["end"] - note["start"]) < NOISE_SPURIOUS_DURATION_SEC
         vel_hit = note["velocity"] < NOISE_SPURIOUS_VELOCITY
         spurious_dur += dur_hit
         spurious_vel += vel_hit
         spurious_and += dur_hit and vel_hit
+        if dur_hit and vel_hit:
+            spurious_fired.add(idx)
 
         span = _pedal_span(pedal, note["start"])
         if span is not None:
@@ -74,7 +91,10 @@ def analyze(est_notes, extra, pairs, pedal):
                 if m["start"] < note["start"] and m["start"] >= span_start and m["pitch"] == note["pitch"]
             ]
             if cands:
-                reverb_ratios.append(min(note["velocity"] / m["velocity"] for m in cands))
+                ratio = min(note["velocity"] / m["velocity"] for m in cands)
+                reverb_ratios.append(ratio)
+                if ratio < 0.90:
+                    reverb_090.add(idx)
 
     def dist(vals):
         if not vals:
@@ -99,6 +119,22 @@ def analyze(est_notes, extra, pairs, pedal):
         starts_p.sort()
         onset_gaps.extend(b - a for a, b in zip(starts_p, starts_p[1:]))
 
+    union_090 = spurious_fired | harmonic_090 | reverb_090
+    simple_sum = len(spurious_fired) + len(harmonic_090) + len(reverb_090)
+    overlap_090 = {
+        "spuriousFired": sorted(spurious_fired),
+        "harmonicAt090": sorted(harmonic_090),
+        "reverbAt090": sorted(reverb_090),
+        "pairwiseIntersections": {
+            "spurious&harmonic": sorted(spurious_fired & harmonic_090),
+            "spurious&reverb": sorted(spurious_fired & reverb_090),
+            "harmonic&reverb": sorted(harmonic_090 & reverb_090),
+        },
+        "simpleSum(spurious+harmonic090+reverb090)": simple_sum,
+        "unionCount": len(union_090),
+        "simpleSumEqualsUnion": simple_sum == len(union_090),
+    }
+
     return {
         "duplicateCandidates": dup_cand,
         "harmonicCandidates": len(harmonic_ratios),
@@ -113,6 +149,7 @@ def analyze(est_notes, extra, pairs, pedal):
         "samePitchOnsetPairs": len(onset_gaps),
         "samePitchOnsetGapMinSec": round(min(onset_gaps), 4) if onset_gaps else None,
         "samePitchOnsetPairsUnder100ms": sum(1 for g in onset_gaps if g < 0.100),
+        "overlapAt090": overlap_090,
     }
 
 
