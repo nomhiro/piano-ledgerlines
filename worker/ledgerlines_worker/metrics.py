@@ -129,7 +129,10 @@ def compute(
         m = ref_notes[r_idx]["measure"]
         missed_by_measure[m] = missed_by_measure.get(m, 0) + 1
     extra_by_measure: dict[int, int] = {}
-    for e_idx in alignment["extra"]:
+    # 採点に計上するのは弾き間違い（extraPlayed）だけで、採譜アーティファクト
+    # （extraNoise）は計上しない（設計 4.2）。分類キーが無い古い alignment.json は
+    # 全件を extra として扱い、採点を落とさずに degrade させる。
+    for e_idx in alignment.get("extraPlayed", alignment["extra"]):
         b = sec_to_beat(beats, secs, est_notes[e_idx]["start"])
         if np.isnan(b):
             continue
