@@ -268,6 +268,17 @@ PDF（`application/pdf`、最大10MB）は印刷譜だけを受け付ける。�
 `GET /songs/{songId}/score/file?format=midi` がブラウザ再生用MIDIを返す。いずれも
 曲の所有者だけが取得できる。
 
+曲の `status` は次のいずれかを取る。
+
+| status | 意味 |
+|---|---|
+| `awaiting_score` | 楽譜が未アップロード、または参照譜の生成が失敗して戻された状態。後者では `lastScoreError` に理由が入る |
+| `parsing_score` | 楽譜をワーカーが解析中（参照譜 `reference.json` の生成待ち） |
+| `converting_score` | PDFをAudiverisでMusicXML化中 |
+| `reviewing_score` | OMR結果をユーザーが承認するまで待機中のドラフト |
+| `omr_failed` | OMR変換が失敗した終端状態。`omrError` に理由が入る |
+| `ready` | 参照譜生成済み。テイクの録音・解析を開始できる |
+
 #### `POST /songs`
 
 ```jsonc
@@ -313,11 +324,24 @@ PDF（`application/pdf`、最大10MB）は印刷譜だけを受け付ける。�
 
 #### `POST /songs/{songId}/score`
 
-アップロード完了をサーバーに通知する。サーバーは MusicXML を解析し、
-繰り返しを展開して `reference.json` を生成する（同期処理、通常 1-3秒）。
+アップロード完了をサーバーに通知する。サーバーは楽譜を保存して曲を `parsing_score`
+に更新し、参照譜（`reference.json`）の生成をワーカーへキュー投入する。**202 を返す**
+（生成は非同期。music21 でのパースと計測なので通常は数秒〜十数秒）。小節数・拍子・調・
+警告は生成完了後に `GET /songs/{songId}` または後述の `GET /songs/{songId}/events`
+（SSE）で取得する。
 
 ```jsonc
-// 200 OK
+// 202 Accepted
+{
+  "songId": "song_01J8...",
+  "status": "parsing_score",
+  "uploadComplete": true
+}
+```
+
+生成が完了すると `GET /songs/{songId}` の曲はこの形になる。
+
+```jsonc
 {
   "songId": "song_01J8...",
   "status": "ready",
@@ -336,7 +360,34 @@ PDF（`application/pdf`、最大10MB）は印刷譜だけを受け付ける。�
 > `warnings` は失敗ではない。**楽譜の解釈で妥協した箇所をユーザーに開示する**。
 > 分析結果への信頼を保つために重要。
 
-パースに失敗した場合は `400 VALIDATION_FAILED` を返し、曲は `awaiting_score` のまま残る。
+パースの失敗は 202 の後に判明する。曲は `awaiting_score` に戻り、`lastScoreError`
+に理由が入る。202 はキュー投入が成功したことしか意味せず、生成の成否は保証しない。
+
+#### `GET /songs/{songId}/events`（SSE）
+
+楽譜解析（参照譜生成）の進捗を購読する。`GET /takes/{takeId}/events`（5.3）と
+同じ形で、サーバーが曲ドキュメントを1秒間隔で読んで流す（真の push ではない）。
+
+```
+event: status
+data: {"status":"parsing_score","measureCount":null,"scoreMeasureCount":null,"keySignature":null,"timeSignature":null,"detectedTempo":null,"warnings":[],"failureMessage":null}
+
+event: status
+data: {"status":"ready","measureCount":96,"scoreMeasureCount":64,"keySignature":"c# minor","timeSignature":"3/4","detectedTempo":132,"warnings":[],"failureMessage":null}
+
+event: done
+data: {"status":"ready"}
+```
+
+`status` イベントの `failureMessage` は、状態が `awaiting_score`（`lastScoreError`）や
+`omr_failed`（`omrError`）に達したときだけ理由文が入る。`error` イベントは接続自体の
+失敗（曲が見つからない `NOT_FOUND`、サーバー内部エラー `INTERNAL`）のときだけ送られ、
+`status` / `done` とは別物である。
+
+`done` を送って終端になる status は `ready` / `awaiting_score` / `reviewing_score` /
+`omr_failed` の4つ。`parsing_score` と `converting_score` は待機を継続し、いずれの
+状態でも変化しないまま接続の時間上限（最大10分）に達した場合も `done` を送って閉じる
+（`converting_score` からの遷移はこの設計の対象外）。
 
 ---
 
