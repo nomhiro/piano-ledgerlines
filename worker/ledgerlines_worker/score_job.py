@@ -12,10 +12,11 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-# 曲が永久に parsing_score のまま残るのを防ぐための試行上限。
-# 想定しているのは Blob / Cosmos 側の一時的な失敗で、これは再試行に意味がある。
+# 曲が永久に parsing_score のまま残るのを防ぐための試行上限。処理中に出た
+# 例外すべてに適用する（Blob / Cosmos の一時的な失敗は再試行に意味があり、
+# 恒久的な失敗やプログラミングエラーはここで打ち切られる）。
 # 楽譜そのものが壊れている場合は run_reference が終了コード1で戻るため、
-# 1回目で awaiting_score に落として終端させる（下の "failed" 分岐）。
+# 例外にはならず1回目で awaiting_score に落として終端する（下の "failed" 分岐）。
 MAX_ATTEMPTS = 3
 
 # 参照譜生成が確定させる曲ドキュメントのフィールド。
@@ -59,7 +60,48 @@ def process_score_job(
     戻り値は呼び出し側がメッセージを削除してよいかの判断に使う。
     "completed" / "failed" / "skipped" / "exhausted" はいずれも削除してよい。
     再配信させたい失敗は例外として送出する（メッセージを残す）。
+
+    試行上限の判定は処理全体をくるむここで行う。設計 §4.3 は
+    「dequeue_count >= 3 で awaiting_score + lastScoreError を書いて削除する」を
+    無条件に規定しており、これを一部の区間（ダウンロード＋パース）に限ると、
+    アップロード / Cosmos 更新の恒久失敗と不正なジョブメッセージが上限に達しても
+    終端せず、曲が永久に parsing_score のまま再配信され続ける。
     """
+    try:
+        return _run_score_job(store, job, work_dir, run_reference)
+    except Exception as exc:  # noqa: BLE001
+        # 一時失敗（Blob / Cosmos）もプログラミングエラー（KeyError,
+        # JSONDecodeError 等）も同じ上限で終端させる。後者は再試行しても
+        # 決定論的に失敗するが、上限があるので無限には回らない。
+        if dequeue_count < MAX_ATTEMPTS:
+            raise
+        song_id = job.get("songId")
+        user_id = job.get("userId")
+        if not song_id or not user_id:
+            # ジョブメッセージが壊れていて曲を特定できない。update_song の宛先が
+            # 無いので lastScoreError は残せないが、メッセージを残しても永久に
+            # 同じ KeyError を繰り返すだけなので "skipped"（呼び出し側が削除して
+            # よい戻り値）を返す。曲側は enqueue 元が特定できない以上ここでは
+            # 触れられず、ユーザーは曲詳細からの差し替えで新しいジョブを積める。
+            return "skipped"
+        # ここで update_song 自身が投げた場合は送出させる（メッセージを残す）。
+        # 終端状態を書けないままメッセージを消すと、曲が parsing_score のまま
+        # 誰も再開できない状態で孤立する。残せば Cosmos 回復後に終端できる。
+        store.update_song(
+            song_id,
+            user_id,
+            {"status": "awaiting_score", "lastScoreError": str(exc)},
+        )
+        return "exhausted"
+
+
+def _run_score_job(
+    store: ScoreStore,
+    job: dict[str, Any],
+    work_dir: Path,
+    run_reference: Callable[[Path, str], int],
+) -> str:
+    """試行上限を意識しない本体。失敗は素通しして呼び出し側に判断させる。"""
     song_id = job["songId"]
     user_id = job["userId"]
     song = store.get_song(song_id, user_id)
@@ -70,21 +112,11 @@ def process_score_job(
         # 完了済みの曲を作り直して warnings を書き戻すのは害にしかならない。
         return "skipped"
 
-    try:
-        score_path = _materialize_inputs(store, song, work_dir)
-        code = run_reference(work_dir, song_id)
-        parsed = json.loads(
-            (work_dir / "songs" / f"{song_id}.json").read_text(encoding="utf-8")
-        )
-    except Exception as exc:  # noqa: BLE001
-        if dequeue_count >= MAX_ATTEMPTS:
-            store.update_song(
-                song_id,
-                user_id,
-                {"status": "awaiting_score", "lastScoreError": str(exc)},
-            )
-            return "exhausted"
-        raise
+    score_path = _materialize_inputs(store, song, work_dir)
+    code = run_reference(work_dir, song_id)
+    parsed = json.loads(
+        (work_dir / "songs" / f"{song_id}.json").read_text(encoding="utf-8")
+    )
 
     if code != 0 or parsed.get("status") != "ready":
         store.update_song(

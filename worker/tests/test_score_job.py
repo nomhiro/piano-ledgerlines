@@ -59,6 +59,17 @@ class ExplodingStore(FakeStore):
         raise RuntimeError("blob download failed")
 
 
+class UploadFailingStore(FakeStore):
+    """パースまでは成功し、成果物のアップロードだけが恒久的に失敗するストア。
+
+    コンテナ名の設定ミスや権限変更で起きる形。ダウンロード＋パース区間だけを
+    見ていると上限に達しても終端しない（設計 §4.3 違反）ため、この経路を守る。
+    """
+
+    def upload_reference(self, song: dict, source: Path) -> None:
+        raise RuntimeError("blob upload failed")
+
+
 def _job(song_id: str = "song_abc", user_id: str = "usr_1") -> dict:
     return {
         "schemaVersion": 1,
@@ -159,6 +170,40 @@ class ProcessScoreJobTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             outcome = process_score_job(store, _job(), 1, Path(temp), _run_reference_ok)
         self.assertEqual(outcome, "skipped")
+
+    def test_upload_failure_terminates_when_attempts_are_exhausted(self):
+        store = UploadFailingStore(_song())
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(RuntimeError):
+                process_score_job(store, _job(), 1, Path(temp), _run_reference_ok)
+            # 上限前は曲を終端させない（再配信で回復する余地を残す）。
+            self.assertEqual(store.song["status"], "parsing_score")
+
+            outcome = process_score_job(
+                store, _job(), MAX_ATTEMPTS, Path(temp), _run_reference_ok
+            )
+
+        self.assertEqual(outcome, "exhausted")
+        self.assertEqual(store.song["status"], "awaiting_score")
+        self.assertIn("blob upload failed", store.song["lastScoreError"])
+
+    def test_malformed_job_message_is_not_redelivered_forever(self):
+        store = FakeStore(_song())
+        malformed = _job()
+        del malformed["songId"]
+
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(KeyError):
+                process_score_job(store, malformed, 1, Path(temp), _run_reference_ok)
+
+            # 曲を特定できないので lastScoreError は残せないが、上限に達したら
+            # メッセージは削除させる（"skipped"）。無限再配信を止めるのが目的。
+            outcome = process_score_job(
+                store, malformed, MAX_ATTEMPTS, Path(temp), _run_reference_ok
+            )
+
+        self.assertEqual(outcome, "skipped")
+        self.assertEqual(store.patches, [])
 
 
 if __name__ == "__main__":
