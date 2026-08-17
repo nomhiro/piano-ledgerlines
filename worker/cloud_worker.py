@@ -313,7 +313,11 @@ def _drain_score_queue(store: CloudStore, visibility_seconds: int) -> bool:
     for message in messages:
         try:
             job = json.loads(message.content)
-            with tempfile.TemporaryDirectory(prefix=f"ledgerlines-score-{job['songId']}-") as temp:
+            # prefix はデバッグ用のラベルに過ぎないので、songId が欠けていても
+            # ここで落とさない。落とすと process_score_job に制御が届かず、
+            # 試行上限（id が取れないときに "skipped" を返して削除させる分岐）に
+            # 一度も到達できないまま無限に再配信される。
+            with tempfile.TemporaryDirectory(prefix=f"ledgerlines-score-{job.get('songId', 'unknown')}-") as temp:
                 outcome = process_score_job(
                     store, job, message.dequeue_count, Path(temp), run_reference
                 )
