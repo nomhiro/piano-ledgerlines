@@ -264,9 +264,11 @@ PDF（`application/pdf`、最大10MB）は印刷譜だけを受け付ける。�
 参照譜生成・演奏分析には使用しない。利用者は正しいMusicXML、MXL、またはMIDIを
 差し替えてから分析を開始する。
 
-承認済みの曲では、`GET /songs/{songId}/score/file` が描画用のMusicXMLを、
-`GET /songs/{songId}/score/file?format=midi` がブラウザ再生用MIDIを返す。いずれも
-曲の所有者だけが取得できる。
+`GET /songs/{songId}/score/file` は、参照譜生成済みの曲（`ready`）と、
+PDFから変換した比較用ドラフトを閲覧中の曲（`reviewing_score` かつ
+`scoreSource`が`pdf`）で描画用のMusicXMLを返す。
+`GET /songs/{songId}/score/file?format=midi` は同じ条件でブラウザ再生用MIDIを
+返す。いずれも曲の所有者だけが取得できる。
 
 曲の `status` は次のいずれかを取る。
 
