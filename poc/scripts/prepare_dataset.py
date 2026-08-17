@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -82,13 +83,67 @@ def slice_midi(pm: pretty_midi.PrettyMIDI, start: float, end: float) -> pretty_m
     return out
 
 
+def prepare_midi_only(midi_zip: Path, out: Path, seconds: float, limit: int) -> int:
+    """MIDI zip だけからデータセットを組む（設計 9.2、フェーズ1 用）。
+
+    音声を使わないので窓の開始は MIDI の最初の音符に合わせる。
+    採譜を経由しない検証（perturb.py）にはこれで十分で、
+    録音条件不変性（フェーズ2）にはこの経路は使えない。
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    zf = zipfile.ZipFile(midi_zip)
+    midi_names = sorted(n for n in zf.namelist() if n.lower().endswith((".midi", ".mid")))
+    dataset = []
+    for idx, zip_key in enumerate(midi_names[:limit]):
+        with zf.open(zip_key) as fh:
+            pm = pretty_midi.PrettyMIDI(io.BytesIO(fh.read()))
+        notes = sorted(pm.instruments[0].notes, key=lambda n: n.start)
+        if not notes:
+            print(f"[skip] no notes: {zip_key}")
+            continue
+        start = float(notes[0].start)
+        end = min(start + seconds, pm.get_end_time())
+        sliced = slice_midi(pm, start, end)
+        name = f"piece{idx:02d}"
+        sliced.write(str(out / f"{name}.ref.mid"))
+        pedal_cc = [c for c in sliced.instruments[0].control_changes if c.number == 64]
+        info = {
+            "name": name,
+            "source_midi": zip_key,
+            "window": [round(start, 3), round(end, 3)],
+            "duration": round(end - start, 3),
+            "note_count": len(sliced.instruments[0].notes),
+            "pedal_cc_count": len(pedal_cc),
+            "audio": False,
+        }
+        dataset.append(info)
+        print(
+            f"{name}: {info['duration']:.1f}s notes={info['note_count']} "
+            f"pedalCC={info['pedal_cc_count']} src={Path(zip_key).name}"
+        )
+    (out / "dataset.json").write_text(
+        json.dumps(dataset, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"\nprepared {len(dataset)} piece(s) in {out} (midi only)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", type=Path, default=Path("data"))
     ap.add_argument("--midi-zip", type=Path, default=Path("data/maestro-midi.zip"))
     ap.add_argument("--out", type=Path, default=Path("data/dataset"))
     ap.add_argument("--seconds", type=float, default=90.0)
+    ap.add_argument(
+        "--midi-only",
+        action="store_true",
+        help="音声を使わず MIDI zip だけでデータセットを組む（フェーズ1 用。設計 9.2）",
+    )
+    ap.add_argument("--limit", type=int, default=5, help="--midi-only で切り出す曲数")
     args = ap.parse_args()
+
+    if args.midi_only:
+        return prepare_midi_only(args.midi_zip, args.out, args.seconds, args.limit)
 
     raw_dirs = sorted(p for p in args.data.iterdir() if p.is_dir() and p.name.startswith("raw"))
     entries = load_manifest_entries(raw_dirs)
