@@ -155,6 +155,28 @@ Container App が認証なしでイメージを pull して Queue を監視し�
 印刷譜のみを対象とし、手書き譜・撮影画像は受け付けません。Audiverisは
 AGPL-3.0のため、本番配備前にライセンス上の義務を確認してください。
 
+### 同梱している Audiveris のライセンス
+
+ワーカーイメージには **Audiveris 5.10.2** を同梱しています（`/opt/audiveris`、
+`AUDIVERIS_COMMAND` が既定で `/opt/audiveris/bin/Audiveris` を指します）。
+
+- ライセンス: **AGPL-3.0**
+- 入手元: https://github.com/Audiveris/audiveris/releases/tag/5.10.2
+  （Linux向け配布物は `.zip` ではなく Ubuntu 用の `.deb` のみが公開されているため、
+  `worker/scripts/fetch_audiveris.py` はビルド時にこの `.deb` を取得し、
+  `dpkg-deb -x` でファイルツリーだけを `/opt/audiveris` に展開しています。
+  同梱の `.deb` は自前の JRE と Tesseract（JNI経由）を含むため、
+  JDKやtesseract-ocrを別途 apt で入れる必要はありません）
+- ソース: https://github.com/Audiveris/audiveris （上記タグ）
+- ライセンス本文: https://github.com/Audiveris/audiveris/blob/5.10.2/LICENSE
+  （配布用の `.deb` 自体には Audiveris 本体のライセンス本文は同梱されていません。
+  同梱JREの各モジュールのライセンスは `/opt/audiveris/lib/runtime/legal/` 配下に
+  あります）
+
+このイメージは GHCR で公開され、ネットワーク越しにサービスを提供します。
+**AGPL-3.0 §13（ネットワーク利用時のソース提供義務）が適用されるかの判断と対応は、
+配備の責任者が行ってください。**
+
 ## 実装済みAPIエンドポイント（M5縦串, 2026-07時点）
 
 api.md の36エンドポイントのうち、曲登録→録音→解析→結果表示の縦串に
