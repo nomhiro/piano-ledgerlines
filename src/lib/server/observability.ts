@@ -6,6 +6,7 @@ export interface TelemetryEvent {
   correlationId?: string;
   jobId?: string;
   takeId?: string;
+  songId?: string;
   stage?: string;
   durationMs?: number;
   failureCode?: string;

@@ -57,7 +57,11 @@ export default async function SongsPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-semibold">{song.title}</h3>
                   <Badge color="#8b5cf6">
-                    {song.status === "ready" ? "練習中" : "楽譜待ち"}
+                    {song.status === "ready"
+                      ? "練習中"
+                      : song.status === "parsing_score"
+                        ? "楽譜を解析中"
+                        : "楽譜待ち"}
                   </Badge>
                 </div>
                 <div className="mt-1 text-xs text-[var(--muted)]">
@@ -84,7 +88,9 @@ export default async function SongsPage() {
                       ? TAKE_STATUS_LABELS[latest.status] ?? latest.status
                       : song.status === "ready"
                         ? "録音できます"
-                        : "楽譜を登録してください"}
+                        : song.status === "parsing_score"
+                          ? "解析の完了を待っています"
+                          : "楽譜を登録してください"}
                   </div>
                 </div>
                 {latest?.overallScore !== null && latest?.overallScore !== undefined ? (

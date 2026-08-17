@@ -118,6 +118,7 @@ function loadAzdOutputs(): void {
     AZURE_STORAGE_QUEUE_URL: ["AZURE_STORAGE_QUEUE_URL", "storageQueueUrl", "storageQueueEndpoint", "queueEndpoint"],
     AZURE_STORAGE_ACCOUNT_NAME: ["AZURE_STORAGE_ACCOUNT_NAME", "storageAccountName"],
     AZURE_ANALYSIS_QUEUE: ["AZURE_ANALYSIS_QUEUE", "analysisQueueName"],
+    AZURE_SCORE_QUEUE: ["AZURE_SCORE_QUEUE", "scoreQueueName"],
     AZURE_FOUNDRY_ENDPOINT: ["AZURE_FOUNDRY_ENDPOINT", "foundryEndpoint"],
     AZURE_FOUNDRY_DEPLOYMENT: ["AZURE_FOUNDRY_DEPLOYMENT", "foundryDeploymentName", "deploymentName"],
     AZURE_FOUNDRY_MODEL: ["AZURE_FOUNDRY_MODEL", "foundryModelName", "modelName"],
@@ -223,6 +224,11 @@ async function checkDataPlane(config: ReturnType<typeof getConfig>, credential: 
   const queueUrl = `${config.storageQueueUrl!.replace(/\/$/, "")}/${config.analysisQueueName}`;
   await check(`Storage Queue ${config.analysisQueueName}`, async () => {
     await new QueueClient(queueUrl, credential).getProperties();
+  });
+
+  const scoreQueueUrl = `${config.storageQueueUrl!.replace(/\/$/, "")}/${config.scoreQueueName}`;
+  await check(`Storage Queue ${config.scoreQueueName}`, async () => {
+    await new QueueClient(scoreQueueUrl, credential).getProperties();
   });
 
   if (config.foundryEnabled) {

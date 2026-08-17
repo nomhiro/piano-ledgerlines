@@ -36,6 +36,7 @@ export interface AppConfig {
   audioContainer: string;
   derivedContainer: string;
   analysisQueueName: string;
+  scoreQueueName: string;
   sasLifetimeSeconds: number;
   foundryEnabled: boolean;
   foundryEndpoint?: string;
@@ -136,6 +137,7 @@ export function getConfig(): AppConfig {
     audioContainer: process.env.AZURE_STORAGE_AUDIO_CONTAINER ?? "audio",
     derivedContainer: process.env.AZURE_STORAGE_DERIVED_CONTAINER ?? "derived",
     analysisQueueName: process.env.AZURE_ANALYSIS_QUEUE ?? "analysis-jobs",
+    scoreQueueName: process.env.AZURE_SCORE_QUEUE ?? "score-jobs",
     sasLifetimeSeconds: Number(process.env.AZURE_SAS_LIFETIME_SECONDS ?? "900"),
     foundryEnabled,
     foundryEndpoint: process.env.AZURE_FOUNDRY_ENDPOINT?.trim(),

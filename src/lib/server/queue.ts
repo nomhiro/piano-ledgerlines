@@ -87,3 +87,56 @@ export function getAnalysisQueue(): AnalysisQueue {
 export function resetAnalysisQueueForTests(): void {
   queue = undefined;
 }
+
+export interface ScoreJob {
+  schemaVersion: 1;
+  jobId: string;
+  songId: string;
+  userId: string;
+  attempt: number;
+  correlationId: string;
+}
+
+export interface ScoreQueue {
+  enqueue(job: ScoreJob): Promise<void>;
+}
+
+export class LocalScoreQueue implements ScoreQueue {
+  async enqueue(job: ScoreJob): Promise<void> {
+    // プロセス spawn の実装はローカルバックエンドの内側に閉じる。API から見た
+    // 契約（202 を返して進捗は別途購読する）は本番と同一にする。
+    const { runReferenceWorkerAsync } = await import("./worker");
+    runReferenceWorkerAsync(job.songId);
+    getTelemetry().record({ name: "score.queue.enqueued", jobId: job.jobId, songId: job.songId, stage: "local" });
+  }
+}
+
+export class AzureScoreQueue implements ScoreQueue {
+  private readonly client: QueueClient;
+
+  constructor() {
+    const config = getConfig();
+    this.client = config.azureEmulator
+      ? QueueServiceClient.fromConnectionString(config.storageConnectionString!).getQueueClient(config.scoreQueueName)
+      : new QueueClient(
+          `${config.storageQueueUrl ?? config.storageAccountUrl}/${config.scoreQueueName}`,
+          createAzureCredential()
+        );
+  }
+
+  async enqueue(job: ScoreJob): Promise<void> {
+    // 解析ジョブと同じ約束: メッセージは識別子だけを載せる。
+    await this.client.sendMessage(JSON.stringify(job));
+    getTelemetry().record({ name: "score.queue.enqueued", jobId: job.jobId, songId: job.songId, stage: "azure" });
+  }
+}
+
+let scoreQueue: ScoreQueue | undefined;
+export function getScoreQueue(): ScoreQueue {
+  scoreQueue ??= getConfig().queueBackend === "azure" ? new AzureScoreQueue() : new LocalScoreQueue();
+  return scoreQueue;
+}
+
+export function resetScoreQueueForTests(): void {
+  scoreQueue = undefined;
+}

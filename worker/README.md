@@ -42,7 +42,7 @@ C:\llpoc\venv\Scripts\python.exe worker_main.py --data-dir ..\.data --song-id <s
 ローカルデータルート（既定 `<repo>/.data`、`LEDGERLINES_DATA_DIR` で上書き可）を指定する。
 テイクの `status` フィールドを段階的に更新しながら、完了時に
 `overallScore` / `metrics` / `measureScores` / `issues` を書き込む。
-Next.js側は `src/lib/server/worker.ts` の `runReferenceWorker` / `runAnalyzeWorkerAsync`
+Next.js側は `src/lib/server/worker.ts` の `runReferenceWorkerAsync` / `runAnalyzeWorkerAsync`
 から `child_process.spawn` でこのCLIを起動する（Pythonインタプリタは
 `WORKER_PYTHON` 環境変数、未設定時は `C:\llpoc\venv\Scripts\python.exe` の存在確認、
 それも無ければ `python` にフォールバック）。
@@ -79,16 +79,15 @@ Azurite/Cosmosエミュレータを本番同様のBlob/Queue/Cosmosとして使�
   新しいイメージをビルドしても既存コンテナは古いイメージのまま動き続ける（実際にこれで
   「ビルドは通っているのにコンテナ内にチェックポイントが無い」状態に遭遇した）。
   `docker compose -f docker-compose.azure-local.yml up -d --force-recreate worker` を使うこと。
-- **既知の限界: このプロファイルでは曲を `ready` にできない。** `POST /api/songs/{songId}/score`
-  は `storageBackend === "azure"` のとき 202 を返すだけで、参照譜を生成するのは
-  `LEDGERLINES_AZURE_CLOUD === "true"` の場合のみ（`processCloudScoreLocally`）。この2つのフラグは
-  `config.ts` で排他なので、エミュレータプロファイルでは楽譜をアップロードしても
-  `awaiting_score` で止まる。参照譜生成は music21 が必要でワーカーコンテナには入っているため、
-  当面はワーカーコンテナ内で `python worker_main.py --mode reference` を実行して
-  `reference.json` を `derived` コンテナへ置く、という手動回避で先へ進める。
-  なお参照譜生成が `runReferenceWorker`（ローカルPythonのspawn）に依存している以上、
-  同じ制約は**デプロイ済みWebアプリにも当てはまる**（ルートイメージの `Dockerfile` は
-  `node:20-alpine` でPythonを含まない）。恒久対応は楽譜処理もQueue経由でワーカーに寄せること。
+- **参照譜の生成は `score-jobs` キュー経由でワーカーが行う（Issue #33）。**
+  `POST /api/songs/{songId}/score`（`.../score/complete` も同様）は保存後に曲を
+  `parsing_score` にしてジョブを `score-jobs` へキュー投入し、202 を返すだけで
+  ストレージバックエンドによる分岐は無い。参照譜の生成（music21 でのパース・
+  `reference.json` の書き出し）は `cloud_worker.py`（下記「Azure 本番ワーカー」節）が
+  Queue から受け取って実行し、完了すると曲を `ready` に更新する。ローカルPythonの
+  spawn（`worker_main.py --mode reference` の手動実行）には依存しないため、
+  デプロイ済みWebアプリ（ルートイメージの `Dockerfile` は `node:20-alpine` でPython
+  を含まない）でもこの経路だけで完結する。
 - Queueは `npm run azure:init` が作成する。それより前にワーカーが起動すると
   `QueueNotFound` で落ちるが、`restart: on-failure` によりQueue作成後に自力で復帰する
   （`cloud_worker.py` の `main()` はトップレベル例外を再試行しないため、プロセス単位で
@@ -108,6 +107,14 @@ npm run azure:start                               # 疎通確認・Cosmosコン�
 (`analysis-jobs`) を消費する本番イメージです。`cloud_worker.py` は Queue のジョブを
 受け取り、Blob の音声・参照譜を一時領域へ同期して既存の解析パイプラインを実行し、
 進捗・結果を Cosmos DB、採譜結果を Blob Storage へ保存します。
+
+`cloud_worker.py` の `main()` はこの `analysis-jobs` に加えて、参照譜生成の
+`score-jobs`（`AppConfig.scoreQueueName`）も同じループ・同じプロセスで消費します
+（`_drain_score_queue`）。ループの各巡回で `score-jobs` を先に見て、あれば1件処理して
+巡回をやり直す ── 参照譜生成（数秒）は解析（数分）より短いため、待たせている登録画面の
+体感を優先する。ただしレプリカは1つで待受ループも1本なので、**既に実行中の解析ジョブを
+追い越して参照譜ジョブを割り込ませることはできない**（設計 §4.2 の既知の制約。待ち時間が
+問題になれば専用 Container App へ分離する、設計 §3.2）。
 
 採譜モデルのチェックポイント（`note_F1=0.9677_pedal_F1=0.9186.pth`、約164MiB）は
 `Dockerfile` 内の独立した `RUN` レイヤーでビルド時に Zenodo から取得し、
@@ -158,7 +165,7 @@ practice-plan/me/dashboard 等、後続フェーズ）。
 | 実装済み | api.md対応 | 差分 |
 |---|---|---|
 | `POST /api/songs` | 5.1 `POST /songs` | SAS発行なし。曲メタデータのみ作成し`awaiting_score`で返す |
-| `POST /api/songs/{songId}/score` | 5.1 `POST /songs/{songId}/score` | SAS PUTの代わりに直接multipartでファイルを受け取り、保存後に本エンドポイント内で同期的にreferenceワーカーを実行 |
+| `POST /api/songs/{songId}/score` | 5.1 `POST /songs/{songId}/score` | SAS PUTの代わりに直接multipartでファイルを受け取り、保存後にキューへ投入し202を返す（参照譜はワーカーが生成） |
 | `GET /api/songs`, `GET /api/songs/{songId}` | #4, #6 | ほぼ同一 |
 | `POST /api/songs/{songId}/takes` | 5.2 `POST /songs/{songId}/takes` | SAS発行なし。テイクメタデータのみ作成（`status: uploading`） |
 | `POST /api/takes/{takeId}/audio-upload` | （api.mdのSAS PUTに相当、パス名は簡略化） | 直接multipartで音声を受け取り`status: uploaded`に更新 |

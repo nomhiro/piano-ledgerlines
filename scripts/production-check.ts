@@ -337,6 +337,42 @@ test("production rejects emulator and local cloud profiles", () => {
   resetConfigForTests();
 });
 
+test("score queue name defaults to score-jobs and is overridable", () => {
+  const previous = process.env.AZURE_SCORE_QUEUE;
+  delete process.env.AZURE_SCORE_QUEUE;
+  resetConfigForTests();
+  assert.equal(getConfig().scoreQueueName, "score-jobs");
+
+  process.env.AZURE_SCORE_QUEUE = "score-jobs-test";
+  resetConfigForTests();
+  assert.equal(getConfig().scoreQueueName, "score-jobs-test");
+
+  if (previous === undefined) delete process.env.AZURE_SCORE_QUEUE;
+  else process.env.AZURE_SCORE_QUEUE = previous;
+  resetConfigForTests();
+});
+
+test("score queue backend follows LEDGERLINES_QUEUE and getScoreQueue memoizes its instance", async () => {
+  const { getScoreQueue, resetScoreQueueForTests, LocalScoreQueue } =
+    await import("../src/lib/server/queue");
+  const previous = process.env.LEDGERLINES_QUEUE;
+
+  process.env.LEDGERLINES_QUEUE = "local";
+  resetConfigForTests();
+  resetScoreQueueForTests();
+  assert.ok(getScoreQueue() instanceof LocalScoreQueue);
+
+  const first = getScoreQueue();
+  assert.equal(getScoreQueue(), first, "getScoreQueue must memoize its instance");
+  resetScoreQueueForTests();
+  assert.notEqual(getScoreQueue(), first, "resetScoreQueueForTests must clear the memo");
+
+  if (previous === undefined) delete process.env.LEDGERLINES_QUEUE;
+  else process.env.LEDGERLINES_QUEUE = previous;
+  resetConfigForTests();
+  resetScoreQueueForTests();
+});
+
 test("Google Easy Auth principal resolves to the storage user id", async () => {
   const env = process.env as Record<string, string | undefined>;
   const previous = {

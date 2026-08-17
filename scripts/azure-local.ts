@@ -112,8 +112,11 @@ async function init(): Promise<void> {
     process.env.AZURE_STORAGE_AUDIO_CONTAINER ?? "audio",
     process.env.AZURE_STORAGE_DERIVED_CONTAINER ?? "derived",
   ]) await blobs.getContainerClient(name).createIfNotExists();
-  await QueueServiceClient.fromConnectionString(connection)
-    .getQueueClient(process.env.AZURE_ANALYSIS_QUEUE ?? "analysis-jobs").createIfNotExists();
+  const queueService = QueueServiceClient.fromConnectionString(connection);
+  for (const name of [
+    process.env.AZURE_ANALYSIS_QUEUE ?? "analysis-jobs",
+    process.env.AZURE_SCORE_QUEUE ?? "score-jobs",
+  ]) await queueService.getQueueClient(name).createIfNotExists();
   console.log("Cosmos database/containers and Azurite containers/queue are ready.");
 }
 

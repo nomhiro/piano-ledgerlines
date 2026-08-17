@@ -20,11 +20,14 @@ param storageAccountUrl string
 param storageQueueUrl string
 param storageAccountName string
 param analysisQueueName string
+param scoreQueueName string
+param songsContainerName string
 param cosmosEndpoint string
 param cosmosDatabaseName string
 param audioContainerName string
 param derivedContainerName string
 param takesContainerName string
+param scoresContainerName string
 param tags object = {}
 
 resource managedEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' existing = {
@@ -57,6 +60,10 @@ resource worker 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_STORAGE_QUEUE_URL', value: storageQueueUrl }
             { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storageAccountName }
             { name: 'AZURE_ANALYSIS_QUEUE', value: analysisQueueName }
+            { name: 'AZURE_SCORE_QUEUE', value: scoreQueueName }
+            { name: 'AZURE_COSMOS_SONGS_CONTAINER', value: songsContainerName }
+            { name: 'AZURE_STORAGE_SCORES_CONTAINER', value: scoresContainerName }
+            { name: 'WORKER_SCORE_VISIBILITY_TIMEOUT_SECONDS', value: '300' }
             { name: 'AZURE_COSMOS_ENDPOINT', value: cosmosEndpoint }
             { name: 'AZURE_COSMOS_DATABASE', value: cosmosDatabaseName }
             { name: 'AZURE_COSMOS_TAKES_CONTAINER', value: takesContainerName }

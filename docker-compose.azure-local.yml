@@ -71,14 +71,17 @@ services:
       AZURE_COSMOS_KEY: C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==
       AZURE_COSMOS_DATABASE: ledgerlines
       AZURE_COSMOS_TAKES_CONTAINER: takes
+      AZURE_COSMOS_SONGS_CONTAINER: songs
       # Azuriteの唯一の既知アカウントキー（.env.local.azure.exampleのコメント参照）。
       AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;"
       AZURE_STORAGE_SCORES_CONTAINER: scores
       AZURE_STORAGE_AUDIO_CONTAINER: audio
       AZURE_STORAGE_DERIVED_CONTAINER: derived
       AZURE_ANALYSIS_QUEUE: analysis-jobs
+      AZURE_SCORE_QUEUE: score-jobs
       WORKER_POLLING_SECONDS: "5"
       WORKER_VISIBILITY_TIMEOUT_SECONDS: "1800"
+      WORKER_SCORE_VISIBILITY_TIMEOUT_SECONDS: "300"
 
 volumes:
   azurite-data:

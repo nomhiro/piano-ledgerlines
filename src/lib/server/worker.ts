@@ -63,14 +63,6 @@ export async function runOmrWorker(songId: string, dataDir = DATA_DIR): Promise<
 }
 
 /**
- * S1: MusicXML → reference.json 生成。api.md 5.1 の `POST /songs/{songId}/score`
- * は同期処理(通常1-3秒)と規定されているため、呼び出し元でawaitしてよい。
- */
-export async function runReferenceWorker(songId: string, dataDir = DATA_DIR): Promise<RunResult> {
-  return runWorker(["--mode", "reference", "--data-dir", dataDir, "--song-id", songId]);
-}
-
-/**
  * S0〜S5の解析パイプライン。api.md 5.2/5.3 のとおり非同期(202 + ポーリング/SSE)
  * が前提のため、呼び出し元はawaitせず投げっぱなしにする（fire-and-forget）。
  * take.json の status をワーカーが直接更新するので、進捗はファイルをポーリングして把握する。
@@ -78,5 +70,17 @@ export async function runReferenceWorker(songId: string, dataDir = DATA_DIR): Pr
 export function runAnalyzeWorkerAsync(takeId: string): void {
   runWorker(["--mode", "analyze", "--data-dir", DATA_DIR, "--take-id", takeId]).catch((err) => {
     console.error(`[worker] analyze failed to start for take ${takeId}:`, err);
+  });
+}
+
+/**
+ * 参照譜生成をローカルバックエンドで非同期に走らせる。api.md 5.1 は 202 +
+ * 進捗の購読が前提になったため（Issue #33）、呼び出し元はawaitしない。
+ * songs/{songId}.json の status をワーカーが直接更新するので、進捗は
+ * ファイルをポーリングして把握する（analyze と同じ考え方）。
+ */
+export function runReferenceWorkerAsync(songId: string): void {
+  runWorker(["--mode", "reference", "--data-dir", DATA_DIR, "--song-id", songId]).catch((err) => {
+    console.error(`[worker] reference failed to start for song ${songId}:`, err);
   });
 }
