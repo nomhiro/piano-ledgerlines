@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import { notFound } from "next/navigation";
 import Link from "next/link";
 import { songs, getSong, getTakesForSong, findStagnantMeasures } from "@/lib/mock/data";
 import ProgressView from "@/components/ProgressView";
@@ -8,6 +7,8 @@ import { toHistorySong, sortByRecordedAtDesc } from "@/lib/real-history";
 import TakeEvaluationPanel from "@/components/TakeEvaluationPanel";
 import { PageHeader } from "@/components/ui";
 import SongSelector from "@/components/SongSelector";
+import EmptyTakesNotice from "@/components/EmptyTakesNotice";
+import { guidanceForNoSongs, guidanceForNoTakes } from "@/components/empty-takes";
 
 export default async function ProgressPage({
   searchParams,
@@ -21,12 +22,34 @@ export default async function ProgressPage({
     ? songId
     : selectableSongs[0]?.id;
 
-  if (!selectedId) notFound();
+  // 「データがまだ無い」は 404 ではなく空状態として扱う（#34）。404 にすると
+  // 曲セレクタごと画面が消えるため、録音済みの別の曲へ移動する手段まで失われる。
+  if (!selectedId) {
+    return (
+      <div>
+        <PageHeader title="テイク一覧" description="録音したテイクを新しい順に一覧表示します。" />
+        <EmptyTakesNotice guidance={guidanceForNoSongs()} />
+      </div>
+    );
+  }
 
   const realSong = selectedId.startsWith("song_") ? await getRealSong(selectedId) : null;
   if (realSong) {
     const takes = await listTakesBySong(selectedId);
-    if (takes.length === 0) notFound();
+    if (takes.length === 0) {
+      return (
+        <div>
+          <PageHeader
+            title={`テイク一覧 — ${realSong.title}`}
+            description="録音したテイクを新しい順に一覧表示し、それぞれの採点結果を示します。"
+          />
+          <Suspense>
+            <SongSelector songs={selectableSongs} current={selectedId} />
+          </Suspense>
+          <EmptyTakesNotice guidance={guidanceForNoTakes(realSong)} />
+        </div>
+      );
+    }
 
     const ordered = sortByRecordedAtDesc(takes);
     // docs/operations/calibration-runbook.md は「異なる解析方式の結果の差を改善量として
@@ -82,7 +105,22 @@ export default async function ProgressPage({
 
   const song = getSong(selectedId) ?? songs[0];
   const takes = getTakesForSong(song.id);
-  if (takes.length === 0) notFound();
+  // 現在のデモ曲は4曲すべてテイクを持つのでここには来ないが、テイクの無いデモ曲を
+  // 足した日に 404 が復活しないよう、実データ経路と同じ空状態に揃えておく。
+  if (takes.length === 0) {
+    return (
+      <div>
+        <PageHeader
+          title={`テイク一覧 — ${song.title}`}
+          description="録音したテイクを新しい順に一覧表示し、それぞれの採点結果を示します。"
+        />
+        <Suspense>
+          <SongSelector songs={selectableSongs} current={song.id} />
+        </Suspense>
+        <EmptyTakesNotice guidance={guidanceForNoTakes({ id: song.id })} />
+      </div>
+    );
+  }
 
   return (
     <Suspense>
