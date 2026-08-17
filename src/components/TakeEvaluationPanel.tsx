@@ -1,6 +1,7 @@
 import { AlertTriangle } from "lucide-react";
 import { Badge, Card, CardTitle, MetricBar, ScoreRing } from "@/components/ui";
 import { METRIC_LABELS, type MetricKey } from "@/lib/mock/types";
+import { issuesForSelection, performanceMeasuresFor } from "@/components/measure-selection";
 
 const SEVERITY_COLOR: Record<string, string> = {
   high: "#ef4444",
@@ -36,7 +37,9 @@ export interface TakeEvaluationData {
   metricEvaluations: Partial<Record<string, { status: string; confidence: number | null; reason: string | null }>>;
   metricsNAReason: Partial<Record<string, string>>;
   evaluation: { status: string; reason: string | null } | null;
-  measureScores: { measure: number; score: number | null }[];
+  // `scoreMeasure` は楽譜ビューのクリックと突き合わせるために使う（#36）。
+  // 持たない古いデータは演奏順にフォールバックする（measure-selection.ts）。
+  measureScores: { measure: number; scoreMeasure?: number; score: number | null }[];
   issues: {
     id: string;
     severity: "high" | "medium" | "low";
@@ -48,7 +51,26 @@ export interface TakeEvaluationData {
   }[];
 }
 
-export default function TakeEvaluationPanel({ take }: { take: TakeEvaluationData }) {
+export default function TakeEvaluationPanel({
+  take,
+  selectedMeasure = null,
+  onClearSelection,
+}: {
+  take: TakeEvaluationData;
+  /**
+   * 楽譜ビューで選ばれた**楽譜上の**小節番号（#36）。渡されなければ絞り込まない。
+   * フックを持たない作りを保つため状態は呼び出し側が持つ——このパネルは
+   * `/progress` と `/share` の Server Component からも使われている。
+   */
+  selectedMeasure?: number | null;
+  onClearSelection?: () => void;
+}) {
+  const visibleIssues = issuesForSelection(take.issues, take.measureScores, selectedMeasure);
+  // 選択された楽譜小節に写る演奏順小節。数字グリッドの強調に使う。
+  const selectedPerformanceMeasures = new Set(
+    performanceMeasuresFor(take.measureScores, selectedMeasure),
+  );
+
   return (
     <div className="space-y-5">
       <div className="grid gap-5 lg:grid-cols-3">
@@ -121,9 +143,32 @@ export default function TakeEvaluationPanel({ take }: { take: TakeEvaluationData
 
       {take.issues.length > 0 && (
         <Card>
-          <CardTitle title="指摘事項" />
+          <CardTitle
+            title="指摘事項"
+            subtitle={
+              selectedMeasure !== null
+                ? `楽譜の ${selectedMeasure} 小節で絞り込み中（${visibleIssues.length} / ${take.issues.length} 件）`
+                : undefined
+            }
+            right={
+              selectedMeasure !== null && onClearSelection ? (
+                <button
+                  type="button"
+                  onClick={onClearSelection}
+                  className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] text-[var(--muted)] hover:border-violet-500/50 hover:text-violet-200"
+                >
+                  絞り込みを解除
+                </button>
+              ) : undefined
+            }
+          />
           <div className="space-y-2 p-5">
-            {take.issues.map((issue) => (
+            {selectedMeasure !== null && visibleIssues.length === 0 && (
+              <p className="text-xs text-[var(--muted)]">
+                楽譜の {selectedMeasure} 小節に対応する指摘事項はありません。
+              </p>
+            )}
+            {visibleIssues.map((issue) => (
               <div
                 key={issue.id}
                 className="flex items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] p-3 text-xs"
@@ -160,7 +205,11 @@ export default function TakeEvaluationPanel({ take }: { take: TakeEvaluationData
                     ? `小節 ${m.measure}: 判定保留`
                     : `小節 ${m.measure}: ${m.score}`
                 }
-                className="flex h-8 w-8 items-center justify-center rounded text-[10px] tabular-nums"
+                className={`flex h-8 w-8 items-center justify-center rounded text-[10px] tabular-nums ${
+                  // 楽譜ビューで選ばれた小節。繰り返し展開時は同じ楽譜小節に写る
+                  // 複数の演奏順小節が同時に光る。
+                  selectedPerformanceMeasures.has(m.measure) ? "ring-2 ring-violet-500" : ""
+                }`}
                 style={{
                   backgroundColor:
                     m.score === null

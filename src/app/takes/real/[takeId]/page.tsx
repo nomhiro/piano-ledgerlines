@@ -30,6 +30,11 @@ export default function RealTakeResultPage() {
     song: ApiSong;
     takes: ApiTakeSummary[];
   } | null>(null);
+  // 楽譜ビューで選ばれた**楽譜上の**小節番号（#36）。楽譜ビューと指摘事項の
+  // 両方が同じ選択を見る必要があるため、状態はここが持つ。どのテイクの選択かを
+  // 一緒に覚えておき、テイクを移動したら描画時に無効化する（effect で消すと
+  // `react-hooks/set-state-in-effect` に触れる）。
+  const [selection, setSelection] = useState<{ takeId: string; measure: number } | null>(null);
   // 再解析リクエストの送信中フラグ。true の間はボタンを無効化し、
   // ダブルクリックで submit が2回飛ぶのを防ぐ（このコンポーネント内だけの
   // 一時状態なので、TakeEvaluationPanel 側には持たせない）。
@@ -76,6 +81,20 @@ export default function RealTakeResultPage() {
     };
   }, [songId]);
 
+  // 同じ小節をもう一度押したら選択を外す（絞り込みを解除する操作が
+  // クリックだけで完結する）。
+  const handleSelectMeasure = useCallback(
+    (measure: number) => {
+      setSelection((current) =>
+        current?.takeId === takeId && current.measure === measure
+          ? null
+          : { takeId, measure },
+      );
+    },
+    [takeId],
+  );
+  const clearSelection = useCallback(() => setSelection(null), []);
+
   const handleRetry = useCallback(async () => {
     if (retrying) return;
     setRetrying(true);
@@ -97,6 +116,9 @@ export default function RealTakeResultPage() {
   // それを描くと URL と中身が食い違った分析結果を一瞬見せることになるので、
   // 読み込み中として扱う（effect で state を消すのではなく描画時に判定する）。
   const loaded = take && take.id === takeId ? take : null;
+  // 別のテイクの選択は引き継がない（前のテイクの小節で絞り込まれた指摘事項を
+  // 新しいテイクのものとして見せることになる）。
+  const selectedMeasure = selection?.takeId === takeId ? selection.measure : null;
 
   if (error) {
     return (
@@ -160,9 +182,18 @@ export default function RealTakeResultPage() {
         </Link>
       </nav>
 
-      <TakeEvaluationPanel take={loaded} />
+      <TakeEvaluationPanel
+        take={loaded}
+        selectedMeasure={selectedMeasure}
+        onClearSelection={clearSelection}
+      />
 
-      <TakeScoreCard songId={loaded.songId} measureScores={loaded.measureScores} />
+      <TakeScoreCard
+        songId={loaded.songId}
+        measureScores={loaded.measureScores}
+        selectedMeasure={selectedMeasure}
+        onSelectMeasure={handleSelectMeasure}
+      />
 
       {loaded.status === "failed" && (
         <div className="mt-5 flex items-center gap-3">
