@@ -116,6 +116,7 @@ async function init(): Promise<void> {
   for (const name of [
     process.env.AZURE_ANALYSIS_QUEUE ?? "analysis-jobs",
     process.env.AZURE_SCORE_QUEUE ?? "score-jobs",
+    process.env.AZURE_OMR_QUEUE?.trim() || "omr-jobs",
   ]) await queueService.getQueueClient(name).createIfNotExists();
   console.log("Cosmos database/containers and Azurite containers/queue are ready.");
 }

@@ -12,10 +12,14 @@ const FALLBACK_FAILURE_MESSAGE =
  * - `parsing_score` はワーカーが生成中なので待つ
  * - `awaiting_score` は「生成が失敗して戻された」状態。登録直後は必ず
  *   `parsing_score` から始まるため、待機中にこれを見たら失敗である
- * - `reviewing_score` はユーザーがドラフトを承認するまで進まない
- * - `converting_score`（PDF の OMR 実行中）は本設計のスコープ外で、azure
- *   バックエンドでは誰も処理しない。失敗と見せないため終端にはせず、
- *   ストリームの時間上限に任せる
+ * - `reviewing_score` は比較用ドラフトの終端状態。承認して先へ進む経路は無く
+ *   （`score/approve` は常に ValidationError を返す）、先へ進むには正しい
+ *   MusicXML / MXL / MIDI へ差し替える必要がある
+ * - `converting_score`（PDF の OMR 実行中）は非終端。azure バックエンドでは
+ *   `omr-jobs` をワーカーが処理し、通常は `omr_failed` / `reviewing_score` へ
+ *   遷移して SSE も追従する（#45。実測では失敗経路が約31秒、成功経路が約108秒。
+ *   4ページ1件の実測であり全ケースの保証ではない）。ワーカーが処理できない
+ *   場合の保険として、終端にはせずストリームの時間上限に任せる
  */
 export function isScoreProgressTerminal(status: SongDocStatus): boolean {
   return (

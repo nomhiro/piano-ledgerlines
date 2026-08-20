@@ -5,7 +5,7 @@ import { errorResponse, jsonResponse, NotFoundError, ValidationError } from "@/l
 import { assertResourceId } from "@/lib/server/validation";
 import { getSong, saveScoreFile, updateSong } from "@/lib/server/repository";
 import { runOmrWorker } from "@/lib/server/worker";
-import { getScoreQueue } from "@/lib/server/queue";
+import { getOmrQueue, getScoreQueue } from "@/lib/server/queue";
 
 export const runtime = "nodejs";
 
@@ -50,6 +50,16 @@ export async function POST(
         omrError: undefined,
       }, user.id);
       if (getConfig().storageBackend === "azure") {
+        // 以前はここで 202 を返して終わっており、OMR を実行する主体がいなかった
+        // ため曲が converting_score のまま留まっていた（#45）。
+        await getOmrQueue().enqueue({
+          schemaVersion: 1,
+          jobId: randomUUID(),
+          songId,
+          userId: user.id,
+          attempt: 1,
+          correlationId: request.headers.get("x-request-id") ?? randomUUID(),
+        });
         return jsonResponse({ songId, status: "converting_score", uploadComplete: true }, request, { status: 202 });
       }
       const result = await runOmrWorker(songId);

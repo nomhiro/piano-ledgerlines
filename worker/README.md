@@ -148,12 +148,43 @@ Container App が認証なしでイメージを pull して Queue を監視し�
 `--mode omr --data-dir <dir> --song-id <songId>` で実行します。ワーカーは
 `scores/<songId>/score.pdf` をAudiverisで変換し、生成したMusicXMLを
 `scores/<songId>/score.musicxml` に保存します。変換後の曲は
-`reviewing_score` になり、ユーザーが承認するまで参照譜の生成・演奏分析は行いません。
+`reviewing_score` になりますが、これは比較用ドラフトの終端状態です。
+`POST /api/songs/{songId}/score/approve` は何も承認せず、PDFから自動変換した曲に
+対しては常に「PDFからの自動変換は分析には使用できません。正しいMusicXML、MXL、
+またはMIDIへ差し替えてください。」という `ValidationError` を返すだけで、
+クライアントからも呼び出していません。`reviewing_score` から先に進む道は、
+正しいMusicXML・MXL・MIDIへの差し替えのみです。
 
-`AUDIVERIS_COMMAND`（既定: `audiveris`）にAudiveris 5.10.2の実行コマンドを、
+`AUDIVERIS_COMMAND` にAudiveris 5.10.2の実行コマンドを設定できます。既定値は
+呼び出し元によって異なります: `worker_main.py` 自体の既定は `audiveris`
+（PATH上に無ければ実行時エラーになるため、ローカルで直接実行する場合は要設定）ですが、
+このワーカーイメージ内では `worker/Dockerfile` が `ENV AUDIVERIS_COMMAND=/opt/audiveris/bin/Audiveris`
+を設定しているため、未設定でもイメージ内に同梱した実体を指します。
 `AUDIVERIS_TIMEOUT_SECONDS`（既定: `300`）にタイムアウト秒数を設定できます。
 印刷譜のみを対象とし、手書き譜・撮影画像は受け付けません。Audiverisは
 AGPL-3.0のため、本番配備前にライセンス上の義務を確認してください。
+
+### 同梱している Audiveris のライセンス
+
+ワーカーイメージには **Audiveris 5.10.2** を同梱しています（`/opt/audiveris`、
+`AUDIVERIS_COMMAND` が既定で `/opt/audiveris/bin/Audiveris` を指します）。
+
+- ライセンス: **AGPL-3.0**
+- 入手元: https://github.com/Audiveris/audiveris/releases/tag/5.10.2
+  （Linux向け配布物は `.zip` ではなく Ubuntu 用の `.deb` のみが公開されているため、
+  `worker/scripts/fetch_audiveris.py` はビルド時にこの `.deb` を取得し、
+  `dpkg-deb -x` でファイルツリーだけを `/opt/audiveris` に展開しています。
+  同梱の `.deb` は自前の JRE と Tesseract（JNI経由）を含むため、
+  JDKやtesseract-ocrを別途 apt で入れる必要はありません）
+- ソース: https://github.com/Audiveris/audiveris （上記タグ）
+- ライセンス本文: https://github.com/Audiveris/audiveris/blob/5.10.2/LICENSE
+  （配布用の `.deb` 自体には Audiveris 本体のライセンス本文は同梱されていません。
+  同梱JREの各モジュールのライセンスは `/opt/audiveris/lib/runtime/legal/` 配下に
+  あります）
+
+このイメージは GHCR で公開され、ネットワーク越しにサービスを提供します。
+**AGPL-3.0 §13（ネットワーク利用時のソース提供義務）が適用されるかの判断と対応は、
+配備の責任者が行ってください。**
 
 ## 実装済みAPIエンドポイント（M5縦串, 2026-07時点）
 

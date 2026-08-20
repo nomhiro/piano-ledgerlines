@@ -166,6 +166,16 @@ azd provision
   ワーカーは未設定時に既定値 `score-jobs` へフォールバックするため起動はしますが、
   キュー名を宣言で管理するため、IaCを流して明示設定へ揃えます。
 
+PDFのOMRのキュー化（Issue #45）は次を要求します。適用順序を誤ると障害になります。
+
+- `omr-jobs` Storage Queue（`infra/main.bicep` の `queues`）
+  未作成のままWebをデプロイすると、PDFアップロードのenqueueが `QueueNotFound` で
+  失敗し、`POST /api/songs/{songId}/score` がPDFに対して500を返します。
+  MusicXML / MXL / MIDI の登録は影響を受けません。
+- ワーカーの `AZURE_OMR_QUEUE` 環境変数（`infra/modules/analysis-worker.bicep`）
+  ワーカーは未設定時に既定値 `omr-jobs` へフォールバックするため起動はしますが、
+  キュー名を宣言で管理するため、IaCを流して明示設定へ揃えます。
+
 手順は「対象環境で `azd provision`（または `what-if` → `az deployment group create`）
 → `az resource list` でキューの存在を確認 → アプリ/ワーカーのイメージを更新」です。
 
