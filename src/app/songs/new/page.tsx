@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { FileMusic, Upload, Check, Loader2, ScanLine, Info, AlertTriangle } from "lucide-react";
 import { Badge, Card, CardTitle, PageHeader } from "@/components/ui";
-import { createSong, uploadScore } from "@/lib/api/client";
+import { createSong, updateSong, uploadScore } from "@/lib/api/client";
+import { shouldCreateSong, uploadTitle } from "./upload-target";
 import { useSongScoreProgress } from "@/lib/hooks/useSongScoreProgress";
 
 type Phase = "idle" | "uploading" | "converting" | "reviewing" | "parsing" | "done" | "error";
@@ -21,6 +22,10 @@ export default function NewSongPage() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [fileName, setFileName] = useState("");
   const [title, setTitle] = useState("");
+  // 曲名の入力欄をユーザーが触ったか。触っていなければ入力欄の値は前回の投入で
+  // ファイル名から導出したものなので、再投入では今回のファイル名で導出し直す
+  // （#48。そうしないと最初の壊れたファイル名が曲名として残る）。
+  const [titleTouched, setTitleTouched] = useState(false);
   const [composer, setComposer] = useState("");
   const [goalDate, setGoalDate] = useState("");
   const [targetTempo, setTargetTempo] = useState(120);
@@ -57,22 +62,36 @@ export default function NewSongPage() {
     setPhase("uploading");
     setErrorMessage("");
 
-    const derivedTitle = title || file.name.replace(/\.(musicxml|xml|mxl|mid|midi|pdf)$/i, "");
+    const derivedTitle = uploadTitle({ titleTouched, title, fileName: file.name });
     setTitle(derivedTitle);
 
     try {
-      // 1. 曲メタデータを作成 (api.md 5.1 `POST /songs` 相当)
-      const created = await createSong({
-        title: derivedTitle,
-        composer: composer || "不明",
-        targetTempo,
-      });
-      setSongId(created.songId);
+      // 1. 曲メタデータを作成 (api.md 5.1 `POST /songs` 相当)。
+      //    失敗後の再投入では作り直さず、既にある曲へ送る。作り直すと楽譜の無い
+      //    曲がライブラリに溜まる（#48）。再投入のときは、その間にフォームで
+      //    直した内容（曲名・作曲者・テンポ）を曲へ反映する。
+      let targetSongId: string;
+      if (shouldCreateSong(songId)) {
+        const created = await createSong({
+          title: derivedTitle,
+          composer: composer || "不明",
+          targetTempo,
+        });
+        targetSongId = created.songId;
+        setSongId(created.songId);
+      } else {
+        targetSongId = songId!;
+        await updateSong(targetSongId, {
+          title: derivedTitle,
+          composer: composer || "不明",
+          targetTempo,
+        });
+      }
 
       // 2. 楽譜ファイルを送信する。最大10MBのマルチパートなので、送っている間は
       //    まだ「受け付けられた」とは言えない。phase は uploading のまま維持し、
       //    202 が返ってから parsing に進む（api.md 5.1 は 202 + 進捗の購読）。
-      const result = await uploadScore(created.songId, file);
+      const result = await uploadScore(targetSongId, file);
       if (result.status === "converting_score") {
         setPhase("converting");
         return;
@@ -88,7 +107,7 @@ export default function NewSongPage() {
       }
       // 参照譜の生成はワーカーが行う。受け付けられたので parsing に進み、
       // SSE の結果を待つ。
-      setWatchedSongId(created.songId);
+      setWatchedSongId(targetSongId);
       setPhase("parsing");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
@@ -108,7 +127,10 @@ export default function NewSongPage() {
           <Card>
             <CardTitle title="楽譜を取り込む" />
             <div className="p-5">
-              {displayPhase === "idle" ? (
+              {/* error でもドロップゾーンを描く。描かないと同じ画面で再投入できず、
+                  リロードして投入し直すと曲が重複作成される（#48）。error では
+                  下の状態パネル（エラー本文）と両方が出る。 */}
+              {(displayPhase === "idle" || displayPhase === "error") && (
                 <>
                   <div className="relative">
                     <input
@@ -150,9 +172,10 @@ export default function NewSongPage() {
                     </button>
                   </div>
                 </>
-              ) : (
+              )}
+              {displayPhase !== "idle" && (
                 <div
-                  className="space-y-3"
+                  className="space-y-3 [&:not(:first-child)]:mt-5"
                   role={displayPhase === "error" ? "alert" : "status"}
                   aria-live={displayPhase === "error" ? "assertive" : "polite"}
                   aria-busy={displayPhase === "uploading" || displayPhase === "parsing" || displayPhase === "converting"}
@@ -222,18 +245,24 @@ export default function NewSongPage() {
                   {displayPhase === "error" && (
                     <div className="rounded-lg border border-red-500/25 bg-red-500/10 p-4 text-xs text-red-300">
                       <p>{displayErrorMessage}</p>
-                      {/* この画面でのやり直しは createSong から始まって曲が重複作成
-                          されるため、既に作られた曲の詳細へ送る。差し替えは
-                          そこから同じ曲に対して行える。 */}
+                      {/* 上のドロップゾーンからの再投入は、既に作られた同じ曲へ送る
+                          （#48。以前は createSong から始まるため曲が重複作成された）。
+                          曲詳細からの差し替えも従来どおり使える。 */}
                       {songId && (
-                        <p className="mt-2">
-                          <Link
-                            href={`/songs/${songId}`}
-                            className="text-red-200 underline underline-offset-2"
-                          >
-                            曲の詳細を開いて楽譜を差し替える
-                          </Link>
-                        </p>
+                        <>
+                          <p className="mt-2">
+                            この曲（{title || "無題"}）に楽譜を再アップロードできます。
+                            上の枠にファイルをドロップしても、新しい曲は作られません。
+                          </p>
+                          <p className="mt-2">
+                            <Link
+                              href={`/songs/${songId}`}
+                              className="text-red-200 underline underline-offset-2"
+                            >
+                              曲の詳細を開いて楽譜を差し替える
+                            </Link>
+                          </p>
+                        </>
                       )}
                     </div>
                   )}
@@ -248,7 +277,10 @@ export default function NewSongPage() {
               <Field label="曲名">
                 <input
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    setTitleTouched(true);
+                  }}
                   placeholder="ワルツ 第7番 嬰ハ短調"
                   className="input"
                 />
