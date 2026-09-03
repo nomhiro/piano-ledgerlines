@@ -80,5 +80,33 @@ class DrainOmrQueueTests(unittest.TestCase):
         self.assertTrue(cloud_worker._drain_omr_queue(store, 900))
 
 
+class DrainNextJobTests(unittest.TestCase):
+    def test_missing_score_queue_does_not_block_analysis(self):
+        store = mock.Mock()
+        with (
+            mock.patch.object(
+                cloud_worker,
+                "_drain_score_queue",
+                side_effect=cloud_worker.ResourceNotFoundError("score-jobs missing"),
+            ),
+            mock.patch.object(cloud_worker, "_drain_analysis_queue", return_value=True) as analysis,
+            mock.patch.object(cloud_worker, "_drain_omr_queue") as omr,
+        ):
+            self.assertTrue(cloud_worker._drain_next_job(store, 300, 1800, 900))
+
+        analysis.assert_called_once_with(store, 1800)
+        omr.assert_not_called()
+
+    def test_missing_auxiliary_queues_leave_worker_alive(self):
+        store = mock.Mock()
+        missing = cloud_worker.ResourceNotFoundError("queue missing")
+        with (
+            mock.patch.object(cloud_worker, "_drain_score_queue", side_effect=missing),
+            mock.patch.object(cloud_worker, "_drain_analysis_queue", return_value=False),
+            mock.patch.object(cloud_worker, "_drain_omr_queue", side_effect=missing),
+        ):
+            self.assertFalse(cloud_worker._drain_next_job(store, 300, 1800, 900))
+
+
 if __name__ == "__main__":
     unittest.main()

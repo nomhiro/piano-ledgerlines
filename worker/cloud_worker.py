@@ -393,6 +393,27 @@ def _drain_analysis_queue(store: CloudStore, visibility_seconds: int) -> bool:
     return True
 
 
+def _drain_next_job(
+    store: CloudStore,
+    score_visibility_seconds: int,
+    visibility_seconds: int,
+    omr_visibility_seconds: int,
+) -> bool:
+    """優先順に1キューを処理する。あるキューの障害で他のキューを止めない。"""
+    queues = (
+        ("score", _drain_score_queue, score_visibility_seconds),
+        ("analysis", _drain_analysis_queue, visibility_seconds),
+        ("omr", _drain_omr_queue, omr_visibility_seconds),
+    )
+    for name, drain, timeout in queues:
+        try:
+            if drain(store, timeout):
+                return True
+        except Exception:
+            LOGGER.exception("%s queue unavailable; continuing with other queues", name)
+    return False
+
+
 def main() -> None:
     store = CloudStore()
     polling_seconds = int(os.environ.get("WORKER_POLLING_SECONDS", "5"))
@@ -407,11 +428,12 @@ def main() -> None:
         # このアプリの中心価値） > OMR（数分、プレビューの下書き）。
         # OMR を最後に置くのは、下書きの生成で採点を遅らせないため。レプリカ1・
         # ループ1本という制約は設計 §4.2 の既知の制約。
-        if _drain_score_queue(store, score_visibility_seconds):
-            continue
-        if _drain_analysis_queue(store, visibility_seconds):
-            continue
-        if _drain_omr_queue(store, omr_visibility_seconds):
+        if _drain_next_job(
+            store,
+            score_visibility_seconds,
+            visibility_seconds,
+            omr_visibility_seconds,
+        ):
             continue
         time.sleep(polling_seconds)
 
