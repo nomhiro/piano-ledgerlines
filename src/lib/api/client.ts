@@ -212,18 +212,65 @@ export async function getTake(takeId: string): Promise<ApiTakeDetail> {
 export function subscribeTakeEvents(
   takeId: string,
   onStatus: (data: { status: string; progress?: number; scoresReady?: boolean }) => void,
-  onDone: () => void
+  onDone: (data: { status: string }) => void,
+  onError: (message: string) => void,
 ): () => void {
+  let stopped = false;
+  let polling = false;
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollFailures = 0;
   const es = new EventSource(`/api/takes/${takeId}/events`);
+
+  const stop = () => {
+    stopped = true;
+    es.close();
+    if (pollTimer) clearTimeout(pollTimer);
+  };
+  const finish = (status: string) => {
+    if (stopped) return;
+    stop();
+    onDone({ status });
+  };
+  const poll = async () => {
+    if (stopped || polling) return;
+    polling = true;
+    try {
+      const take = await getTake(takeId);
+      if (stopped) return;
+      pollFailures = 0;
+      onStatus({ status: take.status, progress: take.progress, scoresReady: take.status === "completed" });
+      if (take.status === "completed" || take.status === "failed") {
+        finish(take.status);
+        return;
+      }
+    } catch (error) {
+      pollFailures += 1;
+      if (pollFailures >= 3) {
+        stop();
+        onError(error instanceof Error ? error.message : "分析状況を取得できませんでした。");
+        return;
+      }
+    } finally {
+      polling = false;
+    }
+    if (!stopped) pollTimer = setTimeout(() => void poll(), 1000);
+  };
+
   es.addEventListener("status", (ev) => {
     onStatus(JSON.parse((ev as MessageEvent).data));
   });
-  es.addEventListener("done", () => {
-    onDone();
-    es.close();
+  es.addEventListener("done", (ev) => {
+    const data = JSON.parse((ev as MessageEvent).data) as { status: string };
+    finish(data.status);
+  });
+  es.addEventListener("analysis-error", (ev) => {
+    const data = JSON.parse((ev as MessageEvent).data) as { message?: string };
+    stop();
+    onError(data.message ?? "分析状況を取得できませんでした。");
   });
   es.onerror = () => {
     es.close();
+    void poll();
   };
-  return () => es.close();
+  return stop;
 }

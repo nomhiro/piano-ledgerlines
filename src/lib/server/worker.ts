@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { DATA_DIR, WORKER_MAIN } from "./paths";
 import { getTelemetry } from "./observability";
+import { getTake, updateTake } from "./repository";
 
 function resolvePythonPath(): string {
   if (process.env.WORKER_PYTHON) return process.env.WORKER_PYTHON;
@@ -67,10 +68,32 @@ export async function runOmrWorker(songId: string, dataDir = DATA_DIR): Promise<
  * が前提のため、呼び出し元はawaitせず投げっぱなしにする（fire-and-forget）。
  * take.json の status をワーカーが直接更新するので、進捗はファイルをポーリングして把握する。
  */
-export function runAnalyzeWorkerAsync(takeId: string): void {
-  runWorker(["--mode", "analyze", "--data-dir", DATA_DIR, "--take-id", takeId]).catch((err) => {
-    console.error(`[worker] analyze failed to start for take ${takeId}:`, err);
-  });
+export function runAnalyzeWorkerAsync(takeId: string, userId: string): void {
+  void runWorker(["--mode", "analyze", "--data-dir", DATA_DIR, "--take-id", takeId])
+    .then(async (result) => {
+      if (result.code === 0) return;
+      console.error(`[worker] analyze exited with code ${result.code} for take ${takeId}: ${result.stderr}`);
+      await markWorkerFailure(takeId, userId);
+    })
+    .catch(async (error) => {
+      console.error(`[worker] analyze failed to start for take ${takeId}:`, error);
+      await markWorkerFailure(takeId, userId);
+    })
+    .catch((error) => {
+      console.error(`[worker] unable to persist failure for take ${takeId}:`, error);
+    });
+}
+
+async function markWorkerFailure(takeId: string, userId: string): Promise<void> {
+  const take = await getTake(takeId, userId);
+  if (!take || take.status === "completed" || take.status === "failed") return;
+  await updateTake(takeId, {
+    status: "failed",
+    failure: {
+      code: "WORKER_FAILED",
+      message: "解析処理を開始できませんでした。少し時間を置いてから「再解析」をお試しください。",
+    },
+  }, userId);
 }
 
 /**

@@ -7,7 +7,7 @@ import type { Song, Take } from "@/lib/mock/types";
 import { Badge, Card, CardTitle } from "@/components/ui";
 import SongSelector from "@/components/SongSelector";
 import { formatDuration } from "@/lib/format";
-import { createTake, submitTake, subscribeTakeEvents, uploadTakeAudio } from "@/lib/api/client";
+import { createTake, getTake, submitTake, subscribeTakeEvents, uploadTakeAudio } from "@/lib/api/client";
 
 type Phase = "setup" | "countin" | "recording" | "uploading" | "analyzing" | "done" | "error";
 
@@ -183,14 +183,34 @@ export default function RecordView({
           const idx = STATUS_STEP_INDEX[data.status];
           if (idx !== undefined) setStep(Math.min(idx, ANALYSIS_STEPS.length - 1));
         },
-        () => {
-          setStep(ANALYSIS_STEPS.length);
-          setPhase("done");
-        }
+        ({ status }) => {
+          if (status === "completed") {
+            setStep(ANALYSIS_STEPS.length);
+            setPhase("done");
+            return;
+          }
+          void getTakeFailureMessage(created.takeId).then((message) => {
+            setErrorMessage(message);
+            setPhase("error");
+          });
+        },
+        (message) => {
+          setErrorMessage(message);
+          setPhase("error");
+        },
       );
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : String(err));
       setPhase("error");
+    }
+
+    async function getTakeFailureMessage(takeId: string): Promise<string> {
+      try {
+        const take = await getTake(takeId);
+        return take.failure?.message ?? "演奏の分析に失敗しました。";
+      } catch {
+        return "演奏の分析に失敗しました。分析結果の一覧から状態を確認してください。";
+      }
     }
   }
 
