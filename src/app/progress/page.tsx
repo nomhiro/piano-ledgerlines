@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/ui";
 import SongSelector from "@/components/SongSelector";
 import EmptyTakesNotice from "@/components/EmptyTakesNotice";
 import { guidanceForNoSongs, guidanceForNoTakes } from "@/components/empty-takes";
+import ReanalyzeSongTakesButton from "@/components/ReanalyzeSongTakesButton";
 
 export default async function ProgressPage({
   searchParams,
@@ -72,6 +73,9 @@ export default async function ProgressPage({
         <Suspense>
           <SongSelector songs={selectableSongs} current={selectedId} />
         </Suspense>
+        <ReanalyzeSongTakesButton
+          takeIds={ordered.filter((take) => take.status === "completed").map((take) => take.id)}
+        />
         {pipelineVersions.size > 1 && (
           <p className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200">
             解析方式が異なるテイクが含まれます。テイク間の差は上達を意味しません。

@@ -39,13 +39,12 @@ export async function POST(
     const user = await getAuthenticatedUser(request);
     const take = await getTake(takeId, user.id);
     if (!take) throw new NotFoundError("take not found");
-    if (take.status === "completed") throw new ValidationError("completed take cannot be submitted");
     if (!(await hasAudio(user.id, takeId, take.songId))) throw new ValidationError("audio blob missing");
-    if (take.status === "queued" || take.status === "transcribing" || take.status === "aligning" || take.status === "scoring") {
+    if (take.status === "queued" || take.status === "transcribing" || take.status === "aligning" || take.status === "scoring" || take.status === "reviewing") {
       return jsonResponse({ takeId, status: take.status, estimatedSeconds: Math.max(30, Math.round(take.durationSec * 1.5)) }, request, { status: 202 });
     }
-    // failed -> queued の再解析（item 3）。scoring 段(ALIGN_FAILED)で失敗したテイクは
-    // evaluation/analysis や指標系フィールドが書き込まれたままになっており、
+    // failed/completed -> queued の再解析。完了済みテイクも採点ポリシーの更新時に
+    // 元音声から再採点できる。evaluation/analysis や指標系フィールドが残ったままでは、
     // status/progress/failure だけをリセットすると、再解析が終わるまでの間、
     // 「queued なのに古い evaluation が残る」という誤解を招く表示になる。
     // ここでリセットする値は createTake() の初期値（src/lib/server/repository.ts）
@@ -70,16 +69,31 @@ export async function POST(
       },
       user.id
     );
-    await getAnalysisQueue().enqueue({
-      schemaVersion: 1,
-      jobId: randomUUID(),
-      takeId,
-      songId: take.songId,
-      userId: user.id,
-      attempt: 1,
-      correlationId: request.headers.get("x-request-id") ?? randomUUID(),
-      pipelineVersion: "local-v1",
-    });
+    try {
+      await getAnalysisQueue().enqueue({
+        schemaVersion: 1,
+        jobId: randomUUID(),
+        takeId,
+        songId: take.songId,
+        userId: user.id,
+        attempt: 1,
+        correlationId: request.headers.get("x-request-id") ?? randomUUID(),
+        pipelineVersion: "local-v1",
+      });
+    } catch (error) {
+      await updateTake(
+        takeId,
+        {
+          status: "failed",
+          failure: {
+            code: "QUEUE_UNAVAILABLE",
+            message: "再解析を開始できませんでした。少し時間を置いてからもう一度お試しください。",
+          },
+        },
+        user.id,
+      );
+      throw error;
+    }
     return jsonResponse({
       takeId, status: "queued", estimatedSeconds: Math.max(30, Math.round(take.durationSec * 1.5)), queuePosition: 1,
     }, request, { status: 202 });
