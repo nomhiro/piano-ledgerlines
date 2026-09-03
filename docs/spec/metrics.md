@@ -375,9 +375,9 @@ pitch = 100 * exp( -(e_pitch / 0.15)^1 )
   示した（`noiseShare` 0.78%。閾値を 0.90 まで緩めても上限は 0.20 で 0.50 に届かない）。
   分類が pitch に与える寄与は 0.05〜0.09点で実質ゼロであり、この1件から τ を選ぶ根拠には
   ならない（同文書 §9.3〜§9.4）。
-- したがって **τ は再校正されておらず、`pitch` は判定保留（`withheld` /
-  `PITCH_FORMULA_UNVALIDATED`）のままである**。`overallScore` も `null` のままで、
-  Issue #40 は閉じていない。**教師較正も未のまま**（設計 §4.3 / §8）。次に必要なのは
+- したがって **τ は再校正されていないが、`pitch` は現行式による参考値として
+  `scored` / `PITCH_FORMULA_UNVALIDATED` を返す**。`overallScore` にもこの参考値を含める。
+  **教師較正は未のまま**（設計 §4.3 / §8）。次に必要なのは
   フェーズ2（MAESTRO 音声で clean/room の extra 特徴分布から分類閾値を確定する）である。
 
 #### 補足
@@ -900,9 +900,9 @@ confidence(m) = c_transcription(m) * c_alignment(m)
 | `pedal` | `scored`（参照譜にペダル位置が必要 → [worker/README.md](../../worker/README.md)） | -4.5 / -5.0 / -13.5 | AGC下でも頑健 |
 | `rhythm` | `scored`（劣化録音ではデッドゾーンを緩める → 3.2） | -11.8 / -6.6 / -14.7 | 劣化条件でも致命的ではない |
 | `dynamics` | `scored`。AGC検出時のみ `unavailable`（`AGC_DETECTED`） | -5.7 / -9.0 / **-45.1** | AGCでだけ崩壊する。AGCは確実に検出できる（→ 3.4） |
-| `pitch` | **`withheld`**（`PITCH_FORMULA_UNVALIDATED`） | -37.7 / -37.6 / **-50.0** | 録音条件以前に、式自体が採譜ノイズに支配される（下記） |
+| `pitch` | **`scored`（参考値）**（`PITCH_FORMULA_UNVALIDATED`） | -37.7 / -37.6 / **-50.0** | 採譜ノイズの影響を含む現行式で算出する（下記） |
 
-> **`pitch` を保留する理由は「未較正」ではなく「式が採譜ノイズに支配される」こと。**
+> **`pitch` は採譜ノイズに影響されるため、較正済みの確定値ではなく参考値として扱う。**
 > 参照譜1242音符に対し採譜が974音符しか対応付けられなかった（`matchRate` 78%）基準テイクで、
 > `extra`（余分な音）が521個生じ、`pitch` は9.99点まで落ちた。
 > `e_pitch = (W_MISS * missed + W_EXTRA * extra) / n_ref` の内訳では、`missed` 268個分
@@ -915,15 +915,15 @@ confidence(m) = c_transcription(m) * c_alignment(m)
 > 実録音1件の採譜結果の両方で測定したが、`pitch = 100*exp(-e_pitch/τ)` の式自体が τ に対して
 > 単調なため候補を選別できず、実録音では分類がほぼ効かなかった（`noiseShare` 0.78%）。
 > したがって `TAU_PITCH = 0.15` /
-> `W_EXTRA = 0.7` は据え置きのままで、`pitch` は判定保留を継続し、`overallScore` も
-> `null` のままである（Issue #40 は未完了）。測定の記録:
+> `W_EXTRA = 0.7` は据え置きのままで、`pitch` と、それを含む `overallScore` を
+> 現行式による参考値として返す。測定の記録:
 > `docs/superpowers/plans/2026-08-17-pitch-formula-stage3-results.md`。
 
 `overallScore` はこの指標別の状態から導かれる（実装値であり別途の閾値ではない）。
 `unavailable`（測定対象が存在しない）な指標は加重平均から除外し、残りの重みで
 再配分する。一方 `withheld`（測定できるが信頼できない）が1つでも残っていれば、
-`overallScore` 自体を `null` にする。`pitch` は常に `withheld` であるため、
-この段では `overallScore` は数値化されない（→ 4.1）。
+`overallScore` 自体を `null` にする。`pitch` は参考値として `scored` にするため、
+利用可能な指標とともに `overallScore` へ加重される（→ 4.1）。
 
 M4 で録音条件への頑健性を確認済みの4指標には理由コード `ROBUSTNESS_VALIDATED` を付ける。
 これは「講師評価と順位が一致する」という較正済みの主張ではなく、「録音条件が変わっても

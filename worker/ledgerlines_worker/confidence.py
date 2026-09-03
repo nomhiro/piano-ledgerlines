@@ -3,7 +3,7 @@
 The production worker currently does not preserve per-note transcription
 probabilities and no teacher-calibrated policy artifact exists. This module
 therefore records observable alignment evidence without pretending it is a
-calibrated probability, and withholds scores that require calibration.
+calibrated probability.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ REASONS = {
     "INSUFFICIENT_ALIGNMENT_EVIDENCE": "対応付けの根拠が不足しているため判定を保留しました。",
     "NO_SCORE_DYNAMICS": "参照譜から強弱記号を抽出できていないため測定できません。",
     "NO_SCORE_PEDAL": "参照譜からペダル記号を抽出できていないため測定できません。",
-    "PITCH_FORMULA_UNVALIDATED": "音程の指標式が採譜ノイズに影響されることが判明しているため、式の検証が完了するまで判定を保留します。",
+    "PITCH_FORMULA_UNVALIDATED": "音程の指標式は採譜ノイズの影響を受けるため、現行式による参考値として判定します。",
     "AGC_DETECTED": "自動ゲイン制御がかかった録音のため、強弱を測定できません。",
     "PEDAL_REFERENCE_NOT_REGENERATED": "この曲の参照譜にペダル位置が含まれていないため測定できません。楽譜を再登録すると測定できます。",
     # reference.py の _pedal_intervals_beats が区間を空で返す原因は複数あり
@@ -119,7 +119,7 @@ def apply_fail_closed_policy(
     m4-report.md 5章の実測（clean 基準の差）:
         tempo -2.7/-1.9/-3.2、pedal -4.5/-5.0、dynamics -5.7/-9.0/-45.1(AGC)、
         rhythm -11.8/-6.6/-14.7、pitch -37.7/-37.6/-50.0
-    pitch のみ式が採譜ノイズに支配されるため保留する（段3で対応）。
+    pitch は採譜ノイズの影響を受けるが、現行式の参考値として採点する。
 
     ペダル関連の2つのフラグは別の状態を表す。混同すると誤った案内文が出る:
         pedal_reference_regenerated  参照譜が `pedalIntervalsBeats` キーを持つか
@@ -155,11 +155,8 @@ def apply_fail_closed_policy(
         """
         if below_floor:
             return "withheld", "ALIGNMENT_BELOW_FLOOR"
-        if key == "pitch":
-            # pitch は capability の前提を持たないため、採点されない理由は常に
-            # 「式が未検証」である。素点が None でも unavailable にしない。
-            # これにより overallScore が段2 で数値になることを防ぐ。
-            return "withheld", "PITCH_FORMULA_UNVALIDATED"
+        if key == "pitch" and raw_scores["metrics"].get(key) is not None:
+            return "scored", "PITCH_FORMULA_UNVALIDATED"
         if key == "dynamics":
             if not capabilities.get("dynamics"):
                 return "unavailable", "NO_SCORE_DYNAMICS"
@@ -305,11 +302,8 @@ def apply_fail_closed_policy(
         }
     else:
         # overallScore が出ない理由は「対応付けが不成立」「保留された指標がある」
-        # 「全指標が測定対象外（total_weight == 0）」の3通りある。今は pitch が必ず
-        # withheld なので2番目しか起こらないが、`has_withheld` を見ずに pitch の理由へ
-        # 倒すと、段3 で pitch が scored になったあと3番目の経路が「pitch の式が未検証」
-        # という事実でない理由を返すようになる。decisions は METRICS 順なので、
-        # 代表として最初に該当した指標の具体的な理由を採る。
+        # 「全指標が測定対象外（total_weight == 0）」の3通りある。decisions は
+        # METRICS 順なので、代表として最初に該当した指標の具体的な理由を採る。
         if below_floor:
             reason_code = "ALIGNMENT_BELOW_FLOOR"
         else:

@@ -235,12 +235,10 @@ practice-plan/me/dashboard 等、後続フェーズ）。
   一律で判定保留にしていたが、M4 5章で録音条件への指標別の頑健性を実測できたことを
   受けて、指標別の判断に置き換えた（`ledgerlines_worker/confidence.py`の
   `apply_fail_closed_policy`、`pipelineVersion: "0.3.0-m5-metric-policy"`）。
-  現在は`pitch`だけが`withheld`（理由コード`PITCH_FORMULA_UNVALIDATED`。式が
-  採譜ノイズ＝余剰音に支配されるため）で、`rhythm` / `tempo` / `dynamics` / `pedal`
-  の4指標は採点する（`dynamics`はAGC検出時のみ`unavailable`）。`pitch`が常に
-  `withheld`であるため、`overallScore`は現段階でも`null`のまま返す
-  （`unavailable`は加重平均から除外して再配分するが、`withheld`が残っていれば
-  総合点自体を出さない）。これは講師評価との較正が完了したという意味ではなく、
+  現在は`pitch`も現行式による参考値として`scored`にし、採譜ノイズの影響が残ることを
+  理由コード`PITCH_FORMULA_UNVALIDATED`で明示する。`rhythm` / `tempo` / `dynamics` /
+  `pedal`も採点する（`dynamics`はAGC検出時のみ`unavailable`）。利用可能な指標を
+  加重平均して`overallScore`を返す。これは講師評価との較正が完了したという意味ではなく、
   録音条件への頑健性が実測で確認されたという、より狭い主張である
   （→ `docs/spec/metrics.md` 7.2 / 8.2）。
 - `calibration.py`（release gate・アーティファクトの検証）は変更していない。
@@ -278,8 +276,7 @@ practice-plan/me/dashboard 等、後続フェーズ）。
   `GET /api/takes/{id}`のレスポンス（5指標・小節スコア・issues）を
   `src/components/TakeEvaluationPanel.tsx`で表示する。指標は値があれば数値バー、
   無ければ status（判定保留／測定対象外）と保存済みの理由文を出す。
-  **総合スコア欄は現状つねに「判定保留」＋理由文**になる ── 「既知の制約」節の
-  指標別ポリシーのとおり、`pitch`が`withheld`である限り`overallScore`は`null`のままである。
+  総合スコア欄は、現行式による`pitch`の参考値を含む`overallScore`を表示する。
   既存のモック専用`takes/[id]/page.tsx`（ピアノロール・カーブ・
   AIコーチ講評込みの詳細画面）とは別ルートとして共存させている。
 - `src/app/progress/page.tsx` と `src/app/share/page.tsx`: 実曲（`song_`で始まるID）を
@@ -289,8 +286,7 @@ practice-plan/me/dashboard 等、後続フェーズ）。
   `Take.metrics`と`MeasureScore.metrics`は非nullの`Record<MetricKey, number>`（`src/lib/mock/types.ts`）で、
   `unavailable`／`withheld`を表現できない。実データをそのまま流すと数値を捏造することになる。
   - **代償**: 実曲では`/progress`のスコア推移グラフとテイクA/B比較が出なくなった。
-    どちらも数値の`overallScore`に対する引き算・`toFixed`を前提としており、
-    `pitch`が`withheld`である間`overallScore`は`null`だからである。
+    どちらも解析方式が異なるスコアを直接比較しないよう、実曲ではまだ接続していない。
     テイクは新しい順の一覧として、各テイクの絶対値のみを表示する。
   - 解析方式（`analysis.pipelineVersion`）が異なるテイクが同一リストに混在する場合は、
     「テイク間の差は上達を意味しません」という注記を出す
