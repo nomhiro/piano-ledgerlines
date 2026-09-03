@@ -39,13 +39,20 @@ export async function GET(
             send("status", {
               status: take.status, progress: take.progress, scoresReady: take.status === "completed",
             });
-            if (take.status === "completed" || take.status === "failed" || Date.now() - startedAt > MAX_DURATION_MS) {
+            if (take.status === "completed" || take.status === "failed") {
               send("done", { status: take.status });
+              controller.close(); closed = true; return;
+            }
+            if (Date.now() - startedAt > MAX_DURATION_MS) {
+              send("analysis-error", {
+                code: "PROGRESS_TIMEOUT",
+                message: "分析状況の確認がタイムアウトしました。分析結果の一覧から状態を確認してください。",
+              });
               controller.close(); closed = true; return;
             }
             setTimeout(tick, POLL_INTERVAL_MS);
           } catch {
-            send("error", { code: "INTERNAL", message: "unable to read progress" });
+            send("analysis-error", { code: "INTERNAL", message: "分析状況を取得できませんでした。" });
             controller.close(); closed = true;
           }
         };

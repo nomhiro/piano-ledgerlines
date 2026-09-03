@@ -24,7 +24,7 @@ export class LocalAnalysisQueue implements AnalysisQueue {
   async enqueue(job: AnalysisJob): Promise<void> {
     // Keep the process-spawn implementation strictly behind the local backend.
     const { runAnalyzeWorkerAsync } = await import("./worker");
-    runAnalyzeWorkerAsync(job.takeId);
+    runAnalyzeWorkerAsync(job.takeId, job.userId);
     getTelemetry().record({ name: "analysis.queue.enqueued", jobId: job.jobId, takeId: job.takeId, stage: "local" });
   }
 }

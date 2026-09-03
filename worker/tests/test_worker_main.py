@@ -152,6 +152,32 @@ class RunAnalyzeWiringTests(unittest.TestCase):
             doc = json.loads((data_dir / "takes" / f"{take_id}.json").read_text(encoding="utf-8"))
             return code, doc
 
+    def test_dependency_import_failure_moves_take_to_failed(self):
+        with tempfile.TemporaryDirectory(prefix="ll-worker-main-import-test-") as tmp:
+            data_dir = Path(tmp)
+            take_id = "take1"
+            (data_dir / "takes").mkdir(parents=True)
+            (data_dir / "takes" / f"{take_id}.json").write_text(
+                json.dumps({"takeId": take_id, "songId": "song1", "status": "queued"}),
+                encoding="utf-8",
+            )
+            original_import = __import__
+
+            def fail_calibration_import(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == "ledgerlines_worker" and "calibration" in fromlist:
+                    raise ModuleNotFoundError("missing worker dependency")
+                return original_import(name, globals, locals, fromlist, level)
+
+            with mock.patch("builtins.__import__", side_effect=fail_calibration_import):
+                code = worker_main.run_analyze(data_dir, take_id)
+
+            doc = json.loads((data_dir / "takes" / f"{take_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(code, 1)
+            self.assertEqual(doc["status"], "failed")
+            self.assertEqual(doc["failure"]["code"], "WORKER_SETUP_FAILED")
+            self.assertNotIn("missing worker dependency", doc["failure"]["message"])
+            self.assertIn("missing worker dependency", doc["analysis"]["error"])
+
     def test_alignment_below_floor_fails_before_issue_generation(self):
         reference, est_notes, _matched, below_floor = _fixture()
 

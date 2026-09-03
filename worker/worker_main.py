@@ -263,15 +263,6 @@ def run_omr(data_dir: Path, song_id: str) -> int:
 
 
 def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
-    from ledgerlines_worker import align as align_mod
-    from ledgerlines_worker import calibration as calibration_mod
-    from ledgerlines_worker import confidence as confidence_mod
-    from ledgerlines_worker import metrics as metrics_mod
-    from ledgerlines_worker import preprocess as preprocess_mod
-    from ledgerlines_worker import transcribe as transcribe_mod
-    from ledgerlines_worker.issues import generate_issues
-    from ledgerlines_worker.scoring_constants import DEGRADED_DYNAMIC_RANGE_DB
-
     take = read_json(take_path(data_dir, take_id))
     song_id = take["songId"]
 
@@ -280,6 +271,24 @@ def run_analyze(data_dir: Path, take_id: str, on_update=None) -> int:
         if on_update:
             on_update(doc)
         return doc
+
+    try:
+        from ledgerlines_worker import align as align_mod
+        from ledgerlines_worker import calibration as calibration_mod
+        from ledgerlines_worker import confidence as confidence_mod
+        from ledgerlines_worker import metrics as metrics_mod
+        from ledgerlines_worker import preprocess as preprocess_mod
+        from ledgerlines_worker import transcribe as transcribe_mod
+        from ledgerlines_worker.issues import generate_issues
+        from ledgerlines_worker.scoring_constants import DEGRADED_DYNAMIC_RANGE_DB
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        update({
+            "status": "failed",
+            "failure": {"code": "WORKER_SETUP_FAILED", "message": GENERIC_ANALYSIS_FAILURE_MESSAGE},
+            "analysis": {"pipelineVersion": PIPELINE_VERSION, "error": str(exc)},
+        })
+        return 1
 
     try:
         update({"status": "transcribing", "progress": 0.1})
