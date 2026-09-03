@@ -87,9 +87,10 @@ M4のような録音条件別の再測定を経て`scoring_constants.py`を更�
 ## 旧テイク再解析
 
 新しいreference schemaは`2.0`、pipelineは`0.3.0-m5-metric-policy`以降を使う。
-旧テイクは元音声とMusicXMLが保持されているものだけ再解析する。再解析前の結果を上書きせず、
-pipeline/calibration versionを持つ新しい解析結果として保存する。異なるversion間の差分は
-改善量として表示しない。
+旧テイクは元音声とMusicXMLが保持されているものだけ再解析する。履歴画面の
+「過去の演奏を再採点」から曲単位で完了済みテイクを再解析キューへ投入する。再解析中は
+旧結果を表示せず、完了後に新しいpipeline/calibration versionの結果へ置き換える。
+異なるversion間の差分は改善量として表示しない。
 
 ## ロールバック
 

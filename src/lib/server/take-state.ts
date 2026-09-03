@@ -8,7 +8,7 @@ const transitions: Record<TakeStatus, readonly TakeStatus[]> = {
   aligning: ["scoring", "failed"],
   scoring: ["reviewing", "completed", "failed"],
   reviewing: ["completed", "failed"],
-  completed: [],
+  completed: ["queued"],
   failed: ["queued"],
 };
 
