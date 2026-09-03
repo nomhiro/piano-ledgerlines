@@ -65,8 +65,8 @@ class ConfidencePolicyTests(unittest.TestCase):
         }
         return result, reference, alignment, fixture
 
-    def test_issue_8_diagnostic_withholds_pitch_only(self):
-        """段2 では pitch だけが保留になり、他4指標は採点される。"""
+    def test_issue_8_diagnostic_scores_pitch_as_reference_value(self):
+        """採譜ノイズの多い実録音でも pitch を現行式の参考値として返す。"""
         result, reference, alignment, fixture = self._issue8_case()
         expected = fixture["expected"]
 
@@ -108,7 +108,7 @@ class ConfidencePolicyTests(unittest.TestCase):
         )
         self.assertEqual(guarded["diagnostics"]["matchedNotes"], fixture["matchedNotes"])
         self.assertEqual(guarded["diagnostics"]["extraNotes"], fixture["extraNotes"])
-        # 保留した素点を応答に漏らさない（rawScores は内部計算のみで外に出さない）。
+        # rawScores は内部計算のみで外に出さない。
         self.assertNotIn("rawScores", guarded)
         # 小節レベルでも take レベルの具体的な理由がそのまま伝播すること（汎用の
         # INSUFFICIENT_ALIGNMENT_EVIDENCE に上書きされない）。この小節の pedal 素点は
@@ -117,17 +117,17 @@ class ConfidencePolicyTests(unittest.TestCase):
         measure_pedal = guarded["measureScores"][0]["metricEvaluations"]["pedal"]
         self.assertEqual(measure_pedal["status"], "unavailable")
         self.assertEqual(measure_pedal["reasonCode"], "PEDAL_REFERENCE_NOT_REGENERATED")
-        # measureScores[0]["score"] は WEIGHTS を pitch/pedal 除外後に再正規化した
+        # measureScores[0]["score"] は WEIGHTS を pedal 除外後に再正規化した
         # 加重平均になる（手計算での導出、report に記載）:
-        #   (63.3*0.28 + 95.93*0.17 + 98.58*0.17) / (0.28+0.17+0.17)
-        #   = 50.7907 / 0.62 = 81.92048... -> round(.., 2) = 81.92
-        self.assertEqual(guarded["measureScores"][0]["score"], 81.92)
+        #   (9.99*0.28 + 63.3*0.28 + 95.93*0.17 + 98.58*0.17) / 0.9
+        #   = 59.54
+        self.assertEqual(guarded["measureScores"][0]["score"], 59.54)
         # rhythm/tempo/dynamics が scored になったことで指摘生成が動くようになる（spec 4.1）
         issues = generate_issues(guarded["measureScores"])
         self.assertTrue(any(issue["metric"] == "rhythm" for issue in issues))
 
-    def test_overall_score_is_withheld_while_pitch_is_unvalidated(self):
-        """withheld が1つでも残れば総合点は出さない（spec 4.7）。"""
+    def test_overall_score_includes_unvalidated_pitch_reference_value(self):
+        """pitch の現行式による参考値を含めて総合点を返す。"""
         result, reference, alignment, fixture = self._issue8_case()
 
         guarded = apply_fail_closed_policy(
@@ -135,10 +135,8 @@ class ConfidencePolicyTests(unittest.TestCase):
             dynamic_range_db=18.0,
         )
 
-        self.assertIsNone(guarded["overallScore"])
-        self.assertEqual(guarded["evaluation"]["status"], "withheld")
-        # withheld が残るときは、その具体的な理由を出す（pitch が唯一の withheld）。
-        self.assertEqual(guarded["evaluation"]["reasonCode"], "PITCH_FORMULA_UNVALIDATED")
+        self.assertEqual(guarded["overallScore"], 59.54)
+        self.assertEqual(guarded["evaluation"]["status"], "scored")
 
     def _repeat_case(self, measures: list[dict]):
         """演奏順小節 1 と 17 が同じ楽譜上の小節 1 に写る、繰り返し展開後の形。
@@ -340,12 +338,12 @@ class ConfidencePolicyTests(unittest.TestCase):
         guarded = apply_fail_closed_policy(result, reference, alignment, 3)
 
         self.assertEqual(guarded["metricConfidence"]["tempo"], 1.0)
-        self.assertIsNone(guarded["overallScore"])
+        self.assertEqual(guarded["overallScore"], 100)
         self.assertEqual(
             guarded["metricEvaluations"]["pitch"]["reasonCode"], "PITCH_FORMULA_UNVALIDATED"
         )
 
-    def test_approved_data_derived_threshold_can_release_tempo_only(self):
+    def test_approved_data_derived_threshold_does_not_withhold_pitch(self):
         reference = {
             "notes": [
                 {"index": 0, "measure": 1},
@@ -395,8 +393,8 @@ class ConfidencePolicyTests(unittest.TestCase):
         self.assertEqual(
             guarded["measureScores"][0]["metricEvaluations"]["tempo"]["status"], "scored"
         )
-        self.assertIsNone(guarded["metrics"]["pitch"])
-        self.assertIsNone(guarded["overallScore"])
+        self.assertEqual(guarded["metrics"]["pitch"], 90)
+        self.assertEqual(guarded["overallScore"], 90)
 
     def test_tempo_calibration_threshold_no_longer_gates_scoring(self):
         """M4 実測で tempo は頑健と判定されたため、較正 artifact の

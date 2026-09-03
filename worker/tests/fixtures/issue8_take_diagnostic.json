@@ -16,8 +16,8 @@
     }
   },
   "expected": {
-    "evaluationStatus": "withheld",
-    "pitchStatus": "withheld",
+    "evaluationStatus": "scored",
+    "pitchStatus": "scored",
     "rhythmStatus": "scored",
     "tempoStatus": "scored",
     "dynamicsStatus": "scored",
