@@ -568,6 +568,8 @@ M4 5章で同一演奏を録音条件別に再解析し、指標ごとの頑健�
 `pitch` は式が採譜ノイズ（余剰音）の影響を受けるものの、現行式による参考値として
 `scored`（`PITCH_FORMULA_UNVALIDATED`）にし、`overallScore` にも含める
 （→ [spec/metrics.md 7.2](../spec/metrics.md#72-閾値と挙動)）。
+音程式の `W_EXTRA=0.5` / `TAU_PITCH=1.0` は Summer の完成テイク5件で製品内較正した値で、
+教師較正ではない。適用値は`analysis.diagnostics.pitchScoringParameters`へ保存する。
 
 ### 7.2 テスト戦略
 

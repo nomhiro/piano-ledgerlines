@@ -44,7 +44,7 @@ from ledgerlines_worker import transcribe as transcribe_mod  # noqa: E402
 from ledgerlines_worker.align import align  # noqa: E402
 from ledgerlines_worker.metrics import load_est  # noqa: E402
 
-TAU_CANDIDATES = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
+TAU_CANDIDATES = [0.15, 0.20, 0.40, 0.60, 0.80, 1.00, 1.20]
 W_EXTRA_CANDIDATES = [0.3, 0.5, 0.7]
 
 

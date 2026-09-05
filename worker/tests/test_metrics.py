@@ -204,5 +204,90 @@ class PitchUsesExtraPlayedTest(unittest.TestCase):
         self.assertLess(result["metrics"]["pitch"], 100.0)
 
 
+class PitchCalibrationTest(unittest.TestCase):
+    def _fixture(self, reference_count: int, missed_count: int, extra_count: int):
+        matched_count = reference_count - missed_count
+        reference = {
+            "notes": [
+                {
+                    "index": index,
+                    "pitch": 60 + index % 12,
+                    "measure": 1,
+                    "startBeat": float(index),
+                    "dynamicLevel": None,
+                }
+                for index in range(reference_count)
+            ],
+            "beatsPerMeasure": float(reference_count),
+            "measures": [{"measure": 1, "tempoExcluded": False}],
+            "capabilities": {"dynamics": False, "pedal": False},
+        }
+        estimated = [
+            {
+                "index": index,
+                "pitch": 60 + index % 12,
+                "start": float(index),
+                "end": float(index) + 0.5,
+                "velocity": 80,
+            }
+            for index in range(matched_count + extra_count)
+        ]
+        alignment = {
+            "pairs": [[index, index] for index in range(matched_count)],
+            "missed": list(range(matched_count, reference_count)),
+            "unplayed": [],
+            "retakes": [],
+            "extra": list(range(matched_count, matched_count + extra_count)),
+            "extraNoise": [],
+            "extraPlayed": list(range(matched_count, matched_count + extra_count)),
+            "extraNoiseByReason": {
+                "duplicate": 0,
+                "harmonic": 0,
+                "spurious": 0,
+                "reverb": 0,
+            },
+        }
+        return reference, estimated, alignment
+
+    def _pitch(self, reference_count: int, missed_count: int, extra_count: int) -> float:
+        reference, estimated, alignment = self._fixture(
+            reference_count, missed_count, extra_count
+        )
+        result = compute(reference, estimated, alignment, [], [])
+        return result["metrics"]["pitch"]
+
+    def test_perfect_performance_scores_100(self):
+        self.assertEqual(self._pitch(100, 0, 0), 100.0)
+
+    def test_more_missed_notes_lower_the_score_monotonically(self):
+        perfect = self._pitch(100, 0, 0)
+        missed_5_percent = self._pitch(100, 5, 0)
+        missed_15_percent = self._pitch(100, 15, 0)
+        self.assertGreater(perfect, missed_5_percent)
+        self.assertGreater(missed_5_percent, missed_15_percent)
+
+    def test_more_extra_notes_lower_the_score_monotonically(self):
+        perfect = self._pitch(100, 0, 0)
+        extra_5_percent = self._pitch(100, 0, 5)
+        extra_15_percent = self._pitch(100, 0, 15)
+        self.assertGreater(perfect, extra_5_percent)
+        self.assertGreater(extra_5_percent, extra_15_percent)
+
+    def test_summer_like_alignment_scores_in_the_eighties(self):
+        # Azure の最新 Summer テイクの匿名化した件数:
+        # reference=1242, missed=95, extraPlayed=245。
+        score = self._pitch(1242, 95, 245)
+        self.assertGreaterEqual(score, 80.0)
+        self.assertLess(score, 90.0)
+
+    def test_result_records_pitch_scoring_parameters(self):
+        reference, estimated, alignment = self._fixture(100, 5, 5)
+        result = compute(reference, estimated, alignment, [], [])
+        self.assertEqual(
+            result["pitchScoringParameters"],
+            {"missWeight": 1.0, "extraWeight": 0.5, "decayTau": 1.0},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

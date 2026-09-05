@@ -13,8 +13,10 @@ import pretty_midi
 from .scoring_constants import DEAD_RHYTHM, DEAD_RHYTHM_DEGRADED, WEIGHTS
 
 W_MISS = 1.0
-W_EXTRA = 0.7
-TAU_PITCH = 0.15
+# Summer の完成テイク5件で、対応率90%以上の演奏が80点台になるよう製品内較正した値。
+# 教師較正ではないため、confidence.py は引き続き参考値として扱う。
+W_EXTRA = 0.5
+TAU_PITCH = 1.0
 TAU_RHYTHM = 0.12
 DEAD_TEMPO = 0.03
 TAU_TEMPO = 0.10
@@ -266,6 +268,11 @@ def compute(
         "metrics": overall_metrics,
         "baseTempo": None if np.isnan(t_base) else round(t_base, 2),
         "measureScores": measure_scores,
+        "pitchScoringParameters": {
+            "missWeight": W_MISS,
+            "extraWeight": W_EXTRA,
+            "decayTau": TAU_PITCH,
+        },
     }
 
 

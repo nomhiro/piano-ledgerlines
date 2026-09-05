@@ -48,6 +48,11 @@ class ConfidencePolicyTests(unittest.TestCase):
         result = {
             "overallScore": raw["overallScore"],
             "metrics": dict(raw["metrics"]),
+            "pitchScoringParameters": {
+                "missWeight": 1.0,
+                "extraWeight": 0.5,
+                "decayTau": 1.0,
+            },
             "measureScores": [
                 {
                     "measure": 1,
@@ -108,6 +113,10 @@ class ConfidencePolicyTests(unittest.TestCase):
         )
         self.assertEqual(guarded["diagnostics"]["matchedNotes"], fixture["matchedNotes"])
         self.assertEqual(guarded["diagnostics"]["extraNotes"], fixture["extraNotes"])
+        self.assertEqual(
+            guarded["diagnostics"]["pitchScoringParameters"],
+            {"missWeight": 1.0, "extraWeight": 0.5, "decayTau": 1.0},
+        )
         # rawScores は内部計算のみで外に出さない。
         self.assertNotIn("rawScores", guarded)
         # 小節レベルでも take レベルの具体的な理由がそのまま伝播すること（汎用の

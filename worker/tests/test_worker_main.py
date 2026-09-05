@@ -263,6 +263,10 @@ class RunAnalyzeWiringTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(doc["status"], "completed")
         self.assertEqual(doc["analysis"]["pipelineVersion"], worker_main.PIPELINE_VERSION)
+        self.assertEqual(
+            doc["analysis"]["diagnostics"]["pitchScoringParameters"],
+            {"missWeight": 1.0, "extraWeight": 0.5, "decayTau": 1.0},
+        )
         self.assertIn("evaluation", doc)
         # 参照譜に pedalIntervalsBeats があり演奏ペダルも一致しているため、
         # pedal_reference_available=True が正しく伝われば pedal は採点される。
@@ -321,7 +325,7 @@ class RunAnalyzeWiringTests(unittest.TestCase):
         片方だけ上げる事故を防ぐため、実装は worker_main.PIPELINE_VERSION 1箇所で持つ。
         現在の値も併せて固定し、意図しない変更に気づけるようにする。
         """
-        self.assertEqual(worker_main.PIPELINE_VERSION, "0.3.0-m5-metric-policy")
+        self.assertEqual(worker_main.PIPELINE_VERSION, "0.3.1-pitch-decay")
 
     def test_missing_checkpoint_raises_actionable_failure_code(self):
         """S2（transcribe.transcribe）が TranscribeError を投げた場合、INTERNAL に
