@@ -133,6 +133,7 @@ def apply_fail_closed_policy(
         **overall_evidence,
         "transcribedNotes": transcribed_note_count,
         "dynamicRangeDb": dynamic_range_db,
+        "pitchScoringParameters": result.get("pitchScoringParameters"),
         "calibrationStatus": "approved" if calibration else "missing",
         "calibrationVersion": calibration.get("calibrationVersion") if calibration else None,
         "calibrationArtifactHash": calibration.get("artifactHash") if calibration else None,

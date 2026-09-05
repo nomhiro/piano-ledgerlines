@@ -234,13 +234,15 @@ practice-plan/me/dashboard 等、後続フェーズ）。
   MIDIへ保存されていない。かつては（Issue #8）これを理由に総合点と5指標すべてを
   一律で判定保留にしていたが、M4 5章で録音条件への指標別の頑健性を実測できたことを
   受けて、指標別の判断に置き換えた（`ledgerlines_worker/confidence.py`の
-  `apply_fail_closed_policy`、`pipelineVersion: "0.3.0-m5-metric-policy"`）。
+  `apply_fail_closed_policy`、`pipelineVersion: "0.3.1-pitch-decay"`）。
   現在は`pitch`も現行式による参考値として`scored`にし、採譜ノイズの影響が残ることを
   理由コード`PITCH_FORMULA_UNVALIDATED`で明示する。`rhythm` / `tempo` / `dynamics` /
   `pedal`も採点する（`dynamics`はAGC検出時のみ`unavailable`）。利用可能な指標を
   加重平均して`overallScore`を返す。これは講師評価との較正が完了したという意味ではなく、
   録音条件への頑健性が実測で確認されたという、より狭い主張である
   （→ `docs/spec/metrics.md` 7.2 / 8.2）。
+  音程式は Summer の完成テイク5件で製品内較正した `W_EXTRA=0.5` / `TAU_PITCH=1.0` を使い、
+  実行時の値を`analysis.diagnostics.pitchScoringParameters`へ保存する。
 - `calibration.py`（release gate・アーティファクトの検証）は変更していない。
   release gateを通ったartifactのパスを`LEDGERLINES_CALIBRATION_FILE`に設定したうえで
   `LEDGERLINES_ENABLE_CALIBRATED_SCORES=true`を明示すると読み込まれ、

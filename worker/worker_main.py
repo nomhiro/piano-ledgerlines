@@ -34,7 +34,7 @@ from pathlib import Path
 # tests/test_worker_main.py が参照するため、片方だけ上がる事故を防ぐために
 # 1箇所で持つ。UI はこの値でテイクの解析方式の混在を検出する
 # （src/app/progress/page.tsx）。
-PIPELINE_VERSION = "0.3.0-m5-metric-policy"
+PIPELINE_VERSION = "0.3.1-pitch-decay"
 
 # 想定外の失敗（INTERNAL / TranscribeError 等）でユーザーに出す文言。
 # 内部のファイルパスや例外文言をそのまま出すと、原因不明なだけでなく
